@@ -1,0 +1,50 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Environment variables
+.env
+
+# Virtual environment
+venv/
+.env/
+*.env
+
+# Logs
+*.log
+*.out
+*.err
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Python package files
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info/
+
+# Cache files
+*.cache
+*.coverage
+*.pytest_cache/
+.cache/
+
+# IDE specific files
+.vscode/
+.idea/
+
+# Uvicorn reload artifacts
+*.reload
+
+# Langchain and Langgraph checkpoints
+*.checkpoint
+*.ckpt
+
+# Miscellaneous
+*.bak
+*.swp
+*.tmp
