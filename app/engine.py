@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 
-from src.send_messages import send_message
-from src.sales_agent import agent
+from app.send_messages import send_message
+from app.sales_agent import agent
 
 load_dotenv()
 

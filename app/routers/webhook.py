@@ -2,7 +2,7 @@ import os
 from dotenv import load_dotenv
 
 from fastapi import APIRouter, Request, HTTPException, Query
-from src.engine import handle_message
+from app.engine import handle_message
 
 load_dotenv()
 
