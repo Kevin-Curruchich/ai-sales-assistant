@@ -71,3 +71,9 @@ websockets==15.0.1
 wsproto==1.3.2
 xxhash==3.6.0
 zstandard==0.25.0
+# --- Revenew API dependencies ---
+SQLAlchemy==2.0.41
+psycopg2-binary==2.9.10
+pydantic-settings==2.9.1
+firebase-admin==6.7.0
+email-validator==2.3.0
