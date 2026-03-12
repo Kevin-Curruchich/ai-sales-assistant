@@ -35,7 +35,6 @@ langsmith==0.4.44
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
-ngrok==1.6.0
 openai==2.8.1
 orjson==3.11.4
 ormsgpack==1.12.0
