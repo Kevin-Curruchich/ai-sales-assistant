@@ -1,15 +1,22 @@
-# Use the Python 3 alpine official image
-# https://hub.docker.com/_/python
-FROM python:3-alpine
+FROM python:3.11-slim
 
-# Create and change to the app directory.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+	PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
-# Copy local code to the container image.
-COPY . .
-
-# Install project dependencies
+# Install dependencies first for better layer caching.
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run the web service on container startup.
-CMD ["hypercorn", "app.main:app", "--bind", "::"]
+# Copy application code and runtime entrypoint.
+COPY . .
+RUN chmod +x ./entrypoint.sh
+
+# Run as non-root user in production.
+RUN useradd --create-home --shell /bin/bash appuser && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 8000
+
+ENTRYPOINT ["./entrypoint.sh"]

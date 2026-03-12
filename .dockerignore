@@ -1,0 +1,11 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.vscode/
+venv/
+.env
+revenew-95e3a-firebase-adminsdk-fbsvc-6e028a10c2.json
