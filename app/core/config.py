@@ -17,12 +17,27 @@ class Settings(BaseSettings):
     POSTGRES_PORT: str = "5432"
     POSTGRES_SCHEMA: str = "db_dev"
     DATABASE_URL: Optional[str] = None
+    PGHOST: Optional[str] = None
+    PGUSER: Optional[str] = None
+    PGPASSWORD: Optional[str] = None
+    PGDATABASE: Optional[str] = None
+    PGPORT: Optional[str] = None
     
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         if self.DATABASE_URL:
             # Railway may provide postgres://; SQLAlchemy expects postgresql://
             return self.DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+        if self.PGHOST and self.PGUSER and self.PGPASSWORD and self.PGDATABASE:
+            pgport = self.PGPORT or "5432"
+            return f"postgresql://{self.PGUSER}:{self.PGPASSWORD}@{self.PGHOST}:{pgport}/{self.PGDATABASE}"
+
+        if self.ENVIRONMENT.lower() == "production" and self.POSTGRES_SERVER in {"localhost", "127.0.0.1"}:
+            raise ValueError(
+                "Database is not configured for production. Set DATABASE_URL or PGHOST/PGUSER/PGPASSWORD/PGDATABASE."
+            )
+
         return f"postgresql://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}@{self.POSTGRES_SERVER}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
 
     @property
