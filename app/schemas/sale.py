@@ -1,5 +1,5 @@
 import uuid
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 from pydantic import BaseModel
 
@@ -48,8 +48,10 @@ class SaleResponse(BaseModel):
     date: date
     total: float
     items: list[SaleItemResponse] = []
-    created_at: datetime
-    updated_at: datetime
+    created_at: str
+    updated_at: str
+    created_at_formatted: Optional[str] = None
+    updated_at_formatted: Optional[str] = None
     # Enriched user info
     user_name: str
     user_email: str
@@ -85,6 +87,15 @@ class FollowUpResponse(BaseModel):
     items: list[FollowUpItemResponse] = []
 
 
+class PaginationMeta(BaseModel):
+    total: int
+
+
+class PaginatedFollowUpResponse(BaseModel):
+    data: list[FollowUpResponse]
+    meta: PaginationMeta
+
+
 class FollowUpMetrics(BaseModel):
     overdue: int
     next7Days: int
@@ -101,3 +112,21 @@ class CalendarEvent(BaseModel):
     productId: uuid.UUID
     productName: str
     type: str  # "overdue" | "upcoming"
+
+
+class CalendarDateEvents(BaseModel):
+    """Events for a single date"""
+    date: date
+    events: list[CalendarEvent] = []
+
+
+class CalendarSummary(BaseModel):
+    """Summary of calendar events in the date range"""
+    upcoming: int = 0
+    overdue: int = 0
+
+
+class CalendarResponse(BaseModel):
+    """Complete calendar response with events by date and summary"""
+    dates: list[CalendarDateEvents]
+    summary: CalendarSummary

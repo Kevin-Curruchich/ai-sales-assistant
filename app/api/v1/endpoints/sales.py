@@ -45,7 +45,7 @@ def create_sale(
     current_user=Depends(get_current_user),
 ):
     service = SaleService(db)
-    return service.create(data, user_id=current_user.id)
+    return service.create_enriched(data, user_id=current_user.id)
 
 
 @router.put("/{sale_id}", response_model=SaleResponse)
@@ -56,4 +56,4 @@ def update_sale(
     _current_user: dict = Depends(get_current_user),
 ):
     service = SaleService(db)
-    return service.update(sale_id, data)
+    return service.update_enriched(sale_id, data)

@@ -20,7 +20,12 @@ def list_products(
 ):
     try:
         service = ProductService(db)
-        items = service.get_all(search=search, status_filter=status_filter, limit=limit, offset=offset)
+        items = service.get_all_with_formatted_dates(
+            search=search,
+            status_filter=status_filter,
+            limit=limit,
+            offset=offset,
+        )
         total = service.count(search=search, status_filter=status_filter)
         return {"data": items, "meta": {"total": total}}
     except Exception as e:
@@ -38,7 +43,7 @@ def get_product(
 ):
     try:
         service = ProductService(db)
-        return service.get_by_id(product_id)
+        return service.get_by_id_with_formatted_dates(product_id)
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -54,7 +59,7 @@ def create_product(
 ):
     try:
         service = ProductService(db)
-        return service.create(data)
+        return service.format_product_dates(service.create(data))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -71,7 +76,7 @@ def update_product(
 ):
     try:
         service = ProductService(db)
-        return service.update(product_id, data)
+        return service.format_product_dates(service.update(product_id, data))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

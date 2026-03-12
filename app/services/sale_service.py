@@ -1,6 +1,6 @@
 import uuid
 from typing import Optional
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.models.sale import Sale
@@ -13,7 +13,7 @@ from app.repositories.customer_product_cycle_repository import CustomerProductCy
 from app.schemas.sale import (
     SaleCreate, SaleItemResponse, SaleResponse, SaleUpdate,
     FollowUpResponse, FollowUpItemResponse, FollowUpMetrics,
-    CalendarEvent,
+    CalendarEvent, CalendarDateEvents, CalendarSummary, CalendarResponse,
 )
 import logging
 
@@ -35,6 +35,19 @@ class SaleService:
         try:
             user = sale.user
             customer = sale.customer
+            created_at = sale.created_at
+            updated_at = sale.updated_at
+
+            if isinstance(created_at, str):
+                created_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            if isinstance(updated_at, str):
+                updated_at = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+
+            created_at_value = created_at.strftime("%Y-%m-%d") if created_at else ""
+            updated_at_value = updated_at.strftime("%Y-%m-%d") if updated_at else ""
+            created_at_formatted = created_at.strftime("%d/%m/%Y") if created_at else None
+            updated_at_formatted = updated_at.strftime("%d/%m/%Y") if updated_at else None
+
             items = []
             for item in sale.items:
                 product = item.product
@@ -56,8 +69,10 @@ class SaleService:
                 date=sale.date,
                 total=sale.total,
                 items=items,
-                created_at=sale.created_at,
-                updated_at=sale.updated_at,
+                created_at=created_at_value,
+                updated_at=updated_at_value,
+                created_at_formatted=created_at_formatted,
+                updated_at_formatted=updated_at_formatted,
                 user_name=user.display_name if user else "",
                 user_email=user.email if user else "",
                 customer_name=customer.name if customer else "",
@@ -84,6 +99,16 @@ class SaleService:
 
     def get_by_id_enriched(self, sale_id: uuid.UUID) -> "SaleResponse":
         sale = self.get_by_id(sale_id)
+        return self._to_sale_response(sale)
+
+    def create_enriched(self, data: SaleCreate, user_id: uuid.UUID) -> "SaleResponse":
+        sale = self.create(data, user_id=user_id)
+        sale = self.get_by_id(sale.id)
+        return self._to_sale_response(sale)
+
+    def update_enriched(self, sale_id: uuid.UUID, data: SaleUpdate) -> "SaleResponse":
+        sale = self.update(sale_id, data)
+        sale = self.get_by_id(sale.id)
         return self._to_sale_response(sale)
     def __init__(self, db: Session):
         self.db = db
@@ -306,7 +331,7 @@ class SaleService:
     # Follow-up logic (per customer, with product-level detail)
     # ------------------------------------------------------------------
 
-    def get_follow_ups(self, filter_type: str = "all") -> list[FollowUpResponse]:
+    def get_follow_ups(self, filter_type: str = "all", limit: int = 10, offset: int = 0) -> tuple[list[FollowUpResponse], int]:
         today = date.today()
         cycles = self.cycle_repo.get_all_with_estimation()
 
@@ -381,7 +406,11 @@ class SaleService:
         follow_ups.sort(key=lambda f: min(
             (i.days_until for i in f.items if i.days_until is not None), default=9999
         ))
-        return follow_ups
+        
+        # Apply pagination
+        total = len(follow_ups)
+        paginated = follow_ups[offset:offset + limit]
+        return paginated, total
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
         today = date.today()
@@ -411,11 +440,12 @@ class SaleService:
 
     def get_calendar_events(
         self, start_date: date, end_date: date
-    ) -> list[CalendarEvent]:
+    ) -> CalendarResponse:
         today = date.today()
         cycles = self.cycle_repo.get_all_with_estimation()
 
-        events: list[CalendarEvent] = []
+        # Collect all events within the date range
+        all_events: list[CalendarEvent] = []
         for c in cycles:
             next_purchase = c.estimated_next_purchase
             if not next_purchase:
@@ -424,7 +454,7 @@ class SaleService:
                 continue
 
             event_type = "overdue" if next_purchase < today else "upcoming"
-            events.append(CalendarEvent(
+            all_events.append(CalendarEvent(
                 date=next_purchase,
                 customerId=c.customer_id,
                 customer=c.customer.name,
@@ -433,8 +463,37 @@ class SaleService:
                 type=event_type,
             ))
 
-        events.sort(key=lambda e: e.date)
-        return events
+        # Group events by date
+        events_by_date: dict[date, list[CalendarEvent]] = {}
+        for event in all_events:
+            if event.date not in events_by_date:
+                events_by_date[event.date] = []
+            events_by_date[event.date].append(event)
+
+        # Generate all dates in the range
+        date_events_list: list[CalendarDateEvents] = []
+        current_date = start_date
+        while current_date <= end_date:
+            date_events = CalendarDateEvents(
+                date=current_date,
+                events=events_by_date.get(current_date, [])
+            )
+            date_events_list.append(date_events)
+            current_date += timedelta(days=1)
+
+        # Calculate summary totals
+        upcoming_count = sum(1 for e in all_events if e.type == "upcoming")
+        overdue_count = sum(1 for e in all_events if e.type == "overdue")
+
+        summary = CalendarSummary(
+            upcoming=upcoming_count,
+            overdue=overdue_count
+        )
+
+        return CalendarResponse(
+            dates=date_events_list,
+            summary=summary
+        )
 
     # ------------------------------------------------------------------
     # Dashboard helpers

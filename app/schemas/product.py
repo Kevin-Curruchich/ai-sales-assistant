@@ -1,5 +1,4 @@
 import uuid
-from datetime import datetime
 from typing import Optional
 from pydantic import BaseModel
 
@@ -37,8 +36,12 @@ class ProductResponse(BaseModel):
     stock: int
     min_stock: int
     status: str
-    created_at: datetime
-    updated_at: datetime
+    created_at: str
+    updated_at: str
+    created_at_formatted: Optional[str] = None
+    updated_at_formatted: Optional[str] = None
+    stock_alert_status: str
+    should_reorder: bool
 
     model_config = {"from_attributes": True}
 

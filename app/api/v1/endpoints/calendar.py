@@ -2,13 +2,13 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_current_user
-from app.schemas.sale import CalendarEvent
+from app.schemas.sale import CalendarResponse
 from app.services.sale_service import SaleService
 
 router = APIRouter(prefix="/calendar", tags=["Calendar"])
 
 
-@router.get("/events", response_model=list[CalendarEvent])
+@router.get("/events", response_model=CalendarResponse)
 def get_calendar_events(
     start_date: date,
     end_date: date,

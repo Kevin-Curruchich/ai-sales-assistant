@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
@@ -17,6 +18,51 @@ class ProductService:
         self, search: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 10, offset: int = 0
     ) -> list[Product]:
         return self.repo.get_all(search=search, status=status_filter, limit=limit, offset=offset)
+
+    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[str], Optional[str]]:
+        if value is None:
+            return None, None
+        if isinstance(value, str):
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return value.strftime("%Y-%m-%d"), value.strftime("%d/%m/%Y")
+
+    def _get_stock_alert(self, stock: int, min_stock: int) -> tuple[str, bool]:
+        if stock <= 0:
+            return "out_of_stock", True
+        if stock <= min_stock:
+            return "low_stock", True
+        return "in_stock", False
+
+    def format_product_dates(self, product: Product) -> dict:
+        created_at, created_at_formatted = self._format_datetime(product.created_at)
+        updated_at, updated_at_formatted = self._format_datetime(product.updated_at)
+        stock_alert_status, should_reorder = self._get_stock_alert(product.stock, product.min_stock)
+
+        return {
+            "id": product.id,
+            "sku": product.sku,
+            "name": product.name,
+            "description": product.description,
+            "price": product.price,
+            "stock": product.stock,
+            "min_stock": product.min_stock,
+            "status": product.status,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "created_at_formatted": created_at_formatted,
+            "updated_at_formatted": updated_at_formatted,
+            "stock_alert_status": stock_alert_status,
+            "should_reorder": should_reorder,
+        }
+
+    def get_all_with_formatted_dates(
+        self, search: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 10, offset: int = 0
+    ) -> list[dict]:
+        items = self.get_all(search=search, status_filter=status_filter, limit=limit, offset=offset)
+        return [self.format_product_dates(item) for item in items]
+
+    def get_by_id_with_formatted_dates(self, product_id: uuid.UUID) -> dict:
+        return self.format_product_dates(self.get_by_id(product_id))
 
     def get_by_id(self, product_id: uuid.UUID) -> Product:
         product = self.repo.get_by_id(product_id)
