@@ -48,3 +48,6 @@ build/
 *.bak
 *.swp
 *.tmp
+
+# Ignore the firebase-adminsdk.json file which contains sensitive credentials
+revenew-*-firebase-adminsdk-*-*.json
