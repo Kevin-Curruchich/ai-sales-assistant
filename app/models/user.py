@@ -19,6 +19,7 @@ class User(Base):
 
     # Relationships
     sales: Mapped[list["Sale"]] = relationship("Sale", back_populates="user")
+    purchases: Mapped[list["Purchase"]] = relationship("Purchase", back_populates="user")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
