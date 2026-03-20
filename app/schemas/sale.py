@@ -1,7 +1,8 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 # --- Request schemas ---
@@ -9,7 +10,22 @@ from pydantic import BaseModel
 class SaleItemCreate(BaseModel):
     productId: uuid.UUID
     quantity: int
-    unitPrice: float
+    unitPrice: Optional[Decimal] = None
+    pricingExceptionReason: Optional[str] = None
+
+    @field_validator("quantity")
+    @classmethod
+    def quantity_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("quantity must be greater than 0")
+        return v
+
+    @field_validator("unitPrice")
+    @classmethod
+    def unit_price_must_be_non_negative(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+        if v is not None and v < 0:
+            raise ValueError("unitPrice must be >= 0")
+        return v
 
 
 class SaleCreate(BaseModel):
@@ -30,12 +46,19 @@ class SaleItemResponse(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID
     quantity: int
-    unit_price: float
-    subtotal: float
+    unit_price: Decimal
+    subtotal: Decimal
+    cost_basis_unit: Optional[Decimal] = None
+    gross_profit_unit: Optional[Decimal] = None
+    gross_profit_total: Optional[Decimal] = None
+    is_price_overridden: bool = False
+    pricing_exception_reason: Optional[str] = None
     # Enriched product info
     product_name: str
     product_sku: str
-    product_price: float
+    product_earning_mode: str
+    product_earning_percent: Optional[Decimal] = None
+    product_earning_fee_amount: Optional[Decimal] = None
     product_status: str
 
     model_config = {"from_attributes": True}
@@ -46,7 +69,7 @@ class SaleResponse(BaseModel):
     customer_id: uuid.UUID
     user_id: uuid.UUID
     date: date
-    total: float
+    total: Decimal
     items: list[SaleItemResponse] = []
     created_at: str
     updated_at: str
@@ -130,3 +153,15 @@ class CalendarResponse(BaseModel):
     """Complete calendar response with events by date and summary"""
     dates: list[CalendarDateEvents]
     summary: CalendarSummary
+
+
+class ProfitReportRow(BaseModel):
+    key: str
+    label: str
+    quantity: int
+    revenue: Decimal
+    gross_profit: Decimal
+
+
+class ProfitReportResponse(BaseModel):
+    data: list[ProfitReportRow]

@@ -1,5 +1,6 @@
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, field_validator
 
@@ -9,7 +10,7 @@ from pydantic import BaseModel, field_validator
 class PurchaseItemCreate(BaseModel):
     productId: uuid.UUID
     quantity: int
-    unitCost: float
+    unitCost: Decimal
 
     @field_validator("quantity")
     @classmethod
@@ -20,7 +21,7 @@ class PurchaseItemCreate(BaseModel):
 
     @field_validator("unitCost")
     @classmethod
-    def unit_cost_must_be_non_negative(cls, v: float) -> float:
+    def unit_cost_must_be_non_negative(cls, v: Decimal) -> Decimal:
         if v < 0:
             raise ValueError("unitCost must be >= 0")
         return v
@@ -48,13 +49,14 @@ class PurchaseItemResponse(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID
     quantity: int
-    unit_cost: float
-    subtotal: float
+    unit_cost: Decimal
+    subtotal: Decimal
     # Enriched product info
     product_name: str
     product_sku: str
-    product_price: float
-    product_cost_price: Optional[float] = None
+    product_earning_mode: str
+    product_earning_percent: Optional[Decimal] = None
+    product_earning_fee_amount: Optional[Decimal] = None
     product_status: str
 
     model_config = {"from_attributes": True}
@@ -67,7 +69,7 @@ class PurchaseResponse(BaseModel):
     reference_number: Optional[str] = None
     date: date
     notes: Optional[str] = None
-    total: float
+    total: Decimal
     status: str
     items: list[PurchaseItemResponse] = []
     created_at: str

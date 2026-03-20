@@ -54,8 +54,6 @@ class SaleRepository:
         stmt = stmt.order_by(Sale.date.desc()).limit(limit).offset(offset)
 
         results = list(self.db.execute(stmt).unique().scalars().all())
-        print(f"Query results: {results}")
-        
         return results
 
     def get_by_id(self, sale_id: uuid.UUID) -> Optional[Sale]:
@@ -101,7 +99,7 @@ class SaleRepository:
             Sale.date >= first_day, Sale.date <= today
         )
         result = self.db.execute(stmt).scalar()
-        return float(result)
+        return float(result or 0.0)
 
     def get_recent_sales(self, limit: int = 5) -> list[Sale]:
         stmt = (

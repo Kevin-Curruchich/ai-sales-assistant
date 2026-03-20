@@ -43,7 +43,9 @@ class ProductService:
             "sku": product.sku,
             "name": product.name,
             "description": product.description,
-            "price": product.price,
+            "earning_mode": product.earning_mode,
+            "earning_percent": product.earning_percent,
+            "earning_fee_amount": product.earning_fee_amount,
             "stock": product.stock,
             "min_stock": product.min_stock,
             "status": product.status,
@@ -81,12 +83,29 @@ class ProductService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Product with SKU '{data.sku}' already exists",
             )
-        product = Product(**data.model_dump())
+        payload = {
+            "sku": data.sku,
+            "name": data.name,
+            "description": data.description,
+            "earning_mode": data.earningMode,
+            "earning_percent": data.earningPercent,
+            "earning_fee_amount": data.earningFeeAmount,
+            "stock": data.stock,
+            "min_stock": data.min_stock,
+            "status": data.status,
+        }
+        product = Product(**payload)
         return self.repo.create(product)
 
     def update(self, product_id: uuid.UUID, data: ProductUpdate) -> Product:
         product = self.get_by_id(product_id)
         update_data = data.model_dump(exclude_unset=True)
+        field_map = {
+            "earningMode": "earning_mode",
+            "earningPercent": "earning_percent",
+            "earningFeeAmount": "earning_fee_amount",
+        }
+        update_data = {field_map.get(k, k): v for k, v in update_data.items()}
 
         # If SKU is being changed, check for duplicates
         if "sku" in update_data and update_data["sku"] != product.sku:
@@ -99,6 +118,20 @@ class ProductService:
 
         for key, value in update_data.items():
             setattr(product, key, value)
+
+        earning_mode_value = getattr(product.earning_mode, "value", product.earning_mode)
+
+        if earning_mode_value == "percent" and product.earning_percent is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="earningPercent is required when earningMode is 'percent'",
+            )
+        if earning_mode_value == "fee" and product.earning_fee_amount is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="earningFeeAmount is required when earningMode is 'fee'",
+            )
+
         return self.repo.update(product)
 
     def delete(self, product_id: uuid.UUID) -> None:

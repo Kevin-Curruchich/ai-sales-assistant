@@ -1,11 +1,13 @@
 import uuid
 from typing import Optional
 from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
+from app.services.sale_service import SaleService
 from app.schemas.purchase import (
     PurchaseCreate, PurchaseUpdate, PurchaseItemResponse, PurchaseResponse,
 )
@@ -15,7 +17,13 @@ class PurchaseService:
     def __init__(self, db: Session):
         self.repo = PurchaseRepository(db)
         self.product_repo = ProductRepository(db)
+        self.sale_service = SaleService(db)
         self.db = db
+
+    def _money(self, value: Decimal | float | int | None) -> Decimal:
+        if value is None:
+            return Decimal("0.00")
+        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
     # ------------------------------------------------------------------ #
     # Helpers
@@ -40,12 +48,13 @@ class PurchaseService:
                 id=item.id,
                 product_id=item.product_id,
                 quantity=item.quantity,
-                unit_cost=item.unit_cost,
-                subtotal=item.subtotal,
+                unit_cost=self._money(item.unit_cost),
+                subtotal=self._money(item.subtotal),
                 product_name=product.name if product else "",
                 product_sku=product.sku if product else "",
-                product_price=product.price if product else 0.0,
-                product_cost_price=product.cost_price if product else None,
+                product_earning_mode=product.earning_mode if product else "percent",
+                product_earning_percent=product.earning_percent if product else None,
+                product_earning_fee_amount=product.earning_fee_amount if product else None,
                 product_status=product.status if product else "",
             ))
 
@@ -56,7 +65,7 @@ class PurchaseService:
             reference_number=purchase.reference_number,
             date=purchase.date,
             notes=purchase.notes,
-            total=purchase.total,
+            total=self._money(purchase.total),
             status=purchase.status,
             items=items,
             created_at=created_at or "",
@@ -149,7 +158,7 @@ class PurchaseService:
         self._check_duplicate_reference(data.referenceNumber)
         self._validate_items(data.items)
 
-        total = sum(item.quantity * item.unitCost for item in data.items)
+        total = Decimal("0.00")
 
         purchase = Purchase(
             user_id=user_id,
@@ -157,22 +166,25 @@ class PurchaseService:
             reference_number=data.referenceNumber,
             date=data.date,
             notes=data.notes,
-            total=round(total, 2),
+            total=Decimal("0.00"),
             status="draft",
         )
         self.db.add(purchase)
         self.db.flush()  # get purchase.id before adding items
 
         for item in data.items:
-            subtotal = round(item.quantity * item.unitCost, 2)
+            subtotal = self._money(item.unitCost * item.quantity)
+            total = self._money(total + subtotal)
             purchase_item = PurchaseItem(
                 purchase_id=purchase.id,
                 product_id=item.productId,
                 quantity=item.quantity,
-                unit_cost=item.unitCost,
+                unit_cost=self._money(item.unitCost),
                 subtotal=subtotal,
             )
             self.db.add(purchase_item)
+
+        purchase.total = total
 
         self.db.commit()
         self.db.refresh(purchase)
@@ -205,25 +217,25 @@ class PurchaseService:
                 self.db.delete(existing_item)
             self.db.flush()
 
-            total = 0.0
+            total = Decimal("0.00")
             for item in data.items:
-                subtotal = round(item.quantity * item.unitCost, 2)
-                total += subtotal
+                subtotal = self._money(item.quantity * item.unitCost)
+                total = self._money(total + subtotal)
                 purchase_item = PurchaseItem(
                     purchase_id=purchase.id,
                     product_id=item.productId,
                     quantity=item.quantity,
-                    unit_cost=item.unitCost,
+                    unit_cost=self._money(item.unitCost),
                     subtotal=subtotal,
                 )
                 self.db.add(purchase_item)
-            purchase.total = round(total, 2)
+            purchase.total = total
 
         self.db.commit()
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
     def confirm(self, purchase_id: uuid.UUID) -> PurchaseResponse:
-        """Confirm a draft purchase: increment stock and update product cost_price."""
+        """Confirm a draft purchase: increment stock and recalculate dependent sale profit snapshots."""
         purchase = self.get_by_id(purchase_id)
 
         if purchase.status == "confirmed":
@@ -236,6 +248,7 @@ class PurchaseService:
                 detail=f"Only draft purchases can be confirmed. Current status: '{purchase.status}'",
             )
 
+        affected_product_ids: set[uuid.UUID] = set()
         # Re-load fresh purchase items with FOR UPDATE to prevent concurrent double-apply
         for item in purchase.items:
             product = self.product_repo.get_by_id(item.product_id)
@@ -245,15 +258,20 @@ class PurchaseService:
                     detail=f"Product {item.product_id} no longer exists",
                 )
             product.stock += item.quantity
-            product.cost_price = item.unit_cost  # Update to latest purchase cost
+            affected_product_ids.add(item.product_id)
 
         purchase.status = "confirmed"
         self.db.commit()
+        self.sale_service.recalculate_sale_snapshots_for_products(
+            product_ids=affected_product_ids,
+            from_date=purchase.date,
+        )
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
     def cancel(self, purchase_id: uuid.UUID) -> PurchaseResponse:
         """Cancel a purchase. If it was confirmed, reverse the stock adjustments."""
         purchase = self.get_by_id(purchase_id)
+        affected_product_ids: set[uuid.UUID] = set()
 
         if purchase.status == "cancelled":
             return self._to_purchase_response(purchase)
@@ -277,9 +295,15 @@ class PurchaseService:
                         ),
                     )
                 product.stock = new_stock
+                affected_product_ids.add(item.product_id)
 
         purchase.status = "cancelled"
         self.db.commit()
+        if affected_product_ids:
+            self.sale_service.recalculate_sale_snapshots_for_products(
+                product_ids=affected_product_ids,
+                from_date=purchase.date,
+            )
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
     def delete(self, purchase_id: uuid.UUID) -> None:

@@ -1,9 +1,15 @@
 import uuid
 from datetime import datetime
+from enum import Enum as PyEnum
 from typing import Optional
-from sqlalchemy import String, DateTime, Float, Integer, Text, Uuid, func
+from sqlalchemy import Enum as SQLEnum, String, DateTime, Integer, Numeric, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base
+from app.core.database import Base, SCHEMA
+
+
+class EarningMode(str, PyEnum):
+    PERCENT = "percent"
+    FEE = "fee"
 
 
 class Product(Base):
@@ -15,8 +21,21 @@ class Product(Base):
     sku: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
-    price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    cost_price: Mapped[Optional[float]] = mapped_column(Float, nullable=True, default=None)  # Latest purchase cost
+    earning_mode: Mapped[EarningMode] = mapped_column(
+        SQLEnum(
+            EarningMode,
+            name="earning_mode_enum",
+            schema=SCHEMA,
+            native_enum=True,
+            validate_strings=True,
+            values_callable=lambda x: [e.value for e in x],
+        ),
+        nullable=False,
+        default=EarningMode.PERCENT,
+        server_default=text("'percent'"),
+    )
+    earning_percent: Mapped[Optional[float]] = mapped_column(Numeric(10, 4), nullable=True)
+    earning_fee_amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
     stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     min_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Reorder point
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active") # "active" | "inactive"

@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, datetime
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Uuid, func
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -18,7 +18,7 @@ class Sale(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     date: Mapped[date] = mapped_column(Date, nullable=False)
-    total: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

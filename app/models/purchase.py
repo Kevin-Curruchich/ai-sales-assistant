@@ -1,7 +1,7 @@
 import uuid
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, Uuid, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -19,7 +19,7 @@ class Purchase(Base):
     reference_number: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
     date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text)
-    total: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # "draft" | "confirmed" | "cancelled"
 
     created_at: Mapped[datetime] = mapped_column(
@@ -52,8 +52,8 @@ class PurchaseItem(Base):
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    unit_cost: Mapped[float] = mapped_column(Float, nullable=False)
-    subtotal: Mapped[float] = mapped_column(Float, nullable=False)
+    unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import logging
 from app.core.config import settings
 from app.core.security import initialize_firebase
-from app.core.database import engine, Base
+from app.core.database import engine, Base, prepare_schema_bootstrap, ensure_schema_compatibility
 from app.api.v1.router import api_router
 
 # Import all models so Base.metadata knows about them
@@ -21,7 +21,9 @@ async def lifespan(app: FastAPI):
     startup_issues.clear()
 
     try:
+        prepare_schema_bootstrap()
         Base.metadata.create_all(bind=engine)
+        ensure_schema_compatibility()
     except Exception:
         logger.exception("Database initialization failed during startup")
         startup_issues.append("database_init_failed")

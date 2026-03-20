@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_current_user
-from app.schemas.sale import SaleCreate, SaleUpdate, SaleResponse
+from app.schemas.sale import SaleCreate, SaleUpdate, SaleResponse, ProfitReportResponse
 from app.services.sale_service import SaleService
 
 router = APIRouter(prefix="/sales", tags=["Sales"])
@@ -26,6 +26,24 @@ def list_sales(
     )
     total = service.count(customer_id=customer_id, start_date=start_date, end_date=end_date)
     return {"data": items, "meta": {"total": total}}
+
+
+@router.get("/reports/profit", response_model=ProfitReportResponse)
+def get_profit_report(
+    group_by: str = "product",
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    limit: int = 100,
+    db: Session = Depends(get_db),
+    _current_user: dict = Depends(get_current_user),
+):
+    service = SaleService(db)
+    return service.get_profit_report(
+        group_by=group_by,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+    )
 
 
 @router.get("/{sale_id}", response_model=SaleResponse)

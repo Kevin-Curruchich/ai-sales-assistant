@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Float, Integer, ForeignKey, DateTime, Uuid, func
+from typing import Optional
+from sqlalchemy import Boolean, Integer, ForeignKey, DateTime, Numeric, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -18,8 +19,13 @@ class SaleItem(Base):
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    unit_price: Mapped[float] = mapped_column(Float, nullable=False)
-    subtotal: Mapped[float] = mapped_column(Float, nullable=False)
+    unit_price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    cost_basis_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    gross_profit_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    gross_profit_total: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    is_price_overridden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    pricing_exception_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
