@@ -34,6 +34,11 @@ class ProductRepository:
         stmt = stmt.order_by(Product.name).limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
 
+    def get_all_active(self) -> list[Product]:
+        """Get all active products without pagination, ordered by name."""
+        stmt = select(Product).where(Product.status == "active").order_by(Product.name)
+        return list(self.db.execute(stmt).scalars().all())
+
     def get_by_id(self, product_id: uuid.UUID) -> Optional[Product]:
         return self.db.get(Product, product_id)
 

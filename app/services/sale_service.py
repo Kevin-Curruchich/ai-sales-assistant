@@ -4,15 +4,16 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.customer_product_cycle import CustomerProductCycle
-from app.models.purchase import Purchase, PurchaseItem
+from app.models.purchase import PurchaseItem
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
+from app.models.sale_item_lot_allocation import SaleItemLotAllocation
 from app.repositories.customer_product_cycle_repository import CustomerProductCycleRepository
 from app.repositories.customer_repository import CustomerRepository
+from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_repository import SaleRepository
 from app.schemas.sale import (
@@ -23,11 +24,16 @@ from app.schemas.sale import (
     FollowUpItemResponse,
     FollowUpMetrics,
     FollowUpResponse,
+    LotAllocationPreview,
     ProfitReportResponse,
     ProfitReportRow,
     SaleCreate,
     SaleItemCreate,
+    SaleItemLotAllocationResponse,
+    SaleItemPreview,
     SaleItemResponse,
+    SalePreviewResponse,
+    SalePreviewTotals,
     SaleResponse,
     SaleUpdate,
 )
@@ -41,6 +47,7 @@ class SaleService:
         self.db = db
         self.sale_repo = SaleRepository(db)
         self.product_repo = ProductRepository(db)
+        self.purchase_repo = PurchaseRepository(db)
         self.customer_repo = CustomerRepository(db)
         self.cycle_repo = CustomerProductCycleRepository(db)
 
@@ -53,18 +60,46 @@ class SaleService:
             return Decimal("0.00")
         return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
 
-    def _latest_confirmed_cost(self, product_id: uuid.UUID, as_of_date: date) -> Optional[Decimal]:
-        stmt = (
-            select(PurchaseItem.unit_cost)
-            .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
-            .where(PurchaseItem.product_id == product_id)
-            .where(Purchase.status == "confirmed")
-            .where(Purchase.date <= as_of_date)
-            .order_by(Purchase.date.desc(), Purchase.created_at.desc(), PurchaseItem.created_at.desc())
-            .limit(1)
+    def _allocate_fifo_lots(
+        self,
+        product_id: uuid.UUID,
+        quantity: int,
+        sale_date: date,
+    ) -> tuple[list[tuple[PurchaseItem, int]], Decimal]:
+        lots = self.purchase_repo.get_fifo_available_lots(
+            product_id=product_id,
+            as_of_date=sale_date,
+            lock_for_update=True,
         )
-        result = self.db.execute(stmt).scalar_one_or_none()
-        return self._money(result) if result is not None else None
+
+        to_consume = quantity
+        allocations: list[tuple[PurchaseItem, int]] = []
+        total_cost = Decimal("0.00")
+
+        for lot in lots:
+            if to_consume <= 0:
+                break
+
+            take = min(lot.remaining_quantity, to_consume)
+            if take <= 0:
+                continue
+
+            allocations.append((lot, take))
+            total_cost = self._money(total_cost + self._money(lot.unit_cost) * take)
+            to_consume -= take
+
+        if to_consume > 0:
+            available = quantity - to_consume
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Insufficient FIFO lots to price sale item. "
+                    f"Available priced quantity={available}, requested={quantity}."
+                ),
+            )
+
+        cost_basis = self._money(total_cost / quantity)
+        return allocations, cost_basis
 
     def _suggested_unit_price(self, product, cost_basis: Decimal) -> Decimal:
         mode = getattr(product.earning_mode, "value", product.earning_mode)
@@ -78,38 +113,53 @@ class SaleService:
     def _resolve_sale_item_pricing(
         self,
         product,
-        sale_date: date,
+        cost_basis: Decimal,
         item_data: SaleItemCreate,
-    ) -> tuple[Decimal, Decimal, Decimal, Decimal, bool, Optional[str]]:
-        cost_basis = self._latest_confirmed_cost(product.id, sale_date)
-        if cost_basis is None:
+    ) -> tuple[Decimal, Decimal, Decimal, Decimal, bool, Optional[str], Optional[Decimal], Optional[Decimal]]:
+        if item_data.discountPercent is not None and item_data.discountAmount is not None:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
-                    f"Sale blocked for product '{product.name}' because there is no confirmed purchase cost "
-                    f"on or before {sale_date}."
+                    f"Provide only one discount type for product '{product.name}': "
+                    "discountPercent or discountAmount"
                 ),
             )
 
         suggested = self._suggested_unit_price(product, cost_basis)
+        discount_percent = self._money(item_data.discountPercent) if item_data.discountPercent is not None else None
+        discount_amount = self._money(item_data.discountAmount) if item_data.discountAmount is not None else None
 
-        if item_data.unitPrice is None:
-            unit_price = suggested
-            is_overridden = False
-            reason = None
-        else:
+        if item_data.unitPrice is not None:
+            if discount_percent is not None or discount_amount is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        f"Do not send unitPrice together with discounts for product '{product.name}'"
+                    ),
+                )
+
             unit_price = self._money(item_data.unitPrice)
             is_overridden = unit_price != suggested
             reason = item_data.pricingExceptionReason
 
-            if is_overridden and not reason:
+            # Market-up overrides are allowed, but must be justified.
+            if unit_price > suggested and not reason:
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=(
-                        f"Pricing exception reason is required when overriding suggested price for "
+                        "pricingExceptionReason is required when overriding above suggested price for "
                         f"product '{product.name}'."
                     ),
                 )
+        else:
+            unit_price = suggested
+            is_overridden = False
+            reason = item_data.pricingExceptionReason
+
+            if discount_percent is not None:
+                unit_price = self._money(suggested * (Decimal("1") - (discount_percent / HUNDRED)))
+            elif discount_amount is not None:
+                unit_price = self._money(suggested - discount_amount)
 
         if unit_price < 0:
             raise HTTPException(
@@ -118,7 +168,16 @@ class SaleService:
             )
 
         gross_profit_unit = self._money(unit_price - cost_basis)
-        return unit_price, cost_basis, gross_profit_unit, suggested, is_overridden, reason
+        return (
+            unit_price,
+            cost_basis,
+            gross_profit_unit,
+            suggested,
+            is_overridden,
+            reason,
+            discount_percent,
+            discount_amount,
+        )
 
     def _to_sale_response(self, sale: Sale) -> SaleResponse:
         user = sale.user
@@ -144,8 +203,20 @@ class SaleService:
                     cost_basis_unit=self._money(item.cost_basis_unit) if item.cost_basis_unit is not None else None,
                     gross_profit_unit=self._money(item.gross_profit_unit) if item.gross_profit_unit is not None else None,
                     gross_profit_total=self._money(item.gross_profit_total) if item.gross_profit_total is not None else None,
+                    discount_percent=self._money(item.discount_percent) if item.discount_percent is not None else None,
+                    discount_amount=self._money(item.discount_amount) if item.discount_amount is not None else None,
                     is_price_overridden=item.is_price_overridden,
                     pricing_exception_reason=item.pricing_exception_reason,
+                    allocations=[
+                        SaleItemLotAllocationResponse(
+                            id=alloc.id,
+                            purchase_item_id=alloc.purchase_item_id,
+                            quantity_allocated=alloc.quantity_allocated,
+                            unit_cost_snapshot=self._money(alloc.unit_cost_snapshot),
+                            lot_purchase_date=alloc.lot_purchase_date,
+                        )
+                        for alloc in item.allocations
+                    ],
                     product_name=product.name if product else "",
                     product_sku=product.sku if product else "",
                     product_earning_mode=product.earning_mode if product else "percent",
@@ -173,34 +244,9 @@ class SaleService:
             customer_email=customer.email if customer else "",
         )
 
-    def _recalculate_item_profit_snapshot(self, item: SaleItem, sale_date: date) -> None:
-        latest_cost = self._latest_confirmed_cost(item.product_id, sale_date)
-        if latest_cost is None:
-            return
-
-        item.cost_basis_unit = latest_cost
-        item.gross_profit_unit = self._money(self._money(item.unit_price) - latest_cost)
-        item.gross_profit_total = self._money(item.gross_profit_unit * item.quantity)
-
     def recalculate_sale_snapshots_for_products(self, product_ids: set[uuid.UUID], from_date: date) -> None:
-        if not product_ids:
-            return
-
-        stmt = (
-            select(SaleItem)
-            .join(Sale, Sale.id == SaleItem.sale_id)
-            .where(SaleItem.product_id.in_(product_ids))
-            .where(Sale.date >= from_date)
-        )
-        items = list(self.db.execute(stmt).scalars().all())
-
-        for item in items:
-            sale = self.sale_repo.get_by_id(item.sale_id)
-            if not sale:
-                continue
-            self._recalculate_item_profit_snapshot(item, sale.date)
-
-        self.db.commit()
+        # FIFO snapshots are immutable once a sale is confirmed.
+        return
 
     # ------------------------------------------------------------------
     # CRUD
@@ -253,6 +299,162 @@ class SaleService:
         sale = self.create(data, user_id=user_id)
         return self._to_sale_response(self.get_by_id(sale.id))
 
+    def preview_sale(self, data: SaleCreate) -> SalePreviewResponse:
+        """Simulate FIFO lot allocation and pricing without writing to the database.
+
+        Reads the current available lots for each product and returns the exact
+        allocation split, computed cost basis, suggested price, and final price
+        (after any discount/override) so the frontend can show an audit breakdown
+        before the user confirms.
+
+        No rows are inserted or updated; no row locks are acquired.
+        """
+        customer = self.customer_repo.get_by_id(data.customerId)
+        if not customer:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Customer with id {data.customerId} not found",
+            )
+
+        preview_items: list[SaleItemPreview] = []
+        total_revenue = Decimal("0.00")
+        total_cost = Decimal("0.00")
+        total_gross_profit = Decimal("0.00")
+
+        for item_data in data.items:
+            product = self.product_repo.get_by_id(item_data.productId)
+            if not product:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Product with id {item_data.productId} not found",
+                )
+
+            warnings: list[str] = []
+
+            if product.status != "active":
+                warnings.append(f"Product '{product.name}' is not active.")
+
+            if product.stock < item_data.quantity:
+                warnings.append(
+                    f"Insufficient stock for product '{product.name}'. "
+                    f"Available: {product.stock}, Requested: {item_data.quantity}."
+                )
+
+            # Dry-run FIFO allocation — no lock, no DB write
+            lots = self.purchase_repo.get_fifo_available_lots(
+                product_id=item_data.productId,
+                as_of_date=data.date,
+                lock_for_update=False,
+            )
+
+            to_consume = item_data.quantity
+            lot_previews: list[LotAllocationPreview] = []
+            total_item_cost = Decimal("0.00")
+
+            for lot in lots:
+                if to_consume <= 0:
+                    break
+                take = min(lot.remaining_quantity, to_consume)
+                if take <= 0:
+                    continue
+                lot_previews.append(
+                    LotAllocationPreview(
+                        purchase_item_id=lot.id,
+                        purchase_id=lot.purchase_id,
+                        purchase_date=lot.purchase.date,
+                        unit_cost=self._money(lot.unit_cost),
+                        quantity_available=lot.remaining_quantity,
+                        quantity_taken=take,
+                    )
+                )
+                total_item_cost = self._money(total_item_cost + self._money(lot.unit_cost) * take)
+                to_consume -= take
+
+            if to_consume > 0:
+                available_qty = item_data.quantity - to_consume
+                warnings.append(
+                    f"Only {available_qty} of {item_data.quantity} units have confirmed FIFO lot cost. "
+                    "This sale would be blocked at creation time."
+                )
+                # Best-effort: use whatever cost we could compute
+                if available_qty > 0:
+                    cost_basis = self._money(total_item_cost / available_qty)
+                else:
+                    cost_basis = Decimal("0.00")
+            else:
+                cost_basis = self._money(total_item_cost / item_data.quantity)
+
+            suggested = self._suggested_unit_price(product, cost_basis)
+
+            # Resolve pricing (same rules as actual create)
+            try:
+                (
+                    final_price,
+                    cost_basis,
+                    gross_profit_unit,
+                    _,
+                    is_overridden,
+                    reason,
+                    discount_percent,
+                    discount_amount,
+                ) = self._resolve_sale_item_pricing(
+                    product=product,
+                    cost_basis=cost_basis,
+                    item_data=item_data,
+                )
+            except HTTPException as exc:
+                # Pricing rules violated — surface as a warning instead of aborting
+                warnings.append(f"Pricing rule error: {exc.detail}")
+                final_price = suggested
+                gross_profit_unit = self._money(suggested - cost_basis)
+                is_overridden = False
+                reason = None
+                discount_percent = None
+                discount_amount = None
+
+            subtotal = self._money(final_price * item_data.quantity)
+            gross_profit_total = self._money(gross_profit_unit * item_data.quantity)
+            item_total_cost = self._money(cost_basis * item_data.quantity)
+
+            total_revenue = self._money(total_revenue + subtotal)
+            total_cost = self._money(total_cost + item_total_cost)
+            total_gross_profit = self._money(total_gross_profit + gross_profit_total)
+
+            preview_items.append(
+                SaleItemPreview(
+                    product_id=product.id,
+                    product_name=product.name,
+                    product_sku=product.sku,
+                    requested_quantity=item_data.quantity,
+                    allocations=lot_previews,
+                    cost_basis_unit=cost_basis,
+                    suggested_unit_price=suggested,
+                    final_unit_price=final_price,
+                    discount_percent=discount_percent,
+                    discount_amount=discount_amount,
+                    is_price_overridden=is_overridden,
+                    pricing_exception_reason=reason,
+                    subtotal=subtotal,
+                    gross_profit_unit=gross_profit_unit,
+                    gross_profit_total=gross_profit_total,
+                    warnings=warnings,
+                )
+            )
+
+        return SalePreviewResponse(
+            customer_id=customer.id,
+            customer_name=customer.name,
+            date=data.date,
+            items=preview_items,
+            totals=SalePreviewTotals(
+                total_revenue=total_revenue,
+                total_cost=total_cost,
+                total_gross_profit=total_gross_profit,
+            ),
+        )
+
+
+
     def update_enriched(self, sale_id: uuid.UUID, data: SaleUpdate) -> SaleResponse:
         sale = self.update(sale_id, data)
         return self._to_sale_response(self.get_by_id(sale.id))
@@ -289,9 +491,24 @@ class SaleService:
                     ),
                 )
 
-            unit_price, cost_basis, gross_profit_unit, _, is_overridden, reason = self._resolve_sale_item_pricing(
-                product=product,
+            allocations, cost_basis = self._allocate_fifo_lots(
+                product_id=item_data.productId,
+                quantity=item_data.quantity,
                 sale_date=data.date,
+            )
+
+            (
+                unit_price,
+                cost_basis,
+                gross_profit_unit,
+                _,
+                is_overridden,
+                reason,
+                discount_percent,
+                discount_amount,
+            ) = self._resolve_sale_item_pricing(
+                product=product,
+                cost_basis=cost_basis,
                 item_data=item_data,
             )
 
@@ -299,19 +516,32 @@ class SaleService:
             gross_profit_total = self._money(gross_profit_unit * item_data.quantity)
             total = self._money(total + subtotal)
 
-            sale_items.append(
-                SaleItem(
-                    product_id=item_data.productId,
-                    quantity=item_data.quantity,
-                    unit_price=unit_price,
-                    subtotal=subtotal,
-                    cost_basis_unit=cost_basis,
-                    gross_profit_unit=gross_profit_unit,
-                    gross_profit_total=gross_profit_total,
-                    is_price_overridden=is_overridden,
-                    pricing_exception_reason=reason,
-                )
+            sale_item = SaleItem(
+                product_id=item_data.productId,
+                quantity=item_data.quantity,
+                unit_price=unit_price,
+                subtotal=subtotal,
+                cost_basis_unit=cost_basis,
+                gross_profit_unit=gross_profit_unit,
+                gross_profit_total=gross_profit_total,
+                discount_percent=discount_percent,
+                discount_amount=discount_amount,
+                is_price_overridden=is_overridden,
+                pricing_exception_reason=reason,
+                allocations=[
+                    SaleItemLotAllocation(
+                        purchase_item_id=lot.id,
+                        quantity_allocated=lot_quantity,
+                        unit_cost_snapshot=float(lot.unit_cost),
+                        lot_purchase_date=lot.purchase.date,
+                    )
+                    for lot, lot_quantity in allocations
+                ],
             )
+            sale_items.append(sale_item)
+
+            for lot, lot_quantity in allocations:
+                lot.remaining_quantity -= lot_quantity
 
             product.stock -= item_data.quantity
 
@@ -344,63 +574,17 @@ class SaleService:
 
         if "date" in update_data:
             sale.date = update_data["date"]
-            for existing_item in sale.items:
-                self._recalculate_item_profit_snapshot(existing_item, sale.date)
 
         if "items" in update_data and update_data["items"] is not None:
-            for old_item in sale.items:
-                product = self.product_repo.get_by_id(old_item.product_id)
-                if product:
-                    product.stock += old_item.quantity
-
-            sale.items.clear()
-
-            total = Decimal("0.00")
-            for item_data in data.items or []:
-                product = self.product_repo.get_by_id(item_data.productId)
-                if not product:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Product with id {item_data.productId} not found",
-                    )
-                if product.stock < item_data.quantity:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Insufficient stock for product '{product.name}'",
-                    )
-
-                unit_price, cost_basis, gross_profit_unit, _, is_overridden, reason = self._resolve_sale_item_pricing(
-                    product=product,
-                    sale_date=sale.date,
-                    item_data=item_data,
-                )
-
-                subtotal = self._money(unit_price * item_data.quantity)
-                gross_profit_total = self._money(gross_profit_unit * item_data.quantity)
-                total = self._money(total + subtotal)
-
-                sale.items.append(
-                    SaleItem(
-                        product_id=item_data.productId,
-                        quantity=item_data.quantity,
-                        unit_price=unit_price,
-                        subtotal=subtotal,
-                        cost_basis_unit=cost_basis,
-                        gross_profit_unit=gross_profit_unit,
-                        gross_profit_total=gross_profit_total,
-                        is_price_overridden=is_overridden,
-                        pricing_exception_reason=reason,
-                    )
-                )
-                product.stock -= item_data.quantity
-
-            sale.total = total
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Updating sale items is disabled with FIFO lot traceability. "
+                    "Create a new sale instead."
+                ),
+            )
 
         result = self.sale_repo.update(sale)
-
-        if "items" in update_data and data.items is not None:
-            for item_data in data.items:
-                self._update_cycle(sale.customer_id, item_data.productId, sale.date, item_data.quantity)
 
         return result
 

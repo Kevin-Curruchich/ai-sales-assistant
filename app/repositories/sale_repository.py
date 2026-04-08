@@ -51,7 +51,7 @@ class SaleRepository:
             stmt = stmt.where(Sale.date >= start_date)
         if end_date:
             stmt = stmt.where(Sale.date <= end_date)
-        stmt = stmt.order_by(Sale.date.desc()).limit(limit).offset(offset)
+        stmt = stmt.order_by(Sale.created_at.desc(), Sale.date.desc()).limit(limit).offset(offset)
 
         results = list(self.db.execute(stmt).unique().scalars().all())
         return results
@@ -72,7 +72,7 @@ class SaleRepository:
         stmt = (
             select(Sale)
             .where(Sale.customer_id == customer_id)
-            .order_by(Sale.date.desc())
+            .order_by(Sale.created_at.desc(), Sale.date.desc())
         )
         return list(self.db.execute(stmt).scalars().all())
 
@@ -105,7 +105,7 @@ class SaleRepository:
         stmt = (
             select(Sale)
             .options(joinedload(Sale.items))
-            .order_by(Sale.date.desc())
+            .order_by(Sale.created_at.desc(), Sale.date.desc())
             .limit(limit)
         )
         return list(self.db.execute(stmt).unique().scalars().all())

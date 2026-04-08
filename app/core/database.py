@@ -52,8 +52,32 @@ def prepare_schema_bootstrap() -> None:
 
 
 def ensure_schema_compatibility() -> None:
-    """No-op: Base.metadata.create_all() handles schema creation on a clean database."""
-    pass
+    """Apply additive schema updates for running environments without Alembic."""
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "DO $$ BEGIN "
+                "IF NOT EXISTS ("
+                "SELECT 1 FROM information_schema.columns "
+                f"WHERE table_schema = '{SCHEMA}' AND table_name = 'purchase_items' AND column_name = 'remaining_quantity'"
+                ") THEN "
+                f"ALTER TABLE {SCHEMA}.purchase_items ADD COLUMN remaining_quantity INTEGER NOT NULL DEFAULT 0; "
+                f"UPDATE {SCHEMA}.purchase_items pi "
+                f"SET remaining_quantity = pi.quantity "
+                f"FROM {SCHEMA}.purchases p "
+                "WHERE p.id = pi.purchase_id AND p.status = 'confirmed'; "
+                "END IF; "
+                "END $$;"
+            )
+        )
+
+        conn.execute(
+            text(
+                f"ALTER TABLE {SCHEMA}.sale_items "
+                "ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5, 2), "
+                "ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(14, 2);"
+            )
+        )
 
 
 

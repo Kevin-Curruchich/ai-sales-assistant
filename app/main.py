@@ -8,7 +8,7 @@ from app.core.database import engine, Base, prepare_schema_bootstrap, ensure_sch
 from app.api.v1.router import api_router
 
 # Import all models so Base.metadata knows about them
-from app.models import User, Customer, Product, Sale, SaleItem, CustomerProductCycle  # noqa: F401
+from app.models import User, Customer, Product, Sale, SaleItem, SaleItemLotAllocation, CustomerProductCycle  # noqa: F401
 
 logger = logging.getLogger("app.startup")
 startup_issues: list[str] = []

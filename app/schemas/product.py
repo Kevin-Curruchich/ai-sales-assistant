@@ -1,4 +1,5 @@
 import uuid
+from datetime import date
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -59,7 +60,50 @@ class ProductUpdate(BaseModel):
         return self
 
 
+
 # --- Response schemas ---
+
+class AvailableLotInfo(BaseModel):
+    """First available FIFO lot for a product."""
+    purchase_item_id: uuid.UUID
+    purchase_id: uuid.UUID
+    purchase_date: date
+    unit_cost: Decimal
+    remaining_quantity: int
+    suggested_unit_price: Decimal
+
+    model_config = {"from_attributes": True}
+
+
+class ProductForSaleResponse(BaseModel):
+    """Product with first available lot (for sales view, no pagination)."""
+    id: uuid.UUID
+    sku: str
+    name: str
+    stock: int
+    earning_mode: str
+    earning_percent: Optional[Decimal] = None
+    earning_fee_amount: Optional[Decimal] = None
+    status: str
+    first_available_lot: Optional[AvailableLotInfo] = None
+    has_more_lots: bool = False
+
+    model_config = {"from_attributes": True}
+
+
+class LotsAvailabilityResponse(BaseModel):
+    """All available lots for a product (for detailed lot selection)."""
+    product_id: uuid.UUID
+    product_sku: str
+    product_name: str
+    total_stock: int
+    earning_mode: str
+    earning_percent: Optional[Decimal] = None
+    earning_fee_amount: Optional[Decimal] = None
+    lots: list[AvailableLotInfo]
+
+    model_config = {"from_attributes": True}
+
 
 class ProductResponse(BaseModel):
     id: uuid.UUID
@@ -78,6 +122,7 @@ class ProductResponse(BaseModel):
     updated_at_formatted: Optional[str] = None
     stock_alert_status: str
     should_reorder: bool
+    suggested_price: Optional[Decimal] = None
 
     model_config = {"from_attributes": True}
 

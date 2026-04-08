@@ -1,18 +1,132 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, date
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 from fastapi import HTTPException, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from app.models.purchase import Purchase, PurchaseItem
 from app.models.product import Product
 from app.repositories.product_repository import ProductRepository
-from app.schemas.product import ProductCreate, ProductUpdate
+from app.repositories.purchase_repository import PurchaseRepository
+from app.schemas.product import ProductCreate, ProductUpdate, ProductForSaleResponse, AvailableLotInfo, LotsAvailabilityResponse
 
 
 class ProductService:
+    _MONEY = Decimal("0.01")
+    _HUNDRED = Decimal("100")
+
     def count(self, search: Optional[str] = None, status_filter: Optional[str] = None) -> int:
         return self.repo.count(search=search, status=status_filter)
+
+    def get_all_active_with_first_lot(self) -> list[ProductForSaleResponse]:
+        """Get all active products with their first available FIFO lot.
+
+        Returns products unpaginated with lot data for sales view dropdown.
+        If no lots available, first_available_lot is None.
+        """
+        products = self.repo.get_all_active()
+        result = []
+
+        for product in products:
+            lots = self.purchase_repo.get_fifo_available_lots(
+                product_id=product.id,
+                as_of_date=date.today(),
+                lock_for_update=False,
+            )
+
+            first_lot = None
+            if lots:
+                lot = lots[0]
+                cost_basis = Decimal(str(lot.unit_cost)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+                suggested_price = self._compute_suggested_price(product, cost_basis)
+
+                first_lot = AvailableLotInfo(
+                    purchase_item_id=lot.id,
+                    purchase_id=lot.purchase_id,
+                    purchase_date=lot.purchase.date,
+                    unit_cost=cost_basis,
+                    remaining_quantity=lot.remaining_quantity,
+                    suggested_unit_price=suggested_price,
+                )
+
+            result.append(
+                ProductForSaleResponse(
+                    id=product.id,
+                    sku=product.sku,
+                    name=product.name,
+                    stock=product.stock,
+                    earning_mode=getattr(product.earning_mode, "value", product.earning_mode),
+                    earning_percent=product.earning_percent,
+                    earning_fee_amount=product.earning_fee_amount,
+                    status=product.status,
+                    first_available_lot=first_lot,
+                    has_more_lots=len(lots) > 1,
+                )
+            )
+
+        return result
+
+    def get_lots_availability(self, product_id: uuid.UUID, as_of_date: Optional[date] = None) -> LotsAvailabilityResponse:
+        """Get all available FIFO lots for a product.
+
+        Args:
+            product_id: Product UUID
+            as_of_date: Date to filter lots by (default: today)
+
+        Returns:
+            LotsAvailabilityResponse with all available lots
+
+        Raises:
+            HTTPException 404 if product not found
+        """
+        if as_of_date is None:
+            as_of_date = date.today()
+
+        product = self.repo.get_by_id(product_id)
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Product with id {product_id} not found",
+            )
+
+        lots = self.purchase_repo.get_fifo_available_lots(
+            product_id=product_id,
+            as_of_date=as_of_date,
+            lock_for_update=False,
+        )
+
+        lot_infos: list[AvailableLotInfo] = []
+        for lot in lots:
+            cost_basis = Decimal(str(lot.unit_cost)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+            suggested_price = self._compute_suggested_price(product, cost_basis)
+
+            lot_infos.append(
+                AvailableLotInfo(
+                    purchase_item_id=lot.id,
+                    purchase_id=lot.purchase_id,
+                    purchase_date=lot.purchase.date,
+                    unit_cost=cost_basis,
+                    remaining_quantity=lot.remaining_quantity,
+                    suggested_unit_price=suggested_price,
+                )
+            )
+
+        return LotsAvailabilityResponse(
+            product_id=product.id,
+            product_sku=product.sku,
+            product_name=product.name,
+            total_stock=product.stock,
+            earning_mode=getattr(product.earning_mode, "value", product.earning_mode),
+            earning_percent=product.earning_percent,
+            earning_fee_amount=product.earning_fee_amount,
+            lots=lot_infos,
+        )
+
     def __init__(self, db: Session):
+        self.db = db
         self.repo = ProductRepository(db)
+        self.purchase_repo = PurchaseRepository(db)
 
     def get_all(
         self, search: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 10, offset: int = 0
@@ -33,10 +147,58 @@ class ProductService:
             return "low_stock", True
         return "in_stock", False
 
-    def format_product_dates(self, product: Product) -> dict:
+    def _compute_suggested_price(self, product: Product, cost_basis: Decimal) -> Decimal:
+        mode = getattr(product.earning_mode, "value", product.earning_mode)
+        if mode == "percent":
+            percent = Decimal(str(product.earning_percent or 0))
+            return (cost_basis * (Decimal("1") + (percent / self._HUNDRED))).quantize(
+                self._MONEY,
+                rounding=ROUND_HALF_UP,
+            )
+
+        fee_amount = Decimal(str(product.earning_fee_amount or 0))
+        return (cost_basis + fee_amount).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+
+    def _get_highest_available_lot_cost(self, product_id: uuid.UUID) -> Optional[Decimal]:
+        stmt = (
+            select(func.max(PurchaseItem.unit_cost))
+            .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
+            .where(Purchase.status == "confirmed")
+            .where(PurchaseItem.product_id == product_id)
+            .where(PurchaseItem.remaining_quantity > 0)
+        )
+        result = self.db.execute(stmt).scalar_one_or_none()
+        if result is None:
+            return None
+        return Decimal(str(result)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+
+    def _get_highest_available_lot_costs_bulk(self, product_ids: list[uuid.UUID]) -> dict[uuid.UUID, Decimal]:
+        if not product_ids:
+            return {}
+
+        stmt = (
+            select(
+                PurchaseItem.product_id,
+                func.max(PurchaseItem.unit_cost).label("max_cost"),
+            )
+            .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
+            .where(Purchase.status == "confirmed")
+            .where(PurchaseItem.product_id.in_(product_ids))
+            .where(PurchaseItem.remaining_quantity > 0)
+            .group_by(PurchaseItem.product_id)
+        )
+        rows = self.db.execute(stmt).all()
+        return {
+            row.product_id: Decimal(str(row.max_cost)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+            for row in rows
+            if row.max_cost is not None
+        }
+
+    def format_product_dates(self, product: Product, highest_cost: Optional[Decimal] = None) -> dict:
         created_at, created_at_formatted = self._format_datetime(product.created_at)
         updated_at, updated_at_formatted = self._format_datetime(product.updated_at)
         stock_alert_status, should_reorder = self._get_stock_alert(product.stock, product.min_stock)
+        suggested_price = self._compute_suggested_price(product, highest_cost) if highest_cost is not None else None
 
         return {
             "id": product.id,
@@ -55,16 +217,20 @@ class ProductService:
             "updated_at_formatted": updated_at_formatted,
             "stock_alert_status": stock_alert_status,
             "should_reorder": should_reorder,
+            "suggested_price": suggested_price,
         }
 
     def get_all_with_formatted_dates(
         self, search: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 10, offset: int = 0
     ) -> list[dict]:
         items = self.get_all(search=search, status_filter=status_filter, limit=limit, offset=offset)
-        return [self.format_product_dates(item) for item in items]
+        highest_costs = self._get_highest_available_lot_costs_bulk([item.id for item in items])
+        return [self.format_product_dates(item, highest_cost=highest_costs.get(item.id)) for item in items]
 
     def get_by_id_with_formatted_dates(self, product_id: uuid.UUID) -> dict:
-        return self.format_product_dates(self.get_by_id(product_id))
+        product = self.get_by_id(product_id)
+        highest_cost = self._get_highest_available_lot_cost(product_id)
+        return self.format_product_dates(product, highest_cost=highest_cost)
 
     def get_by_id(self, product_id: uuid.UUID) -> Product:
         product = self.repo.get_by_id(product_id)

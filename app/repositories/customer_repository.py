@@ -17,7 +17,7 @@ class CustomerRepository:
                 | Customer.company.ilike(f"%{search}%")
                 | Customer.email.ilike(f"%{search}%")
             )
-        stmt = stmt.order_by(Customer.name).limit(limit).offset(offset)
+        stmt = stmt.order_by(Customer.created_at.desc()).limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
 
     def get_by_id(self, customer_id: uuid.UUID) -> Optional[Customer]:

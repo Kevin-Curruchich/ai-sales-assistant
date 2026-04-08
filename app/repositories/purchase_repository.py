@@ -52,7 +52,7 @@ class PurchaseRepository:
             stmt = stmt.where(Purchase.date >= start_date)
         if end_date:
             stmt = stmt.where(Purchase.date <= end_date)
-        stmt = stmt.order_by(Purchase.date.desc()).limit(limit).offset(offset)
+        stmt = stmt.order_by(Purchase.created_at.desc(), Purchase.date.desc()).limit(limit).offset(offset)
         return list(self.db.execute(stmt).unique().scalars().all())
 
     def get_by_id(self, purchase_id: uuid.UUID) -> Optional[Purchase]:
@@ -84,3 +84,24 @@ class PurchaseRepository:
     def delete(self, purchase: Purchase) -> None:
         self.db.delete(purchase)
         self.db.commit()
+
+    def get_fifo_available_lots(
+        self,
+        product_id: uuid.UUID,
+        as_of_date: Optional[date] = None,
+        lock_for_update: bool = False,
+    ) -> list[PurchaseItem]:
+        stmt = (
+            select(PurchaseItem)
+            .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
+            .options(joinedload(PurchaseItem.purchase))
+            .where(Purchase.status == "confirmed")
+            .where(PurchaseItem.product_id == product_id)
+            .where(PurchaseItem.remaining_quantity > 0)
+            .order_by(Purchase.date.asc(), Purchase.created_at.asc(), PurchaseItem.created_at.asc())
+        )
+        if as_of_date is not None:
+            stmt = stmt.where(Purchase.date <= as_of_date)
+        if lock_for_update:
+            stmt = stmt.with_for_update()
+        return list(self.db.execute(stmt).scalars().all())

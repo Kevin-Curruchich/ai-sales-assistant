@@ -4,7 +4,7 @@ from datetime import date
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_current_user
-from app.schemas.sale import SaleCreate, SaleUpdate, SaleResponse, ProfitReportResponse
+from app.schemas.sale import SaleCreate, SaleUpdate, SaleResponse, ProfitReportResponse, SalePreviewResponse
 from app.services.sale_service import SaleService
 
 router = APIRouter(prefix="/sales", tags=["Sales"])
@@ -44,6 +44,21 @@ def get_profit_report(
         end_date=end_date,
         limit=limit,
     )
+
+
+@router.post("/preview", response_model=SalePreviewResponse, status_code=status.HTTP_200_OK)
+def preview_sale(
+    data: SaleCreate,
+    db: Session = Depends(get_db),
+    _current_user=Depends(get_current_user),
+):
+    """Dry-run FIFO lot allocation and pricing without writing to the database.
+
+    Returns the exact lot split, cost basis, suggested and final price for
+    every item so the frontend can show an audit breakdown before confirming.
+    """
+    service = SaleService(db)
+    return service.preview_sale(data)
 
 
 @router.get("/{sale_id}", response_model=SaleResponse)

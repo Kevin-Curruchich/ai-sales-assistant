@@ -52,6 +52,7 @@ class PurchaseItem(Base):
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    remaining_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
 

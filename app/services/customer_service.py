@@ -99,7 +99,7 @@ class CustomerService:
             select(Sale)
             .options(joinedload(Sale.items).joinedload(SaleItem.product))
             .where(Sale.customer_id == customer_id)
-            .order_by(Sale.date.desc())
+            .order_by(Sale.created_at.desc(), Sale.date.desc())
             .limit(limit)
         )
         sales = self.db.execute(stmt).unique().scalars().all()

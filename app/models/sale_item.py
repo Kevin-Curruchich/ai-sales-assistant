@@ -24,6 +24,8 @@ class SaleItem(Base):
     cost_basis_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     gross_profit_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     gross_profit_total: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    discount_percent: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
+    discount_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     is_price_overridden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     pricing_exception_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -34,6 +36,9 @@ class SaleItem(Base):
     # Relationships
     sale: Mapped["Sale"] = relationship("Sale", back_populates="items")
     product: Mapped["Product"] = relationship("Product")
+    allocations: Mapped[list["SaleItemLotAllocation"]] = relationship(
+        "SaleItemLotAllocation", back_populates="sale_item", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<SaleItem(id={self.id}, product_id={self.product_id}, qty={self.quantity})>"

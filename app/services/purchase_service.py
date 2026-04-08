@@ -179,6 +179,7 @@ class PurchaseService:
                 purchase_id=purchase.id,
                 product_id=item.productId,
                 quantity=item.quantity,
+                remaining_quantity=0,
                 unit_cost=self._money(item.unitCost),
                 subtotal=subtotal,
             )
@@ -225,6 +226,7 @@ class PurchaseService:
                     purchase_id=purchase.id,
                     product_id=item.productId,
                     quantity=item.quantity,
+                    remaining_quantity=0,
                     unit_cost=self._money(item.unitCost),
                     subtotal=subtotal,
                 )
@@ -249,7 +251,7 @@ class PurchaseService:
             )
 
         affected_product_ids: set[uuid.UUID] = set()
-        # Re-load fresh purchase items with FOR UPDATE to prevent concurrent double-apply
+        # Each confirmed purchase item becomes an available FIFO lot.
         for item in purchase.items:
             product = self.product_repo.get_by_id(item.product_id)
             if not product:
@@ -258,6 +260,7 @@ class PurchaseService:
                     detail=f"Product {item.product_id} no longer exists",
                 )
             product.stock += item.quantity
+            item.remaining_quantity = item.quantity
             affected_product_ids.add(item.product_id)
 
         purchase.status = "confirmed"
@@ -278,23 +281,33 @@ class PurchaseService:
 
         if purchase.status == "confirmed":
             for item in purchase.items:
+                consumed_quantity = item.quantity - item.remaining_quantity
+                if consumed_quantity > 0:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            f"Cannot cancel purchase {purchase.id}: {consumed_quantity} units from product "
+                            f"'{item.product.name if item.product else item.product_id}' were already sold"
+                        ),
+                    )
                 product = self.product_repo.get_by_id(item.product_id)
                 if not product:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
                         detail=f"Product {item.product_id} no longer exists",
                     )
-                new_stock = product.stock - item.quantity
+                new_stock = product.stock - item.remaining_quantity
                 if new_stock < 0:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
                         detail=(
                             f"Cannot cancel: reversing stock for product '{product.name}' "
                             f"would result in negative stock "
-                            f"(current={product.stock}, to remove={item.quantity})"
+                            f"(current={product.stock}, to remove={item.remaining_quantity})"
                         ),
                     )
                 product.stock = new_stock
+                item.remaining_quantity = 0
                 affected_product_ids.add(item.product_id)
 
         purchase.status = "cancelled"
