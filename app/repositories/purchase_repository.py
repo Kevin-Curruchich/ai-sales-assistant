@@ -2,7 +2,7 @@ import uuid
 from typing import Optional
 from datetime import date
 from sqlalchemy import select, func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from app.models.purchase import Purchase, PurchaseItem
 
 
@@ -94,7 +94,8 @@ class PurchaseRepository:
         stmt = (
             select(PurchaseItem)
             .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
-            .options(joinedload(PurchaseItem.purchase))
+            # Keep purchase eager-loaded without introducing outer joins in the locking query.
+            .options(selectinload(PurchaseItem.purchase))
             .where(Purchase.status == "confirmed")
             .where(PurchaseItem.product_id == product_id)
             .where(PurchaseItem.remaining_quantity > 0)
@@ -103,5 +104,5 @@ class PurchaseRepository:
         if as_of_date is not None:
             stmt = stmt.where(Purchase.date <= as_of_date)
         if lock_for_update:
-            stmt = stmt.with_for_update()
+            stmt = stmt.with_for_update(of=PurchaseItem)
         return list(self.db.execute(stmt).scalars().all())
