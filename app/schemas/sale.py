@@ -9,7 +9,7 @@ from pydantic import BaseModel, field_validator
 
 class SaleItemCreate(BaseModel):
     productId: uuid.UUID
-    quantity: int
+    quantity: Decimal
     unitPrice: Optional[Decimal] = None
     discountPercent: Optional[Decimal] = None
     discountAmount: Optional[Decimal] = None
@@ -17,7 +17,7 @@ class SaleItemCreate(BaseModel):
 
     @field_validator("quantity")
     @classmethod
-    def quantity_must_be_positive(cls, v: int) -> int:
+    def quantity_must_be_positive(cls, v: Decimal) -> Decimal:
         if v <= 0:
             raise ValueError("quantity must be greater than 0")
         return v
@@ -63,15 +63,15 @@ class LotAllocationPreview(BaseModel):
     purchase_id: uuid.UUID
     purchase_date: date
     unit_cost: Decimal
-    quantity_available: int  # remaining in lot before this preview
-    quantity_taken: int
+    quantity_available: Decimal  # remaining in lot before this preview
+    quantity_taken: Decimal
 
 
 class SaleItemPreview(BaseModel):
     product_id: uuid.UUID
     product_name: str
     product_sku: str
-    requested_quantity: int
+    requested_quantity: Decimal
     allocations: list[LotAllocationPreview]
     cost_basis_unit: Decimal
     suggested_unit_price: Decimal
@@ -105,7 +105,7 @@ class SalePreviewResponse(BaseModel):
 class SaleItemLotAllocationResponse(BaseModel):
     id: uuid.UUID
     purchase_item_id: uuid.UUID
-    quantity_allocated: int
+    quantity_allocated: Decimal
     unit_cost_snapshot: Decimal
     lot_purchase_date: date
 
@@ -115,7 +115,7 @@ class SaleItemLotAllocationResponse(BaseModel):
 class SaleItemResponse(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID
-    quantity: int
+    quantity: Decimal
     unit_price: Decimal
     subtotal: Decimal
     cost_basis_unit: Optional[Decimal] = None
@@ -168,10 +168,10 @@ class FollowUpItemResponse(BaseModel):
     product_name: str
     avg_interval_days: Optional[int] = None
     last_purchase_date: Optional[date] = None
-    last_quantity: int = 0
+    last_quantity: Decimal = Decimal("0")
     estimated_next_purchase: Optional[date] = None
     days_until: Optional[int] = None
-    current_stock: int = 0
+    current_stock: Decimal = Decimal("0")
     min_stock: int = 0
     stock_alert: bool = False  # True when current_stock <= min_stock
 

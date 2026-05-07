@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
-from sqlalchemy import Boolean, Integer, ForeignKey, DateTime, Numeric, Text, Uuid, func
+from sqlalchemy import Boolean, ForeignKey, DateTime, Numeric, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -18,7 +19,7 @@ class SaleItem(Base):
     product_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     unit_price: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     cost_basis_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)

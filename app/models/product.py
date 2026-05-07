@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from decimal import Decimal
 from enum import Enum as PyEnum
 from typing import Optional
 from sqlalchemy import Enum as SQLEnum, String, DateTime, Integer, Numeric, Text, Uuid, func, text
@@ -36,7 +37,7 @@ class Product(Base):
     )
     earning_percent: Mapped[Optional[float]] = mapped_column(Numeric(10, 4), nullable=True)
     earning_fee_amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2), nullable=True)
-    stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stock: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False, default=0)
     min_stock: Mapped[int] = mapped_column(Integer, nullable=False, default=0)  # Reorder point
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="active") # "active" | "inactive"
 

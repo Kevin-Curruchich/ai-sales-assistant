@@ -1,7 +1,8 @@
 import uuid
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import Date, DateTime, Float, Integer, ForeignKey, UniqueConstraint, Uuid, func
+from decimal import Decimal
+from sqlalchemy import Date, DateTime, Float, Integer, Numeric, ForeignKey, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -27,7 +28,7 @@ class CustomerProductCycle(Base):
     avg_interval_days: Mapped[Optional[int]] = mapped_column(Integer)  # None until ≥2 purchases
     estimated_next_purchase: Mapped[Optional[date]] = mapped_column(Date)
     last_purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
-    last_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     total_purchases: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     created_at: Mapped[datetime] = mapped_column(

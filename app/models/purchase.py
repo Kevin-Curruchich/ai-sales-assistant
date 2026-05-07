@@ -1,5 +1,6 @@
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -52,7 +53,7 @@ class PurchaseItem(Base):
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
     quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    remaining_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    remaining_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False, default=0)
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
 

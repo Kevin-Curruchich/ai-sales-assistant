@@ -79,5 +79,28 @@ def ensure_schema_compatibility() -> None:
             )
         )
 
+        # Decimal quantity support: promote integer quantity columns to NUMERIC(10,4)
+        for table, column in [
+            ("sale_items", "quantity"),
+            ("sale_item_lot_allocations", "quantity_allocated"),
+            ("purchase_items", "remaining_quantity"),
+            ("products", "stock"),
+            ("customer_product_cycles", "last_quantity"),
+        ]:
+            conn.execute(
+                text(
+                    "DO $$ BEGIN "
+                    "IF EXISTS ("
+                    "SELECT 1 FROM information_schema.columns "
+                    f"WHERE table_schema = '{SCHEMA}' "
+                    f"AND table_name = '{table}' "
+                    f"AND column_name = '{column}' "
+                    "AND data_type = 'integer'"
+                    ") THEN "
+                    f"ALTER TABLE {SCHEMA}.{table} "
+                    f"ALTER COLUMN {column} TYPE NUMERIC(10, 4) USING {column}::NUMERIC(10, 4); "
+                    "END IF; END $$;"
+                )
+            )
 
 

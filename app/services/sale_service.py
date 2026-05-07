@@ -63,17 +63,17 @@ class SaleService:
     def _allocate_fifo_lots(
         self,
         product_id: uuid.UUID,
-        quantity: int,
+        quantity: Decimal,
         sale_date: date,
-    ) -> tuple[list[tuple[PurchaseItem, int]], Decimal]:
+    ) -> tuple[list[tuple[PurchaseItem, Decimal]], Decimal]:
         lots = self.purchase_repo.get_fifo_available_lots(
             product_id=product_id,
             as_of_date=sale_date,
             lock_for_update=True,
         )
 
-        to_consume = quantity
-        allocations: list[tuple[PurchaseItem, int]] = []
+        to_consume = Decimal(str(quantity))
+        allocations: list[tuple[PurchaseItem, Decimal]] = []
         total_cost = Decimal("0.00")
 
         for lot in lots:
@@ -593,7 +593,7 @@ class SaleService:
     # ------------------------------------------------------------------
 
     def _update_cycle(
-        self, customer_id: uuid.UUID, product_id: uuid.UUID, sale_date: date, quantity: int
+        self, customer_id: uuid.UUID, product_id: uuid.UUID, sale_date: date, quantity: Decimal
     ) -> None:
         cycle = self.cycle_repo.get_by_customer_and_product(customer_id, product_id)
 
