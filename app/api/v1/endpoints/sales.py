@@ -4,7 +4,14 @@ from datetime import date
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_current_user
-from app.schemas.sale import SaleCreate, SaleUpdate, SaleResponse, ProfitReportResponse, SalePreviewResponse
+from app.schemas.sale import (
+    SaleCreate,
+    SalePaymentStatusUpdate,
+    SalePreviewResponse,
+    SaleResponse,
+    SaleUpdate,
+    ProfitReportResponse,
+)
 from app.services.sale_service import SaleService
 
 router = APIRouter(prefix="/sales", tags=["Sales"])
@@ -90,3 +97,14 @@ def update_sale(
 ):
     service = SaleService(db)
     return service.update_enriched(sale_id, data)
+
+
+@router.patch("/{sale_id}/payment-status", response_model=SaleResponse)
+def update_sale_payment_status(
+    sale_id: uuid.UUID,
+    data: SalePaymentStatusUpdate,
+    db: Session = Depends(get_db),
+    _current_user: dict = Depends(get_current_user),
+):
+    service = SaleService(db)
+    return service.update_payment_status_enriched(sale_id, data)

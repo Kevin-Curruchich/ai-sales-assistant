@@ -130,6 +130,7 @@ export interface Sale {
   user_id: string; // UUID
   date: string; // YYYY-MM-DD
   total: number;
+  is_payment_pending: boolean;
   items: SaleItem[];
   created_at: string;
   updated_at: string;
@@ -144,6 +145,7 @@ export interface SaleItemCreateRequest {
 export interface SaleCreateRequest {
   customerId: string; // UUID
   date: string; // YYYY-MM-DD
+  isPaymentPending?: boolean;
   items: SaleItemCreateRequest[];
 }
 
@@ -151,6 +153,11 @@ export interface SaleUpdateRequest {
   customerId?: string | null; // UUID
   date?: string | null;
   items?: SaleItemCreateRequest[] | null;
+  isPaymentPending?: boolean | null;
+}
+
+export interface SalePaymentStatusUpdateRequest {
+  isPaymentPending: boolean;
 }
 
 // -------------------------------------------------------

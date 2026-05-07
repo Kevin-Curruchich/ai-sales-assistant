@@ -79,6 +79,13 @@ def ensure_schema_compatibility() -> None:
             )
         )
 
+        conn.execute(
+            text(
+                f"ALTER TABLE {SCHEMA}.sales "
+                "ADD COLUMN IF NOT EXISTS is_payment_pending BOOLEAN NOT NULL DEFAULT FALSE;"
+            )
+        )
+
         # Decimal quantity support: promote integer quantity columns to NUMERIC(10,4)
         for table, column in [
             ("sale_items", "quantity"),

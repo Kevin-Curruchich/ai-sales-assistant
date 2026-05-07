@@ -32,6 +32,7 @@ from app.schemas.sale import (
     SaleItemLotAllocationResponse,
     SaleItemPreview,
     SaleItemResponse,
+    SalePaymentStatusUpdate,
     SalePreviewResponse,
     SalePreviewTotals,
     SaleResponse,
@@ -232,6 +233,7 @@ class SaleService:
             user_id=sale.user_id,
             date=sale.date,
             total=self._money(sale.total),
+            is_payment_pending=sale.is_payment_pending,
             items=items,
             created_at=created_at.strftime("%Y-%m-%d") if created_at else "",
             updated_at=updated_at.strftime("%Y-%m-%d") if updated_at else "",
@@ -550,6 +552,7 @@ class SaleService:
             user_id=user_id,
             date=data.date,
             total=total,
+            is_payment_pending=data.isPaymentPending,
             items=sale_items,
         )
         sale = self.sale_repo.create(sale)
@@ -584,9 +587,22 @@ class SaleService:
                 ),
             )
 
+        if "isPaymentPending" in update_data and update_data["isPaymentPending"] is not None:
+            sale.is_payment_pending = update_data["isPaymentPending"]
+
         result = self.sale_repo.update(sale)
 
         return result
+
+    def update_payment_status_enriched(
+        self,
+        sale_id: uuid.UUID,
+        data: SalePaymentStatusUpdate,
+    ) -> SaleResponse:
+        sale = self.get_by_id(sale_id)
+        sale.is_payment_pending = data.isPaymentPending
+        self.sale_repo.update(sale)
+        return self._to_sale_response(self.get_by_id(sale_id))
 
     # ------------------------------------------------------------------
     # Replenishment cycle calculation

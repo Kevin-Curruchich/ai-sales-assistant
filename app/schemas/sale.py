@@ -48,12 +48,18 @@ class SaleCreate(BaseModel):
     customerId: uuid.UUID
     date: date
     items: list[SaleItemCreate]
+    isPaymentPending: bool = False
 
 
 class SaleUpdate(BaseModel):
     customerId: Optional[uuid.UUID] = None
     date: Optional[date] = None
     items: Optional[list[SaleItemCreate]] = None
+    isPaymentPending: Optional[bool] = None
+
+
+class SalePaymentStatusUpdate(BaseModel):
+    isPaymentPending: bool
 
 
 # --- Preview schemas (pre-sale FIFO audit, no DB write) ---
@@ -144,6 +150,7 @@ class SaleResponse(BaseModel):
     user_id: uuid.UUID
     date: date
     total: Decimal
+    is_payment_pending: bool
     items: list[SaleItemResponse] = []
     created_at: str
     updated_at: str

@@ -184,6 +184,7 @@ When a sale is created the backend automatically:
   {
     "customerId": "uuid",
     "date": "YYYY-MM-DD",
+    "isPaymentPending": false,
     "items": [
       { "productId": "uuid", "quantity": 2, "unitPrice": 15.5 }
     ]
@@ -198,7 +199,18 @@ When a sale is created the backend automatically:
   {
     "customerId": "uuid | null",
     "date": "date | null",
-    "items": "SaleItemCreate[] | null"
+    "items": "SaleItemCreate[] | null",
+    "isPaymentPending": "boolean | null"
+  }
+  ```
+- **Response:** `Sale`
+
+### `PATCH /sales/{sale_id}/payment-status`
+
+- **Request Body:**
+  ```json
+  {
+    "isPaymentPending": true
   }
   ```
 - **Response:** `Sale`
@@ -293,6 +305,7 @@ Counts for metric cards.
   "user_id": "uuid",
   "date": "YYYY-MM-DD",
   "total": 0.0,
+  "is_payment_pending": false,
   "items": [
     {
       "id": "uuid",

@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, datetime
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, Uuid, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -19,6 +19,7 @@ class Sale(Base):
     )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
+    is_payment_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -35,4 +36,7 @@ class Sale(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<Sale(id={self.id}, customer_id={self.customer_id}, user_id={self.user_id}, total={self.total})>"
+        return (
+            f"<Sale(id={self.id}, customer_id={self.customer_id}, user_id={self.user_id}, "
+            f"total={self.total}, is_payment_pending={self.is_payment_pending})>"
+        )
