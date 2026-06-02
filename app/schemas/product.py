@@ -20,7 +20,7 @@ class ProductCreate(BaseModel):
     earningMode: EarningMode = EarningMode.PERCENT
     earningPercent: Optional[Decimal] = None
     earningFeeAmount: Optional[Decimal] = None
-    stock: int = 0
+    stock: Decimal = Decimal("0")
     min_stock: int = 0  # Reorder point threshold
     status: str = "active"  # "active" | "inactive"
 
@@ -46,7 +46,7 @@ class ProductUpdate(BaseModel):
     earningMode: Optional[EarningMode] = None
     earningPercent: Optional[Decimal] = None
     earningFeeAmount: Optional[Decimal] = None
-    stock: Optional[int] = None
+    stock: Optional[Decimal] = None
     min_stock: Optional[int] = None
     status: Optional[str] = None
 
@@ -80,7 +80,7 @@ class ProductForSaleResponse(BaseModel):
     id: uuid.UUID
     sku: str
     name: str
-    stock: int
+    stock: Decimal
     earning_mode: str
     earning_percent: Optional[Decimal] = None
     earning_fee_amount: Optional[Decimal] = None
@@ -96,7 +96,7 @@ class LotsAvailabilityResponse(BaseModel):
     product_id: uuid.UUID
     product_sku: str
     product_name: str
-    total_stock: int
+    total_stock: Decimal
     earning_mode: str
     earning_percent: Optional[Decimal] = None
     earning_fee_amount: Optional[Decimal] = None
@@ -113,7 +113,7 @@ class ProductResponse(BaseModel):
     earning_mode: EarningMode
     earning_percent: Optional[Decimal] = None
     earning_fee_amount: Optional[Decimal] = None
-    stock: int
+    stock: Decimal
     min_stock: int
     status: str
     created_at: str

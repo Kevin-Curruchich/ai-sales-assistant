@@ -140,7 +140,7 @@ class ProductService:
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
         return value.strftime("%Y-%m-%d"), value.strftime("%d/%m/%Y")
 
-    def _get_stock_alert(self, stock: int, min_stock: int) -> tuple[str, bool]:
+    def _get_stock_alert(self, stock: Decimal, min_stock: int) -> tuple[str, bool]:
         if stock <= 0:
             return "out_of_stock", True
         if stock <= min_stock:
