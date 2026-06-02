@@ -16,6 +16,9 @@ class ProductService:
     _MONEY = Decimal("0.01")
     _HUNDRED = Decimal("100")
 
+    def _format_stock(self, value: Decimal) -> Decimal:
+        return Decimal(str(value)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+
     def count(self, search: Optional[str] = None, status_filter: Optional[str] = None) -> int:
         return self.repo.count(search=search, status=status_filter)
 
@@ -46,7 +49,7 @@ class ProductService:
                     purchase_id=lot.purchase_id,
                     purchase_date=lot.purchase.date,
                     unit_cost=cost_basis,
-                    remaining_quantity=lot.remaining_quantity,
+                    remaining_quantity=self._format_stock(lot.remaining_quantity),
                     suggested_unit_price=suggested_price,
                 )
 
@@ -55,7 +58,7 @@ class ProductService:
                     id=product.id,
                     sku=product.sku,
                     name=product.name,
-                    stock=product.stock,
+                    stock=self._format_stock(product.stock),
                     earning_mode=getattr(product.earning_mode, "value", product.earning_mode),
                     earning_percent=product.earning_percent,
                     earning_fee_amount=product.earning_fee_amount,
@@ -107,7 +110,7 @@ class ProductService:
                     purchase_id=lot.purchase_id,
                     purchase_date=lot.purchase.date,
                     unit_cost=cost_basis,
-                    remaining_quantity=lot.remaining_quantity,
+                    remaining_quantity=self._format_stock(lot.remaining_quantity),
                     suggested_unit_price=suggested_price,
                 )
             )
@@ -116,7 +119,7 @@ class ProductService:
             product_id=product.id,
             product_sku=product.sku,
             product_name=product.name,
-            total_stock=product.stock,
+            total_stock=self._format_stock(product.stock),
             earning_mode=getattr(product.earning_mode, "value", product.earning_mode),
             earning_percent=product.earning_percent,
             earning_fee_amount=product.earning_fee_amount,
@@ -208,7 +211,7 @@ class ProductService:
             "earning_mode": product.earning_mode,
             "earning_percent": product.earning_percent,
             "earning_fee_amount": product.earning_fee_amount,
-            "stock": product.stock,
+            "stock": self._format_stock(product.stock),
             "min_stock": product.min_stock,
             "status": product.status,
             "created_at": created_at,

@@ -69,7 +69,7 @@ class AvailableLotInfo(BaseModel):
     purchase_id: uuid.UUID
     purchase_date: date
     unit_cost: Decimal
-    remaining_quantity: int
+    remaining_quantity: Decimal
     suggested_unit_price: Decimal
 
     model_config = {"from_attributes": True}
