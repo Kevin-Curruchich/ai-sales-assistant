@@ -13,6 +13,7 @@ class SaleRepository:
     def count(
         self,
         customer_id: Optional[uuid.UUID] = None,
+        product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> int:
@@ -20,6 +21,8 @@ class SaleRepository:
         stmt = select(func.count()).select_from(Sale)
         if customer_id:
             stmt = stmt.where(Sale.customer_id == customer_id)
+        if product_id:
+            stmt = stmt.where(Sale.items.any(SaleItem.product_id == product_id))
         if start_date:
             stmt = stmt.where(Sale.date >= start_date)
         if end_date:
@@ -32,6 +35,7 @@ class SaleRepository:
     def get_all(
         self,
         customer_id: Optional[uuid.UUID] = None,
+        product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         limit: int = 10,
@@ -47,6 +51,8 @@ class SaleRepository:
         )
         if customer_id:
             stmt = stmt.where(Sale.customer_id == customer_id)
+        if product_id:
+            stmt = stmt.where(Sale.items.any(SaleItem.product_id == product_id))
         if start_date:
             stmt = stmt.where(Sale.date >= start_date)
         if end_date:

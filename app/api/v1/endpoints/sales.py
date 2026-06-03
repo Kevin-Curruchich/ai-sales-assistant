@@ -20,6 +20,7 @@ router = APIRouter(prefix="/sales", tags=["Sales"])
 @router.get("")
 def list_sales(
     customer_id: Optional[uuid.UUID] = None,
+    product_id: Optional[uuid.UUID] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     limit: int = 10,
@@ -29,9 +30,19 @@ def list_sales(
 ):
     service = SaleService(db)
     items = service.get_all_enriched(
-        customer_id=customer_id, start_date=start_date, end_date=end_date, limit=limit, offset=offset
+        customer_id=customer_id,
+        product_id=product_id,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=offset,
     )
-    total = service.count(customer_id=customer_id, start_date=start_date, end_date=end_date)
+    total = service.count(
+        customer_id=customer_id,
+        product_id=product_id,
+        start_date=start_date,
+        end_date=end_date,
+    )
     return {"data": items, "meta": {"total": total}}
 
 

@@ -257,21 +257,33 @@ class SaleService:
     def count(
         self,
         customer_id: Optional[uuid.UUID] = None,
+        product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
     ) -> int:
-        return self.sale_repo.count(customer_id=customer_id, start_date=start_date, end_date=end_date)
+        return self.sale_repo.count(
+            customer_id=customer_id,
+            product_id=product_id,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
     def get_all(
         self,
         customer_id: Optional[uuid.UUID] = None,
+        product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[Sale]:
         return self.sale_repo.get_all(
-            customer_id=customer_id, start_date=start_date, end_date=end_date, limit=limit, offset=offset
+            customer_id=customer_id,
+            product_id=product_id,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
         )
 
     def get_by_id(self, sale_id: uuid.UUID) -> Sale:
@@ -286,12 +298,20 @@ class SaleService:
     def get_all_enriched(
         self,
         customer_id: Optional[uuid.UUID] = None,
+        product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[SaleResponse]:
-        sales = self.get_all(customer_id, start_date, end_date, limit=limit, offset=offset)
+        sales = self.get_all(
+            customer_id=customer_id,
+            product_id=product_id,
+            start_date=start_date,
+            end_date=end_date,
+            limit=limit,
+            offset=offset,
+        )
         return [self._to_sale_response(s) for s in sales]
 
     def get_by_id_enriched(self, sale_id: uuid.UUID) -> SaleResponse:
