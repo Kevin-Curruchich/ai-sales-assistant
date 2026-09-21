@@ -151,6 +151,7 @@ Derivados del diff contra el Sheet.
 | `type` | enum | `entrada` \| `salida` \| `aporte_socio` \| `retiro_socio` |
 | `amount` | Numeric(14,2) | |
 | `payment_method` | Optional[str] | |
+| `sale_id` | FK nullable → `sales.id` | |
 | `purchase_id` | FK nullable → `purchases.id` | |
 | `note` | Optional[Text] | |
 | `created_at` | timestamptz | |
@@ -158,29 +159,16 @@ Derivados del diff contra el Sheet.
 `retiro_socio` no aparece en los datos del Sheet; se incluye por simetría con
 `aporte_socio`.
 
-La asimetría entre `purchase_id` (FK directa) y las ventas (tabla de enlace) es
-deliberada: en el Sheet ningún movimiento referencia más de una compra, mientras que
-sí los hay que saldan varias ventas a la vez.
+**Limitación conocida y aceptada:** un movimiento solo puede apuntar a una venta.
+En el Sheet, MOV-019 tiene `referencia = "VTA-039+VTA-040+VTA-044"` — un cobro de Q90
+que salda tres ventas de una vez. Ese caso no entra en este diseño.
 
-**Tabla nueva `cash_movement_allocations`**
-
-Un movimiento puede saldar varias ventas: en el Sheet, MOV-019 tiene
-`referencia = "VTA-039+VTA-040+VTA-044"` — un cobro de Q90 que cubre tres ventas.
-Un `sale_id` nullable no representa ese caso.
-
-| Columna | Tipo |
-|---|---|
-| `id` | UUID PK |
-| `cash_movement_id` | FK → `cash_movements.id` ON DELETE CASCADE |
-| `sale_id` | FK → `sales.id` |
-| `amount` | Numeric(14,2) |
-
-Sigue el patrón que el repo ya usa en `sale_item_lot_allocations`.
-
-> **Punto abierto para revisión:** si prefieres empezar simple, un `sale_id` nullable
-> directo en `cash_movements` cubre el 96% de los casos del Sheet (25 de 26
-> movimientos). La tabla de enlace se puede introducir después en su propia migración
-> — que es justamente para lo que sirve tener Alembic.
+Se acepta a propósito: cubre 25 de los 26 movimientos del Sheet, y `cash_movements`
+nace vacía, así que el caso no existe todavía en la base. Cuando aparezca, la salida es
+una tabla `cash_movement_allocations` (`cash_movement_id`, `sale_id`, `amount`,
+siguiendo el patrón que el repo ya usa en `sale_item_lot_allocations`) introducida en
+su propia migración — que es justamente para lo que sirve tener Alembic. Mientras
+tanto, un cobro que salde varias ventas se registra como varios movimientos.
 
 **`saldo_acumulado` no se guarda.** Se calcula al leer con
 `SUM(...) OVER (ORDER BY movement_date)`. La evidencia respalda la decisión: en el
