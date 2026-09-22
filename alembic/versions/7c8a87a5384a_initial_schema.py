@@ -12,10 +12,11 @@ Numeric(10, 4) de las cantidades).
 Correcciones manuales sobre el autogenerate (ver task-4-report.md):
   * Se borro el `op.drop_table('alembic_version')` del upgrade y el
     `op.create_table('alembic_version', ...)` del downgrade.  Eran un artefacto
-    de env.py, que configuraba version_table_schema=<schema destino> mientras
-    reflejaba con include_schemas=False (schema None), de modo que el
-    autogenerate no reconocia su propia tabla de version y proponia borrarla.
-    La causa raiz ya esta arreglada en env.py (version_table_schema=None).
+    de env.py, que pasaba el nombre real del schema destino como
+    version_table_schema mientras reflejaba el schema por defecto de la
+    conexion, de modo que el autogenerate no reconocia su propia tabla de
+    version y proponia borrarla.  La causa raiz ya esta arreglada en env.py,
+    que ahora pasa None como version_table_schema.
   * Se anadio el DROP TYPE de earning_mode_enum al downgrade: op.create_table
     emite el CREATE TYPE (before_create con checkfirst=False) pero op.drop_table
     no emite el DROP, y sin el un downgrade + upgrade fallaria con
@@ -25,9 +26,12 @@ Correcciones manuales sobre el autogenerate (ver task-4-report.md):
     produccion.  La columna es NOT NULL: sin ese default, un INSERT que la
     omita funciona en db_dev y fallaria aqui.
 
-Ninguna operacion lleva `schema=`: el schema destino se resuelve por search_path
-en env.py, de modo que esta misma revision sirve para db_dev, db_v2 o un schema
-de test.
+Ninguna operacion cualifica el schema explicitamente: el destino se resuelve por
+el search_path que fija env.py, de modo que esta misma revision sirve para
+db_dev, db_v2 o un schema de test.  Lo vigila
+test_migration_emits_no_hardcoded_schema, que rechaza cualquier revision donde
+aparezca ese parametro; por eso esta nota lo describe en prosa en vez de
+escribirlo literal.
 """
 from typing import Sequence, Union
 

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
@@ -59,6 +61,63 @@ def test_downgrade_removes_everything(test_engine, alembic_config):
     assert EXPECTED_TABLES & tables == set(), f"Quedaron tablas tras downgrade: {tables}"
 
 
+def _normalized_defaults(conn, schema: str) -> dict[tuple[str, str], str]:
+    """Defaults del catalogo, normalizados para no atarse al formato de Postgres.
+
+    Postgres reescribe lo que le mandamos: `sa.text("'percent'")` sobre una columna
+    enum vuelve como `'percent'::<schema>.earning_mode_enum`, con el nombre del
+    schema desechable incrustado.  Comparar el texto crudo haria el test fragil y
+    dependiente del nombre aleatorio del schema, asi que se recorta el cast y las
+    comillas y se compara el valor, no su serializacion.
+    """
+    rows = conn.execute(
+        text(
+            "SELECT table_name, column_name, column_default "
+            "FROM information_schema.columns "
+            "WHERE table_schema = :s AND column_default IS NOT NULL"
+        ),
+        {"s": schema},
+    )
+    out = {}
+    for table, column, default in rows:
+        value = default.split("::")[0].strip().strip("'").lower()
+        out[(table, column)] = value
+    return out
+
+
+def test_server_defaults_survive_the_migration(test_engine, migrated_schema):
+    """Los server defaults que importan, asertados contra el catalogo.
+
+    compare_metadata corre con compare_server_default=False (activarlo da falsos
+    positivos en Postgres: compara el texto del default, y `'0'::numeric` vs `0`
+    diverge), asi que test_models_and_migrations_do_not_drift es CIEGO a esta clase
+    de fallo.  Es justo la que ya mordio una vez: la migracion nacio sin el
+    DEFAULT 0 de purchase_items.remaining_quantity y ningun test lo noto.
+
+    El brief avisa ademas de que el autogenerate "a veces pierde" los
+    server_default, y los nueve gen_random_uuid() de las PK son lo mas caro de
+    perder: sin ellos, cualquier INSERT que no traiga el id explicito falla.
+    """
+    with test_engine.connect() as conn:
+        defaults = _normalized_defaults(conn, migrated_schema)
+
+    missing_uuid_defaults = sorted(
+        table
+        for table in EXPECTED_TABLES
+        if defaults.get((table, "id")) != "gen_random_uuid()"
+    )
+    assert missing_uuid_defaults == [], (
+        "Estas tablas perdieron el server default de su PK UUID: "
+        f"{missing_uuid_defaults}.  Un INSERT sin id explicito fallaria."
+    )
+
+    # Las tres columnas que ensure_schema_compatibility() parcheaba en caliente y
+    # que la copia de datos de la Task 6 espera encontrar tal cual en produccion.
+    assert defaults.get(("purchase_items", "remaining_quantity")) == "0"
+    assert defaults.get(("sales", "is_payment_pending")) == "false"
+    assert defaults.get(("products", "earning_mode")) == "percent"
+
+
 def test_upgrade_downgrade_upgrade_round_trip(test_engine, alembic_config):
     """La reversibilidad tiene que ser real: bajar y volver a subir el MISMO schema.
 
@@ -96,10 +155,29 @@ def test_upgrade_downgrade_upgrade_round_trip(test_engine, alembic_config):
 
 
 def test_migration_emits_no_hardcoded_schema():
-    """Una revision con schema='db_dev' incrustado no sirve para db_v2."""
-    from pathlib import Path
+    """Ninguna revision puede cualificar el schema: se resuelve por search_path.
 
-    for path in Path("alembic/versions").glob("*.py"):
+    Se comprueba `schema=` en general, no el literal 'db_dev'.  El contrato no es
+    "no apuntes a db_dev", es "no cualifiques el schema en absoluto": un
+    schema='db_v2' o un schema='public' colado romperia db_dev igual de bien.
+
+    El directorio se resuelve desde __file__, no desde el cwd: con Path relativa,
+    correr pytest desde cualquier sitio que no sea la raiz del repo hacia que el
+    glob no encontrase nada y el test pasara sin mirar nada.  Por eso se asserta
+    tambien que se escaneo al menos una revision.
+    """
+    versions_dir = Path(__file__).resolve().parent.parent / "alembic" / "versions"
+    revisions = sorted(versions_dir.glob("*.py"))
+
+    assert revisions, (
+        f"No se escaneo ninguna revision en {versions_dir}.  El test no puede dar "
+        "por bueno lo que no ha leido."
+    )
+
+    for path in revisions:
         source = path.read_text()
-        assert "schema='db_dev'" not in source, f"{path} lleva el schema incrustado"
-        assert 'schema="db_dev"' not in source, f"{path} lleva el schema incrustado"
+        assert "schema=" not in source, (
+            f"{path} cualifica el schema explicitamente.  Estas migraciones tienen "
+            "que servir para db_dev, db_v2 y cualquier schema de test, y el schema "
+            "lo fija el search_path de env.py."
+        )
