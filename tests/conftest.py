@@ -6,7 +6,7 @@ from sqlalchemy import create_engine, text
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
-    "postgresql://revenew:revenew@localhost:55432/revenew_test",
+    "postgresql://revenew@localhost:55432/revenew_test",
 )
 
 # Los tests crean y destruyen schemas.  Apuntarlos a Railway destruiria datos reales.
