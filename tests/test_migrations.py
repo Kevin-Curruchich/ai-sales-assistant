@@ -59,6 +59,42 @@ def test_downgrade_removes_everything(test_engine, alembic_config):
     assert EXPECTED_TABLES & tables == set(), f"Quedaron tablas tras downgrade: {tables}"
 
 
+def test_upgrade_downgrade_upgrade_round_trip(test_engine, alembic_config):
+    """La reversibilidad tiene que ser real: bajar y volver a subir el MISMO schema.
+
+    test_downgrade_removes_everything solo va en una direccion, y cada test recibe
+    un schema desechable que se destruye con CASCADE, asi que ninguno de los dos
+    nota si el downgrade se deja algo que no sea una tabla.  El caso concreto es el
+    enum nativo earning_mode_enum: op.create_table emite su CREATE TYPE, pero
+    op.drop_table no emite el DROP TYPE.  Sin el drop explicito del downgrade, este
+    segundo upgrade revienta con 'type "earning_mode_enum" already exists'.
+    """
+    schema = alembic_config.attributes["target_schema"]
+
+    command.upgrade(alembic_config, "head")
+    command.downgrade(alembic_config, "base")
+
+    with test_engine.connect() as conn:
+        leftover_types = conn.execute(
+            text(
+                "SELECT t.typname FROM pg_type t "
+                "JOIN pg_namespace n ON n.oid = t.typnamespace "
+                "WHERE n.nspname = :s AND t.typtype = 'e'"
+            ),
+            {"s": schema},
+        ).fetchall()
+    assert leftover_types == [], (
+        f"El downgrade dejo tipos sin borrar en {schema}: {leftover_types}. "
+        "El siguiente upgrade fallaria."
+    )
+
+    command.upgrade(alembic_config, "head")
+
+    with test_engine.connect() as conn:
+        tables = _tables_in(conn, schema)
+    assert EXPECTED_TABLES <= tables
+
+
 def test_migration_emits_no_hardcoded_schema():
     """Una revision con schema='db_dev' incrustado no sirve para db_v2."""
     from pathlib import Path

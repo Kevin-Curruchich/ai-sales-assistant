@@ -71,10 +71,27 @@ def run_migrations_online() -> None:
             )
             connection.commit()
             try:
+                # version_table_schema=None es DELIBERADO, no un olvido.  El
+                # SET search_path de arriba ya apunta a `schema`, asi que
+                # alembic_version se crea dentro del schema destino igual que
+                # cualquier otra tabla (lo garantiza
+                # test_version_table_lives_inside_the_target_schema): la misma
+                # filosofia que el resto del plan, el schema se resuelve por
+                # search_path y nunca se cualifica explicitamente.
+                #
+                # Poner aqui el nombre real ROMPE el autogenerate.  Alembic
+                # excluye su propia tabla de version comparando (schema, nombre)
+                # de forma literal (autogenerate/compare.py, _autogen_for_tables),
+                # y con include_schemas=False refleja el schema por defecto de la
+                # conexion, que identifica como None.  "db_v2" != None, asi que
+                # no reconoce alembic_version y cada `alembic revision
+                # --autogenerate` emite un op.drop_table('alembic_version') que,
+                # de colarse en una revision, borraria el stamp de versiones al
+                # migrar.
                 context.configure(
                     connection=connection,
                     target_metadata=target_metadata,
-                    version_table_schema=schema,
+                    version_table_schema=None,
                     include_schemas=False,
                     compare_type=True,
                 )

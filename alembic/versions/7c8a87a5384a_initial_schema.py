@@ -11,14 +11,19 @@ Numeric(10, 4) de las cantidades).
 
 Correcciones manuales sobre el autogenerate (ver task-4-report.md):
   * Se borro el `op.drop_table('alembic_version')` del upgrade y el
-    `op.create_table('alembic_version', ...)` del downgrade.  Son un artefacto
-    de env.py: configura version_table_schema=<schema destino> mientras refleja
-    con include_schemas=False (schema None), asi que el autogenerate no reconoce
-    su propia tabla de version y propone borrarla.
+    `op.create_table('alembic_version', ...)` del downgrade.  Eran un artefacto
+    de env.py, que configuraba version_table_schema=<schema destino> mientras
+    reflejaba con include_schemas=False (schema None), de modo que el
+    autogenerate no reconocia su propia tabla de version y proponia borrarla.
+    La causa raiz ya esta arreglada en env.py (version_table_schema=None).
   * Se anadio el DROP TYPE de earning_mode_enum al downgrade: op.create_table
     emite el CREATE TYPE (before_create con checkfirst=False) pero op.drop_table
     no emite el DROP, y sin el un downgrade + upgrade fallaria con
     "type earning_mode_enum already exists".
+  * Se anadio server_default=sa.text('0') a purchase_items.remaining_quantity
+    para reproducir el DEFAULT 0 que ensure_schema_compatibility() dejo en
+    produccion.  La columna es NOT NULL: sin ese default, un INSERT que la
+    omita funciona en db_dev y fallaria aqui.
 
 Ninguna operacion lleva `schema=`: el schema destino se resuelve por search_path
 en env.py, de modo que esta misma revision sirve para db_dev, db_v2 o un schema
@@ -132,7 +137,7 @@ def upgrade() -> None:
     sa.Column('purchase_id', sa.Uuid(), nullable=False),
     sa.Column('product_id', sa.Uuid(), nullable=False),
     sa.Column('quantity', sa.Integer(), nullable=False),
-    sa.Column('remaining_quantity', sa.Numeric(precision=10, scale=4), nullable=False),
+    sa.Column('remaining_quantity', sa.Numeric(precision=10, scale=4), server_default=sa.text('0'), nullable=False),
     sa.Column('unit_cost', sa.Numeric(precision=14, scale=2), nullable=False),
     sa.Column('subtotal', sa.Numeric(precision=14, scale=2), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
