@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, Numeric, String, Text, Uuid, func
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -22,6 +22,7 @@ class Purchase(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
     total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # "draft" | "confirmed" | "cancelled"
+    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -52,8 +53,14 @@ class PurchaseItem(Base):
     product_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False)
-    remaining_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False, default=0)
+    quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
+    # server_default ademas del default de Python: la columna es NOT NULL y en
+    # produccion ensure_schema_compatibility() la creo con DEFAULT 0, asi que un
+    # INSERT que la omita funciona alli.  Sin el server_default, ese mismo INSERT
+    # fallaria contra un schema creado por la migracion 001.
+    remaining_quantity: Mapped[Decimal] = mapped_column(
+        Numeric(10, 4), nullable=False, default=0, server_default=text("0")
+    )
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
 

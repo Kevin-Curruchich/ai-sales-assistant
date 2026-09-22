@@ -4,10 +4,14 @@ from contextlib import asynccontextmanager
 import logging
 from app.core.config import settings
 from app.core.security import initialize_firebase
-from app.core.database import engine, Base, prepare_schema_bootstrap, ensure_schema_compatibility
+from app.core.database import engine
 from app.api.v1.router import api_router
 
-# Import all models so Base.metadata knows about them
+# This import is redundant but harmless: app.api.v1.router (above) transitively
+# imports every endpoint/service/repository, each of which imports these model
+# classes directly, so all mapped classes are already registered by that line.
+# Alembic doesn't depend on this import either -- alembic/env.py does its own
+# `import app.models`.
 from app.models import User, Customer, Product, Sale, SaleItem, SaleItemLotAllocation, CustomerProductCycle  # noqa: F401
 
 logger = logging.getLogger("app.startup")
@@ -17,16 +21,8 @@ startup_issues: list[str] = []
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
-    # Startup: create tables and initialize Firebase
+    # El esquema lo gestiona Alembic desde entrypoint.sh, no el arranque.
     startup_issues.clear()
-
-    try:
-        prepare_schema_bootstrap()
-        Base.metadata.create_all(bind=engine)
-        ensure_schema_compatibility()
-    except Exception:
-        logger.exception("Database initialization failed during startup")
-        startup_issues.append("database_init_failed")
 
     try:
         initialize_firebase()
@@ -35,7 +31,6 @@ async def lifespan(app: FastAPI):
         startup_issues.append("firebase_init_failed")
 
     yield
-    # Shutdown: dispose engine
     engine.dispose()
 
 

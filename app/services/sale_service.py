@@ -856,7 +856,7 @@ class SaleService:
                     rows[key] = ProfitReportRow(
                         key=key,
                         label=label,
-                        quantity=0,
+                        quantity=Decimal("0"),
                         revenue=Decimal("0.00"),
                         gross_profit=Decimal("0.00"),
                     )

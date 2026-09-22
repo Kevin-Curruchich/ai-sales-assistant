@@ -25,6 +25,13 @@ class SaleItem(Base):
     cost_basis_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     gross_profit_unit: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     gross_profit_total: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
+    # El margen estandar esperado POR UNIDAD, congelado al momento de la venta
+    # igual que cost_basis_unit.  Sin el, cambiar el earning_percent de un producto
+    # impide recalcular margen_extra = gross_profit_unit - expected_unit_margin
+    # para ventas historicas.
+    expected_unit_margin: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(14, 2), nullable=True
+    )
     discount_percent: Mapped[Optional[float]] = mapped_column(Numeric(5, 2), nullable=True)
     discount_amount: Mapped[Optional[float]] = mapped_column(Numeric(14, 2), nullable=True)
     is_price_overridden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

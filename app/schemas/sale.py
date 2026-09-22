@@ -179,7 +179,7 @@ class FollowUpItemResponse(BaseModel):
     estimated_next_purchase: Optional[date] = None
     days_until: Optional[int] = None
     current_stock: Decimal = Decimal("0")
-    min_stock: int = 0
+    min_stock: Decimal = Decimal("0")
     stock_alert: bool = False  # True when current_stock <= min_stock
 
 
@@ -239,7 +239,7 @@ class CalendarResponse(BaseModel):
 class ProfitReportRow(BaseModel):
     key: str
     label: str
-    quantity: int
+    quantity: Decimal
     revenue: Decimal
     gross_profit: Decimal
 

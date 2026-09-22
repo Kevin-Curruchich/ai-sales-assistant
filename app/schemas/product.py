@@ -21,7 +21,7 @@ class ProductCreate(BaseModel):
     earningPercent: Optional[Decimal] = None
     earningFeeAmount: Optional[Decimal] = None
     stock: Decimal = Decimal("0")
-    min_stock: int = 0  # Reorder point threshold
+    min_stock: Decimal = Decimal("0")  # Reorder point threshold
     status: str = "active"  # "active" | "inactive"
 
     @model_validator(mode="after")
@@ -47,7 +47,7 @@ class ProductUpdate(BaseModel):
     earningPercent: Optional[Decimal] = None
     earningFeeAmount: Optional[Decimal] = None
     stock: Optional[Decimal] = None
-    min_stock: Optional[int] = None
+    min_stock: Optional[Decimal] = None
     status: Optional[str] = None
 
     @model_validator(mode="after")
@@ -114,7 +114,7 @@ class ProductResponse(BaseModel):
     earning_percent: Optional[Decimal] = None
     earning_fee_amount: Optional[Decimal] = None
     stock: Decimal
-    min_stock: int
+    min_stock: Decimal
     status: str
     created_at: str
     updated_at: str
