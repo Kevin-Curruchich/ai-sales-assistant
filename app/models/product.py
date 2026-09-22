@@ -5,7 +5,7 @@ from enum import Enum as PyEnum
 from typing import Optional
 from sqlalchemy import Enum as SQLEnum, String, DateTime, Integer, Numeric, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from app.core.database import Base, SCHEMA
+from app.core.database import Base
 
 
 class EarningMode(str, PyEnum):
@@ -26,7 +26,6 @@ class Product(Base):
         SQLEnum(
             EarningMode,
             name="earning_mode_enum",
-            schema=SCHEMA,
             native_enum=True,
             validate_strings=True,
             values_callable=lambda x: [e.value for e in x],

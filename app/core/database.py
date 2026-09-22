@@ -22,9 +22,24 @@ def set_search_path(dbapi_connection, connection_record):
 # Create a configured "Session" class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Base class for declarative models — all tables live in the configured schema
+# Convencion de nombres para constraints e indices.  Sin ella, Postgres asigna
+# nombres por defecto que el autogenerate de Alembic no puede alterar ni borrar
+# de forma fiable mas adelante.
+NAMING_CONVENTION = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+
+
+# Base declarativa.  El metadata NO lleva schema: las tablas se resuelven por el
+# search_path que fija set_search_path() en cada conexion, de modo que el mismo
+# modelo y las mismas migraciones sirven para db_dev, db_v2, public o un schema
+# de test.
 class Base(DeclarativeBase):
-    metadata = MetaData(schema=SCHEMA)
+    metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
 def prepare_schema_bootstrap() -> None:
