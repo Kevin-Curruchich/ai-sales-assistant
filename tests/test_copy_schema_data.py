@@ -118,3 +118,122 @@ def test_dry_run_copies_nothing(test_engine, alembic_config, second_migrated_sch
     with test_engine.connect() as conn:
         conn.execute(text(f'SET search_path TO "{target}"'))
         assert conn.execute(text("SELECT count(*) FROM sales")).scalar() == 0
+
+
+def test_copy_aborts_when_target_narrows_a_numeric_scale(
+    test_engine, alembic_config, second_migrated_schema
+):
+    """Un destino con menos escala redondea plata en silencio si no se detecta.
+
+    sale_items.quantity es numeric(10,4) en el origen. Si el destino lo
+    tuviera como numeric(10,2), un INSERT ... SELECT sin control de tipos
+    no falla: Postgres redondea 0.5000 a 0.50 en el momento de la escritura,
+    sin excepcion y sin warning. copy_schema_data debe detectar esta
+    diferencia comparando tipos (no solo nombres de columna) y abortar antes
+    de escribir nada.
+    """
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    source = alembic_config.attributes["target_schema"]
+    target = second_migrated_schema
+    _seed(source)
+
+    with test_engine.begin() as conn:
+        conn.execute(
+            text(
+                f'ALTER TABLE "{target}".sale_items '
+                "ALTER COLUMN quantity TYPE numeric(10,2)"
+            )
+        )
+
+    with pytest.raises(SchemaMismatch, match="quantity"):
+        copy_schema_data(test_engine, source, target)
+
+    with test_engine.connect() as conn:
+        conn.execute(text(f'SET search_path TO "{target}"'))
+        assert conn.execute(text("SELECT count(*) FROM sales")).scalar() == 0
+        assert conn.execute(text("SELECT count(*) FROM sale_items")).scalar() == 0
+
+
+def test_copy_aborts_when_source_has_a_table_outside_table_order(
+    test_engine, alembic_config, second_migrated_schema
+):
+    """Una tabla del origen que TABLE_ORDER no conoce no debe copiarse en silencio."""
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    source = alembic_config.attributes["target_schema"]
+    target = second_migrated_schema
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f'CREATE TABLE "{source}".mystery (id serial primary key)'))
+
+    with pytest.raises(SchemaMismatch, match="mystery"):
+        copy_schema_data(test_engine, source, target)
+
+
+def test_copy_rolls_back_completely_when_a_late_table_mismatches(
+    test_engine, alembic_config, second_migrated_schema
+):
+    """La propiedad central: todo o nada, incluso si el fallo ocurre tarde.
+
+    sale_items es la septima tabla de nueve en TABLE_ORDER: para cuando el
+    mismatch se detecta ahi, users/customers/products/purchases/
+    purchase_items/sales ya se habrian insertado en el destino de no haber
+    control transaccional explicito. Si alguien reemplazara el
+    engine.connect() + conn.begin() de copy_schema_data por, por ejemplo,
+    ejecutar cada INSERT en su propia transaccion implicita, este test lo
+    detectaria: las tablas tempranas quedarian con filas aunque la copia
+    completa haya fallado.
+    """
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    source = alembic_config.attributes["target_schema"]
+    target = second_migrated_schema
+    _seed(source)
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f'ALTER TABLE "{source}".sale_items ADD COLUMN extra_col TEXT'))
+
+    with pytest.raises(SchemaMismatch):
+        copy_schema_data(test_engine, source, target)
+
+    with test_engine.connect() as conn:
+        conn.execute(text(f'SET search_path TO "{target}"'))
+        for table in ("users", "customers", "products", "sales"):
+            count = conn.execute(text(f'SELECT count(*) FROM "{table}"')).scalar()
+            assert count == 0, f"{table} deberia seguir vacia tras el rollback, tiene {count}"
+
+
+def test_copy_refuses_db_dev_as_target_without_explicit_opt_in(
+    test_engine, alembic_config, monkeypatch
+):
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    source = alembic_config.attributes["target_schema"]
+
+    monkeypatch.delenv("REVENEW_ALLOW_DB_DEV", raising=False)
+
+    with pytest.raises(RuntimeError, match="db_dev"):
+        copy_schema_data(test_engine, source, "db_dev")
+
+
+def test_copy_allows_db_dev_target_with_explicit_opt_in(
+    test_engine, alembic_config, monkeypatch
+):
+    """El opt-in debe saltear el guard, no desactivar el resto de las validaciones."""
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    source = alembic_config.attributes["target_schema"]
+
+    monkeypatch.setenv("REVENEW_ALLOW_DB_DEV", "1")
+
+    # No existe un schema "db_dev" en la base de test: si el guard se salteo
+    # de verdad, la falla siguiente es la validacion normal de "no existe",
+    # no el RuntimeError del guard.
+    with pytest.raises(SchemaMismatch, match="no existe"):
+        copy_schema_data(test_engine, source, "db_dev")

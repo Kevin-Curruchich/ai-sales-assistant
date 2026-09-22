@@ -11,6 +11,7 @@ El schema origen nunca se modifica.
 from __future__ import annotations
 
 import argparse
+import os
 
 from sqlalchemy import Engine, create_engine, text
 
@@ -27,41 +28,106 @@ TABLE_ORDER = [
     "customer_product_cycles",
 ]
 
+# db_dev es el schema que .env apunta por defecto y contiene los datos reales
+# de produccion (156 ventas al momento de escribir esto). Igual que el guard
+# de alembic/env.py para las migraciones, este script no debe poder
+# sobreescribirlo silenciosamente: --source y --target son faciles de
+# invertir al escribirlos a mano, y lo mas facil de tipear no puede ser lo
+# prohibido.
+PROTECTED_SCHEMA = "db_dev"
+ALLOW_PROTECTED_SCHEMA_ENV_VAR = "REVENEW_ALLOW_DB_DEV"
+
+# Claves de information_schema.columns que definen si dos columnas del mismo
+# nombre son realmente compatibles para una copia sin perdida. Comparar solo
+# el nombre no alcanza: un destino con numeric(10,2) donde el origen tiene
+# numeric(10,4) acepta el INSERT sin error y redondea la plata en silencio
+# (0.5000 -> 0.50). udt_schema queda deliberadamente afuera de esta lista:
+# source y target viven en schemas distintos por definicion, asi que su
+# udt_schema difiere aun cuando el tipo es identico.
+_TYPE_COMPARISON_KEYS = (
+    "data_type",
+    "udt_name",
+    "numeric_precision",
+    "numeric_scale",
+    "character_maximum_length",
+)
+
 
 class SchemaMismatch(Exception):
-    """El origen tiene columnas que el destino no puede recibir."""
+    """El origen y el destino no son lo bastante iguales como para copiar entre ambos."""
 
 
-def _columns(conn, schema: str, table: str) -> list[str]:
+def _guard_against_protected_target(target: str) -> None:
+    if target == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+        raise RuntimeError(
+            f"El destino pedido es {target!r}. Ese schema tiene los datos reales "
+            "de produccion y este script no debe escribirle silenciosamente.\n"
+            f"Si de verdad queres escribir sobre {target!r}, seteá "
+            f"{ALLOW_PROTECTED_SCHEMA_ENV_VAR}=1 en el entorno y corré de nuevo."
+        )
+
+
+def _column_info(conn, schema: str, table: str) -> dict[str, dict]:
+    """Columna -> info de tipo, en orden ordinal.
+
+    Se trae udt_schema ademas de udt_name porque los tipos ENUM nativos de
+    Postgres son propiedad de un schema: aunque source y target tengan una
+    columna "earning_mode" del mismo nombre de tipo (earning_mode_enum), son
+    dos tipos distintos a nivel de motor. udt_schema le dice a _select_expr
+    donde vive de verdad el tipo destino en vez de asumir que coincide con
+    el nombre del schema target.
+    """
     rows = conn.execute(
         text(
-            "SELECT column_name FROM information_schema.columns "
+            "SELECT column_name, data_type, udt_name, udt_schema, "
+            "numeric_precision, numeric_scale, character_maximum_length "
+            "FROM information_schema.columns "
             "WHERE table_schema = :s AND table_name = :t "
             "ORDER BY ordinal_position"
         ),
         {"s": schema, "t": table},
     )
-    return [r[0] for r in rows]
+    return {
+        r[0]: {
+            "data_type": r[1],
+            "udt_name": r[2],
+            "udt_schema": r[3],
+            "numeric_precision": r[4],
+            "numeric_scale": r[5],
+            "character_maximum_length": r[6],
+        }
+        for r in rows
+    }
 
 
-def _column_types(conn, schema: str, table: str) -> dict[str, tuple[str, str]]:
-    """Mapea columna -> (data_type, udt_name).
+def _describe_type(info: dict) -> str:
+    if info["data_type"] == "numeric" and info["numeric_precision"] is not None:
+        return f"numeric({info['numeric_precision']},{info['numeric_scale']})"
+    if info["character_maximum_length"] is not None:
+        return f"{info['data_type']}({info['character_maximum_length']})"
+    if info["data_type"] == "USER-DEFINED":
+        return info["udt_name"]
+    return info["data_type"]
 
-    Postgres crea los tipos ENUM nativos por schema: aunque source y target
-    tengan una columna "earning_mode" con el mismo nombre de tipo
-    (earning_mode_enum), son dos tipos distintos a nivel de motor y un
-    INSERT ... SELECT directo falla con DatatypeMismatch. Por eso este script
-    necesita saber, columna por columna, si es un tipo definido por el
-    usuario (data_type = 'USER-DEFINED') para poder castearla explicitamente.
+
+def _unknown_source_tables(conn, source: str) -> list[str]:
+    """Tablas que existen en source pero de las que TABLE_ORDER no sabe nada.
+
+    TABLE_ORDER es una lista fija a mano. Si el schema origen tiene una
+    tabla que no esta ahi, el loop de _copy_all simplemente nunca la toca:
+    no hay excepcion, el TOTAL impreso al final parece completo, y el
+    operador no tiene ninguna senal de que algo quedo afuera.
     """
     rows = conn.execute(
         text(
-            "SELECT column_name, data_type, udt_name FROM information_schema.columns "
-            "WHERE table_schema = :s AND table_name = :t"
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = :s AND table_type = 'BASE TABLE'"
         ),
-        {"s": schema, "t": table},
+        {"s": source},
     )
-    return {r[0]: (r[1], r[2]) for r in rows}
+    names = {r[0] for r in rows}
+    names.discard("alembic_version")
+    return sorted(names - set(TABLE_ORDER))
 
 
 def copy_schema_data(
@@ -70,6 +136,7 @@ def copy_schema_data(
     """Copia TABLE_ORDER de source a target.  Devuelve {tabla: filas copiadas}."""
     if source == target:
         raise ValueError("El origen y el destino no pueden ser el mismo schema")
+    _guard_against_protected_target(target)
 
     copied: dict[str, int] = {}
     with engine.connect() as conn:
@@ -86,42 +153,64 @@ def copy_schema_data(
     return copied
 
 
-def _select_expr(column: str, dst_types: dict[str, tuple[str, str]], target: str) -> str:
+def _select_expr(column: str, dst_info: dict[str, dict]) -> str:
     """Expresion a usar en el SELECT para `column`.
 
     Las columnas normales se seleccionan tal cual. Las columnas cuyo tipo de
     destino es un ENUM nativo (USER-DEFINED) se castean explicitamente
-    text -> "{target}"."{udt_name}" porque el enum del schema origen y el
-    del destino son tipos distintos aunque compartan nombre.
+    text -> "{udt_schema}"."{udt_name}" del lado del destino, porque el enum
+    del schema origen y el del destino son tipos distintos aunque compartan
+    nombre.
     """
-    data_type, udt_name = dst_types.get(column, (None, None))
-    if data_type == "USER-DEFINED":
-        return f'"{column}"::text::"{target}"."{udt_name}"'
+    info = dst_info.get(column, {})
+    if info.get("data_type") == "USER-DEFINED":
+        return f'"{column}"::text::"{info["udt_schema"]}"."{info["udt_name"]}"'
     return f'"{column}"'
 
 
 def _copy_all(conn, source: str, target: str) -> dict[str, int]:
+    unknown = _unknown_source_tables(conn, source)
+    if unknown:
+        raise SchemaMismatch(
+            f"{source} tiene tablas que TABLE_ORDER no conoce: {unknown}.  "
+            "Actualiza TABLE_ORDER (o confirma que nacen vacias, como "
+            "cash_movements) antes de copiar: si no, se copia de menos y sin avisar."
+        )
+
     copied: dict[str, int] = {}
     for table in TABLE_ORDER:
-        src_cols = _columns(conn, source, table)
-        dst_cols = _columns(conn, target, table)
-        if not src_cols:
+        src_info = _column_info(conn, source, table)
+        dst_info = _column_info(conn, target, table)
+        if not src_info:
             raise SchemaMismatch(f"{source}.{table} no existe")
-        if not dst_cols:
+        if not dst_info:
             raise SchemaMismatch(f"{target}.{table} no existe")
 
-        missing = [c for c in src_cols if c not in dst_cols]
+        src_cols = list(src_info.keys())
+        missing = [c for c in src_cols if c not in dst_info]
         if missing:
             raise SchemaMismatch(
                 f"{target}.{table} no tiene las columnas {missing} que si tiene "
                 f"{source}.{table}.  Revisa el drift antes de copiar."
             )
 
-        dst_types = _column_types(conn, target, table)
+        mismatched = [
+            f'"{col}": {source} tiene {_describe_type(src_info[col])}, '
+            f"{target} tiene {_describe_type(dst_info[col])}"
+            for col in src_cols
+            if any(
+                src_info[col][k] != dst_info[col][k] for k in _TYPE_COMPARISON_KEYS
+            )
+        ]
+        if mismatched:
+            raise SchemaMismatch(
+                f"{table} tiene columnas con tipos distintos entre {source} y "
+                f"{target} (riesgo de truncar o redondear datos en silencio): "
+                + "; ".join(mismatched)
+            )
+
         insert_list = ", ".join(f'"{c}"' for c in src_cols)
-        select_list = ", ".join(
-            _select_expr(c, dst_types, target) for c in src_cols
-        )
+        select_list = ", ".join(_select_expr(c, dst_info) for c in src_cols)
         result = conn.execute(
             text(
                 f'INSERT INTO "{target}"."{table}" ({insert_list}) '
