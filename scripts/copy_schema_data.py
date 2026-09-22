@@ -28,6 +28,23 @@ TABLE_ORDER = [
     "customer_product_cycles",
 ]
 
+# Tablas que existen en el schema migrado pero que esta copia deliberadamente
+# NO mueve porque nacen vacias.  cash_movements (revision 8df5b1f79497) es el
+# libro de caja: la migracion la crea vacia y la importacion de la pestania del
+# Sheet esta fuera del alcance, asi que en db_dev no hay nada que copiar.  Sin
+# esta exencion, _unknown_source_tables la reportaria como tabla desconocida y
+# cualquier copia abortaria, que es justo lo que el mensaje de error de ese
+# guard anticipaba al decir "o confirma que nacen vacias, como cash_movements":
+# esto es esa confirmacion, escrita como codigo en vez de como costumbre oral.
+#
+# La exencion NO es incondicional.  _unknown_source_tables solo la aplica
+# mientras la tabla siga VACIA en el origen; en cuanto tenga una fila vuelve a
+# reportarse como desconocida y la copia aborta.  Una exencion incondicional
+# convertiria el guard en su propio agujero: el dia que alguien empiece a
+# registrar movimientos de caja, la copia los dejaria atras en silencio y el
+# TOTAL impreso al final seguiria pareciendo completo.
+BORN_EMPTY_TABLES = frozenset({"cash_movements"})
+
 # db_dev es el schema que .env apunta por defecto y contiene los datos reales
 # de produccion (156 ventas al momento de escribir esto). Igual que el guard
 # de alembic/env.py para las migraciones, este script no debe poder
@@ -117,6 +134,11 @@ def _unknown_source_tables(conn, source: str) -> list[str]:
     tabla que no esta ahi, el loop de _copy_all simplemente nunca la toca:
     no hay excepcion, el TOTAL impreso al final parece completo, y el
     operador no tiene ninguna senal de que algo quedo afuera.
+
+    Las tablas de BORN_EMPTY_TABLES se exceptuan, pero solo mientras sigan
+    vacias en el origen: una que ya tenga filas se reporta como desconocida
+    igual que cualquier otra, porque saltarsela seria exactamente la copia
+    incompleta y silenciosa que este guard existe para impedir.
     """
     rows = conn.execute(
         text(
@@ -127,7 +149,16 @@ def _unknown_source_tables(conn, source: str) -> list[str]:
     )
     names = {r[0] for r in rows}
     names.discard("alembic_version")
-    return sorted(names - set(TABLE_ORDER))
+    unknown = names - set(TABLE_ORDER)
+
+    for table in sorted(unknown & BORN_EMPTY_TABLES):
+        count = conn.execute(
+            text(f'SELECT count(*) FROM "{source}"."{table}"')
+        ).scalar()
+        if count == 0:
+            unknown.discard(table)
+
+    return sorted(unknown)
 
 
 def copy_schema_data(

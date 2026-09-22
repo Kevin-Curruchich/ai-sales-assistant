@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 from decimal import Decimal
-from sqlalchemy import Date, DateTime, Float, Integer, Numeric, ForeignKey, UniqueConstraint, Uuid, func
+from sqlalchemy import Date, DateTime, Float, Integer, Numeric, ForeignKey, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -30,6 +30,9 @@ class CustomerProductCycle(Base):
     last_purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
     last_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     total_purchases: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    projection_method: Mapped[Optional[str]] = mapped_column(String(20))  # "ewma" | "croston"
+    projection_confidence: Mapped[Optional[str]] = mapped_column(String(20))
+    calendar_event_id: Mapped[Optional[str]] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

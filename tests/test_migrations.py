@@ -11,6 +11,7 @@ import app.models  # noqa: F401
 EXPECTED_TABLES = {
     "users", "customers", "products", "purchases", "purchase_items",
     "sales", "sale_items", "sale_item_lot_allocations", "customer_product_cycles",
+    "cash_movements",
 }
 
 

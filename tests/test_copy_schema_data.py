@@ -7,7 +7,12 @@ from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Customer, Product, Sale, SaleItem, User
-from scripts.copy_schema_data import SchemaMismatch, TABLE_ORDER, copy_schema_data
+from scripts.copy_schema_data import (
+    BORN_EMPTY_TABLES,
+    SchemaMismatch,
+    TABLE_ORDER,
+    copy_schema_data,
+)
 from tests.conftest import TEST_DATABASE_URL
 
 
@@ -154,6 +159,44 @@ def test_copy_aborts_when_target_narrows_a_numeric_scale(
         conn.execute(text(f'SET search_path TO "{target}"'))
         assert conn.execute(text("SELECT count(*) FROM sales")).scalar() == 0
         assert conn.execute(text("SELECT count(*) FROM sale_items")).scalar() == 0
+
+
+def test_cash_movements_is_exempt_only_while_it_is_empty(
+    test_engine, alembic_config, second_migrated_schema
+):
+    """La exencion de BORN_EMPTY_TABLES no puede ser un cheque en blanco.
+
+    cash_movements no esta en TABLE_ORDER: nace vacia y la Task 7 no importa la
+    pestania del Sheet, asi que una copia normal debe funcionar pese a que la
+    tabla exista en ambos schemas.  Pero en cuanto el origen tenga movimientos
+    reales, saltarsela seria una copia incompleta y silenciosa, y el guard tiene
+    que volver a morder.
+    """
+    from alembic import command
+
+    command.upgrade(alembic_config, "head")
+    source = alembic_config.attributes["target_schema"]
+    target = second_migrated_schema
+
+    assert "cash_movements" in BORN_EMPTY_TABLES
+    assert "cash_movements" not in TABLE_ORDER
+
+    # Vacia: la copia procede sin quejarse.
+    copy_schema_data(test_engine, source, target)
+
+    # Con una fila: la copia aborta nombrando la tabla.
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{source}"'))
+        conn.execute(
+            text(
+                "INSERT INTO cash_movements (movement_date, type, amount) "
+                "VALUES (:d, CAST(:t AS cash_movement_type_enum), :a)"
+            ),
+            {"d": date(2026, 9, 3), "t": "entrada", "a": Decimal("115.00")},
+        )
+
+    with pytest.raises(SchemaMismatch, match="cash_movements"):
+        copy_schema_data(test_engine, source, target)
 
 
 def test_copy_aborts_when_source_has_a_table_outside_table_order(
