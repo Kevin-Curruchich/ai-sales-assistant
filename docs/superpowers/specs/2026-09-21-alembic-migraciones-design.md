@@ -223,6 +223,15 @@ el comportamiento correcto. `alembic` se suma a `requirements.txt`.
 `POSTGRES_SCHEMA=db_dev`. El schema viejo queda intacto como respaldo vivo, con sus
 156 ventas. No se borra nada en ningún paso de este plan.
 
+**Superado por `docs/runbooks/2026-09-21-cutover-db-v2.md`.** Esta línea
+asume que solo hay que cambiar la variable, pero una vez que `entrypoint.sh`
+corre `alembic upgrade head` al arrancar (ver más arriba), redesplegar la
+imagen de este plan con `POSTGRES_SCHEMA=db_dev` dispara el guard de
+`db_dev` en `alembic/env.py` y el contenedor no levanta — el rollback real
+también necesita volver a la imagen anterior a ese cambio. El runbook tiene
+el procedimiento completo y las condiciones bajo las que deja de ser
+gratis; seguí ese documento, no esta línea, al ejecutar un rollback.
+
 ## Riesgos
 
 | Riesgo | Mitigación |

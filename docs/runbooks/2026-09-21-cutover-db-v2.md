@@ -4,9 +4,13 @@ Runbook manual. Cada paso dice qué correr, qué significa que salió bien, y qu
 hacer si no. Ejecutalo en orden, uno por uno, verificando entre cada paso
 antes de seguir al siguiente. No lo automatices.
 
-**Precondición: nadie usando la app mientras corre la copia (pasos 3-6).**
-Una venta que entra a `db_dev` mientras estás copiando queda fuera de
-`db_v2` sin ningún aviso.
+**Precondición: nadie usando la app mientras corren los pasos 3 a 8.** No
+solo mientras corre la copia (pasos 3-6): la app en producción sigue
+sirviendo desde `db_dev` hasta que el paso 8 corta el tráfico a `db_v2`, y
+el paso 7 es de duración abierta. Una venta que entra a `db_dev` en
+cualquier momento entre el paso 3 y el corte del paso 8 queda fuera de
+`db_v2` sin ningún aviso — nada en este runbook detecta esa pérdida por sí
+solo, por eso el paso 8 empieza con un re-censo obligatorio.
 
 **Evidencia previa.** El 2026-09-21 se corrió una auditoría de solo lectura
 contra `db_dev`: 85 columnas comparadas contra los modelos, cero columnas
@@ -16,14 +20,15 @@ sorpresas en el paso 2. Aun así, el paso 2 se repite igual: la base pudo
 cambiar entre esa auditoría y este cutover, y este runbook no confía en una
 foto vieja.
 
-**Sobre el guard de `db_dev`.** Tanto `alembic/env.py` como
-`scripts/copy_schema_data.py` se niegan a tocar el schema `db_dev` a menos
-que la variable de entorno `REVENEW_ALLOW_DB_DEV=1` esté seteada. Ese guard
-existe justamente para este runbook: nada de lo que sigue setea esa
-variable, y si algún paso falla citándola, **no la setees**. Es la señal de
-que algo (típicamente `POSTGRES_SCHEMA`, o un `--source`/`--target`
-invertido) apunta a `db_dev` cuando debería apuntar a `db_v2`. Revisá eso
-primero.
+**Sobre el guard de `db_dev`.** `alembic/env.py` se niega a migrar el
+schema `db_dev` a menos que la variable de entorno `REVENEW_ALLOW_DB_DEV=1`
+esté seteada. `scripts/copy_schema_data.py` tiene el mismo guard, pero solo
+sobre su **destino** (`--target`): pasarle `db_dev` como `--source` — que
+es justo lo que hacen los pasos 3 y 4 — no lo activa, y no debería
+activarlo. Nada de lo que sigue en este runbook setea esa variable. Si
+algún paso falla citándola, **no la setees**: es la señal de que algo
+(típicamente `POSTGRES_SCHEMA`, o un `--target` mal escrito) apunta a
+`db_dev` cuando debería apuntar a `db_v2`. Revisá eso primero.
 
 ## 0. Censo previo (antes de tocar nada)
 
@@ -49,6 +54,12 @@ customer_product_cycles 26`, `SUM(sales.total) = 9954.49`.
 esperado solo si podés explicar la diferencia (por ejemplo, ventas nuevas
 legítimas), y si no podés, andá a buscar a quién antes de tocar nada más.
 
+**Si el script no corre** (error de conexión, credenciales, import — no un
+número raro sino una excepción antes de imprimir nada): es un problema de
+entorno, no de datos. Revisá `.env` y la conectividad a la base antes de
+asumir nada sobre `db_dev`. No sigas hasta que el censo corra limpio de
+punta a punta.
+
 Resultado real obtenido: ____________________________________________
 
 ## 1. Crear db_v2 y migrarlo a la revisión inicial
@@ -69,16 +80,23 @@ from sqlalchemy import create_engine, text
 from app.core.config import settings
 e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
 with e.connect() as c:
-    rows = c.execute(text(
+    tables = [r[0] for r in c.execute(text(
         "SELECT table_name FROM information_schema.tables "
         "WHERE table_schema='db_v2' ORDER BY table_name"
-    )).fetchall()
-    print([r[0] for r in rows])
+    ))]
+    print(tables)
+    for t in tables:
+        if t == "alembic_version":
+            continue
+        n = c.execute(text(f'SELECT count(*) FROM db_v2."{t}"')).scalar()
+        print(f"  {t:<32}{n:>6}")
 PY
 ```
 
-Deben aparecer las nueve tablas de negocio más `alembic_version`, todas
-vacías.
+Deben aparecer las nueve tablas de negocio más `alembic_version`, y cada
+tabla de negocio en `0` filas. El nombre de la tabla solo en la lista no
+alcanza como prueba de "vacía" — por eso el conteo va abajo, no solo el
+listado.
 
 **Si falla citando `db_dev` y el guard `REVENEW_ALLOW_DB_DEV`:** no setees
 esa variable. Revisá `POSTGRES_SCHEMA` en el entorno desde el que corriste
@@ -88,6 +106,8 @@ el comando — probablemente no se exportó y Alembic cayó al default
 **Si falla por cualquier otro motivo:** no sigas. `db_v2` puede haber
 quedado a medio crear; investigá el error antes de reintentar.
 
+Resultado real obtenido: ____________________________________________
+
 ## 2. Diff de esquemas antes de copiar
 
 ```bash
@@ -96,12 +116,13 @@ from sqlalchemy import create_engine, text
 from app.core.config import settings
 from scripts.copy_schema_data import TABLE_ORDER
 e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
-q = ("SELECT column_name, data_type FROM information_schema.columns "
+q = ("SELECT column_name, data_type, numeric_precision, numeric_scale, "
+     "character_maximum_length FROM information_schema.columns "
      "WHERE table_schema=:s AND table_name=:t ORDER BY column_name")
 with e.connect() as c:
     for t in TABLE_ORDER:
-        a = {r[0]: r[1] for r in c.execute(text(q), {"s":"db_dev","t":t})}
-        b = {r[0]: r[1] for r in c.execute(text(q), {"s":"db_v2","t":t})}
+        a = {r[0]: r[1:] for r in c.execute(text(q), {"s":"db_dev","t":t})}
+        b = {r[0]: r[1:] for r in c.execute(text(q), {"s":"db_v2","t":t})}
         if a != b:
             print(f"--- {t}")
             for k in sorted(set(a) | set(b)):
@@ -110,14 +131,23 @@ with e.connect() as c:
 PY
 ```
 
+Nota: esta consulta trae `numeric_precision`, `numeric_scale` y
+`character_maximum_length` además de `data_type`, porque `numeric(10,2)` y
+`numeric(10,4)` imprimen igual (`numeric`) si solo mirás el tipo — y esa es
+justo la clase de diferencia que puede redondear plata en silencio. Sin
+esas tres columnas, este diff podía dar "sin salida" y aun así dejar pasar
+un desajuste de precisión.
+
 **Éxito:** sin salida. Eso confirma, contra el estado real de hoy, lo mismo
 que ya mostró la auditoría del 2026-09-21.
 
 **Si hay salida:** no sigas al paso 3. Cada línea impresa es una columna
-que difiere entre `db_dev` y `db_v2` (falta de un lado, o mismo nombre con
-tipo distinto). Resolvé el drift — típicamente ajustando la revisión inicial
-o investigando qué cambió en `db_dev` desde el 2026-09-21 — antes de copiar
-nada.
+que difiere entre `db_dev` y `db_v2` (falta de un lado, tipo distinto, o
+precisión/escala distinta). Resolvé el drift — típicamente ajustando la
+revisión inicial o investigando qué cambió en `db_dev` desde el 2026-09-21
+— antes de copiar nada.
+
+Resultado real obtenido: ____________________________________________
 
 ## 3. Copia en seco
 
@@ -148,13 +178,16 @@ vacía antes de reintentar.
 
 **Si aborta con `SchemaMismatch` sobre columnas con "tipos distintos":** el
 script está comparando tipo, precisión y escala entre `db_dev` y `db_v2`
-para esa columna, no solo el nombre. Es la misma clase de drift que el paso
-2 debería haber cazado — si llegaste hasta acá es que algo cambió entre el
-paso 2 y este, o que el paso 2 no cubría esa tabla. No copies con ese
-mensaje en pantalla: los datos podrían truncarse o redondearse en silencio.
+para esa columna, no solo el nombre — el paso 2 (ya con precisión y escala
+incluidas) debería haber mostrado esto mismo. Si llegaste hasta acá de
+todos modos, es que algo cambió en `db_dev` entre el paso 2 y este, o que
+saltaste el paso 2. No copies con ese mensaje en pantalla: los datos
+podrían truncarse o redondearse en silencio.
 
-**Si aborta citando `db_dev` y `REVENEW_ALLOW_DB_DEV`:** revisá que no
-invertiste `--source` y `--target`. No setees la variable.
+**Si aborta citando `db_dev` y `REVENEW_ALLOW_DB_DEV`:** eso solo puede
+pasar si `--target` terminó apuntando a `db_dev` — revisá que no invertiste
+`--source` y `--target` al escribirlos. `--source db_dev` en sí es
+esperado y no dispara este guard. No setees la variable.
 
 ## 4. Copia real
 
@@ -166,26 +199,101 @@ venv/bin/python -m scripts.copy_schema_data --source db_dev --target db_v2
 paso 3 salió limpio, este paso no debería sorprender — corre exactamente la
 misma lógica, ahora con commit real.
 
-**Si falla:** el script corre todo en una sola transacción (o se copia
-entero, o no se copia nada), así que una falla acá no deja `db_v2` a medias.
-`db_dev` tampoco se toca en ningún caso: el script nunca escribe en el
-origen. Resolvé la causa del error (mismos motivos que en el paso 3) y
+Confirmá además, ahora mismo, que el origen no se tocó — repetí el censo
+del paso 0 contra `db_dev` (no `db_v2`):
+
+```bash
+venv/bin/python - <<'PY'
+from sqlalchemy import create_engine, text
+from app.core.config import settings
+e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+with e.connect() as c:
+    for t in ["users","customers","products","purchases","purchase_items",
+              "sales","sale_items","sale_item_lot_allocations","customer_product_cycles"]:
+        print(f"{t:<32}{c.execute(text(f'SELECT count(*) FROM db_dev.{t}')).scalar():>6}")
+    print("SUM(sales.total) =", c.execute(text("SELECT sum(total) FROM db_dev.sales")).scalar())
+PY
+```
+
+Tiene que dar exactamente lo mismo que el paso 0. El script nunca escribe
+en el origen, pero esto lo prueba en vez de asumirlo.
+
+**Si falla la copia:** el script corre todo en una sola transacción (o se
+copia entero, o no se copia nada), así que una falla acá no deja `db_v2` a
+medias. `db_dev` tampoco se toca en ningún caso: el script nunca escribe en
+el origen. Resolvé la causa del error (mismos motivos que en el paso 3) y
 repetí desde el paso 3 en seco antes de reintentar la copia real.
 
-## 5. Verificar conteos y checksums
+**Si el re-censo de `db_dev` no coincide con el paso 0:** parate y
+avisá — algo escribió en el origen mientras corría esto, lo cual no
+debería ser posible dado que la copia solo lee de `db_dev`. No confíes en
+el resto del runbook hasta entender qué pasó.
 
-Repetí el censo del paso 0, apuntando a `db_v2` en vez de `db_dev` (cambiá
-`db_dev.{t}` por `db_v2.{t}` en la query, o pasale `db_v2` como schema).
+Resultado real obtenido (db_dev, re-censo): ________________________________
+Resultado real obtenido (copia): ___________________________________________
 
-**Éxito:** los mismos números del paso 0, exactos, incluido
-`SUM(sales.total) = 9954.49`. Además, `SELECT count(*) FROM
-db_v2.cash_movements` debe dar `0` — eso es correcto, no una falla:
-`cash_movements` nace vacía y esta copia no la toca a propósito.
+## 5. Verificar conteos en db_v2
 
-**Si algún conteo no coincide:** no sigas al paso 6. La copia quedó
-incompleta o duplicada. No reintentes la copia sobre `db_v2` tal cual está
-— truncá las tablas de `db_v2` que ya tengan filas y repetí desde el paso 3,
-o investigá antes de tocar nada más.
+```bash
+venv/bin/python - <<'PY'
+from sqlalchemy import create_engine, text
+from app.core.config import settings
+
+TABLES = ["users", "customers", "products", "purchases", "purchase_items",
+          "sales", "sale_items", "sale_item_lot_allocations",
+          "customer_product_cycles"]
+
+e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+with e.connect() as c:
+    for schema in ("db_dev", "db_v2"):
+        print(f"--- {schema} ---")
+        for t in TABLES:
+            n = c.execute(text(f'SELECT count(*) FROM "{schema}".{t}')).scalar()
+            print(f"{t:<32}{n:>6}")
+        total = c.execute(text(f'SELECT sum(total) FROM "{schema}".sales')).scalar()
+        print("SUM(sales.total) =", total)
+PY
+```
+
+(`cash_movements` no se verifica acá: en `db_v2` esa tabla todavía no
+existe a esta altura — la crea la migración `8df5b1f79497`, que recién se
+aplica en el paso 6. Verificarla ahora daría `UndefinedTable`, siempre, sin
+que eso signifique nada sobre la copia. Se verifica en el paso 6.)
+
+**Éxito:** el bloque `db_dev` da exactamente los mismos números que el
+paso 0 (prueba, de nuevo, que el origen sigue intacto). El bloque `db_v2`
+da esos mismos números — incluido `SUM(sales.total) = 9954.49` — ahí
+también.
+
+**Si `db_dev` no coincide con el paso 0:** parate. No sigas al paso 6 sin
+entender qué escribió en el origen.
+
+**Si `db_v2` no coincide:** no sigas al paso 6. La copia quedó incompleta o
+duplicada. No la reintentes sobre `db_v2` tal cual está — un `TRUNCATE`
+simple de `sales`, `purchases` o `products` va a fallar por las foreign
+keys que le apuntan desde otras tablas. La forma limpia de reintentar es
+borrar el schema entero y repetir desde el paso 1:
+
+```bash
+venv/bin/python - <<'PY'
+from sqlalchemy import create_engine, text
+from app.core.config import settings
+e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+with e.connect() as c:
+    c.execute(text('DROP SCHEMA "db_v2" CASCADE'))
+    c.commit()
+PY
+```
+
+(Si preferís no borrar el schema, la alternativa es un único `TRUNCATE`
+con las nueve tablas y `CASCADE`:
+`TRUNCATE "db_v2".customer_product_cycles, "db_v2".sale_item_lot_allocations,
+"db_v2".sale_items, "db_v2".sales, "db_v2".purchase_items, "db_v2".purchases,
+"db_v2".products, "db_v2".customers, "db_v2".users CASCADE;` — pero borrar
+el schema y repetir desde el paso 1 es más simple y menos propenso a que se
+te escape una tabla.)
+
+Resultado real obtenido: ____________________________________________
 
 ## 6. Aplicar el resto de las migraciones
 
@@ -199,23 +307,91 @@ acabás de copiar.
 
 **Éxito:** el comando termina sin error. Repetí el censo del paso 0 contra
 `db_v2` una vez más — los conteos y el `SUM(sales.total)` no deben haber
-cambiado respecto del paso 5.
+cambiado respecto del paso 5. Además, ahora sí, verificá `cash_movements`:
 
-**Si algún conteo cambió:** para. Ninguna de estas dos migraciones debería
-tocar filas existentes; si lo hizo, no sigas al paso 7 sin entender por qué.
+```bash
+venv/bin/python - <<'PY'
+from sqlalchemy import create_engine, text
+from app.core.config import settings
+e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+with e.connect() as c:
+    print(c.execute(text('SELECT count(*) FROM db_v2.cash_movements')).scalar())
+PY
+```
+
+Tiene que dar `0`. Eso es correcto, no una falla: `cash_movements` nace
+vacía con esta migración y la copia del paso 4 no la toca a propósito (no
+está en `TABLE_ORDER`; ver la nota del paso 3).
+
+**Si algún conteo de las nueve tablas de negocio cambió:** para. Ninguna de
+estas dos migraciones debería tocar filas existentes; si lo hizo, no sigas
+al paso 7 sin entender por qué.
+
+**Si `cash_movements` no da `0`:** eso sí sería una sorpresa real — pasaría
+a significar que algo escribió ahí entre que la migración la creó y que la
+consultaste. Investigá antes de seguir.
+
+**Si `alembic upgrade head` falla a mitad de camino** (por ejemplo, aplica
+`8df5b1f79497` pero `2208c8e60855` tira error): `db_v2` puede haber quedado
+estampada en una revisión intermedia con los datos ya copiados encima. No
+reintentes `upgrade head` a ciegas. Primero mirá en qué quedó:
+
+```bash
+venv/bin/python - <<'PY'
+from sqlalchemy import create_engine, text
+from app.core.config import settings
+e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+with e.connect() as c:
+    print(c.execute(text('SELECT version_num FROM db_v2.alembic_version')).scalar())
+PY
+```
+
+Corregí la causa del fallo (probablemente algo en el entorno, no en los
+datos — las migraciones ya se probaron contra este mismo esquema en otras
+tasks) y recién entonces repetí `alembic upgrade head`: Alembic solo aplica
+lo que falta desde la revisión en la que quedó, no repite lo ya aplicado.
 
 **Si falla citando `db_dev` y el guard:** mismo diagnóstico que en el paso
 1 — revisá `POSTGRES_SCHEMA`, no setees `REVENEW_ALLOW_DB_DEV`.
 
+Resultado real obtenido: ____________________________________________
+
 ## 7. Probar la app contra db_v2
 
+`uvicorn` queda corriendo en primer plano, así que el `curl` no puede ir
+en la misma terminal después de ese comando — no va a llegar a ejecutarse
+mientras el server siga arriba. Usá dos terminales:
+
 ```bash
+# Terminal A — queda corriendo:
 POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002
+```
+
+```bash
+# Terminal B:
 curl -s http://127.0.0.1:8002/health
 ```
 
-Y pegale a los endpoints reales con un token válido: `/api/v1/sales`,
-`/api/v1/products`, `/api/v1/dashboard/summary`.
+Si solo tenés una terminal disponible, corré `uvicorn` en segundo plano:
+
+```bash
+POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002 &
+curl -s http://127.0.0.1:8002/health
+# cuando termines de probar:
+kill %1
+```
+
+Para pegarle a los endpoints reales con un token válido
+(`/api/v1/sales`, `/api/v1/products`, `/api/v1/dashboard/summary`):
+el token es un **Firebase ID token**, no algo que emita este backend.
+Conseguilo iniciando sesión normalmente (el frontend, o la REST API de
+Identity Toolkit de Firebase con el email/contraseña de un usuario real) y
+copiándolo del inspector de red o del almacenamiento local del navegador.
+Se manda como `Authorization: Bearer <token>`:
+
+```bash
+curl -s -H "Authorization: Bearer <token>" http://127.0.0.1:8002/api/v1/sales
+```
 
 **Éxito:** `/health` responde OK y los tres endpoints devuelven datos
 consistentes con los números verificados en el paso 6 (por ejemplo,
@@ -225,49 +401,122 @@ consistentes con los números verificados en el paso 6 (por ejemplo,
 **Si algún endpoint falla o devuelve datos inconsistentes:** no avances al
 paso 8. `db_dev` sigue intacto y la app en producción sigue sirviendo desde
 ahí — no hay apuro. Investigá acá, contra `db_v2` en local, con el tiempo
-que haga falta.
+que haga falta. Cuando termines, matá el `uvicorn` de prueba (`kill %1`, o
+Ctrl-C en la Terminal A).
 
-## 8. Cambiar el entorno y desplegar — un solo movimiento
+Resultado real obtenido: ____________________________________________
 
-`entrypoint.sh` corre `alembic upgrade head` antes de levantar el servidor.
-Si el código nuevo llega a producción mientras `POSTGRES_SCHEMA` todavía
-dice `db_dev`, el guard de `alembic/env.py` va a rechazar la migración, el
-`set -e` del entrypoint va a abortar, y el contenedor **no va a arrancar**.
-Eso es lo esperado y es protector, no un bug — pero significa que estos dos
-cambios no son dos pasos, son uno solo:
+## 8. Cambiar el entorno y desplegar
 
-1. En Railway, setear `POSTGRES_SCHEMA=db_v2`.
-2. Redeploy del mismo servicio, en la misma operación.
+**Antes que nada, re-censo de `db_dev`.** Repetí exactamente la consulta
+del paso 0. Tiene que seguir dando `156` ventas y
+`SUM(sales.total) = 9954.49` — los mismos números del paso 0 y del re-censo
+del paso 4. Si cambiaron, alguien escribió en `db_dev` durante la ventana
+que debía estar congelada (pasos 3-8): **parate**. Esas ventas nuevas no
+están en `db_v2`. Copialas a mano, o repetí la copia entera (pasos 3-6),
+antes de cortar el tráfico hacia `db_v2`.
 
-No los hagas por separado (por ejemplo, redeployar primero "para probar" y
-cambiar la variable después, o viceversa): cualquier orden intermedio deja
-una ventana donde el contenedor no levanta.
+Con eso confirmado, dos operaciones **en este orden exacto**:
 
-**Éxito:** el deploy completa, el healthcheck de Railway pasa, y `/health`
-responde desde producción.
+1. **Primero, la variable.** En Railway, `POSTGRES_SCHEMA=db_v2`. Guardarla
+   dispara un redeploy automático de la imagen que está corriendo ahora
+   mismo — la que todavía **no** corre `alembic upgrade head` al
+   arrancar. Ese redeploy es seguro: no migra nada al bootear, simplemente
+   empieza a leer y escribir `db_v2` en vez de `db_dev` con el código
+   actual.
 
-**Si el contenedor no arranca y el log muestra el guard de `db_dev`:**
-`POSTGRES_SCHEMA` no llegó a aplicarse antes del redeploy (variable mal
-guardada, deploy disparado antes de que se guardara, etc.). Corregí la
-variable en Railway y volvé a desplegar. No hay necesidad de tocar
-`REVENEW_ALLOW_DB_DEV`.
+   **Este es el momento en que el tráfico real pasa a `db_v2`** — no el
+   deploy del paso 3 de abajo. A partir de acá, cualquier venta que entra
+   por la app queda solo en `db_v2`. Ver Rollback: de acá en adelante ya
+   no es gratis.
 
-**Si el contenedor arranca pero la app se comporta mal:** andá al Rollback,
-abajo. No hay que diagnosticar en caliente contra producción con el negocio
-parado.
+2. **Confirmá que sirve desde `db_v2`** antes de seguir: `/health`, y un
+   par de pedidos reales a los endpoints del paso 7, deben responder con
+   los números verificados en el paso 6 (o mayores, si ya entró tráfico
+   nuevo legítimo después del corte).
+
+3. **Recién ahora, deployá la imagen de esta branch** (la que agrega
+   `alembic upgrade head` a `entrypoint.sh`, commit `7306fb8` en adelante).
+   Como `POSTGRES_SCHEMA` ya es `db_v2` y `db_v2` ya está en `head`, ese
+   `alembic upgrade head` no tiene nada que hacer — corre y sale sin
+   cambiar nada. El guard de `db_dev` no se activa porque el schema
+   resuelto no es `db_dev`.
+
+**No invertís el orden.** Si el paso 3 (la imagen nueva) llega a producción
+mientras `POSTGRES_SCHEMA` todavía dice `db_dev`, el guard de
+`alembic/env.py` la rechaza, `set -e` aborta el arranque, y el contenedor
+no levanta — por eso la variable va primero, con la imagen vieja, que ni
+siquiera pasa por ese código.
+
+**Éxito:** el deploy del paso 3 completa, el healthcheck de Railway pasa, y
+`/health` responde desde producción con la imagen nueva.
+
+**Si el contenedor de la imagen nueva no arranca y el log muestra el guard
+de `db_dev`:** `POSTGRES_SCHEMA` no llegó a aplicarse antes de este
+deploy. Confirmá la variable en Railway (paso 1 de arriba) antes de
+reintentar el deploy. No hay necesidad de tocar `REVENEW_ALLOW_DB_DEV`.
+
+**Si el paso 2 no confirma bien** (el healthcheck falla, o los endpoints no
+devuelven los números esperados) con la imagen vieja ya sirviendo desde
+`db_v2`: no sigas al paso 3. Andá a Rollback — el redeploy automático del
+paso 1 ya movió tráfico real a `db_v2`, así que un rollback desde acá ya no
+es gratis (ver más abajo), pero desplegar la imagen nueva sobre datos que
+no verificaste es peor.
+
+Resultado real obtenido: ____________________________________________
 
 ## Rollback
 
-```
-POSTGRES_SCHEMA=db_dev
-```
+**Es gratis solo hasta el momento en que, en el paso 8, seteás
+`POSTGRES_SCHEMA=db_v2` en Railway.** El redeploy automático que dispara
+ese cambio de variable empieza a servir tráfico real desde `db_v2` de
+inmediato — incluso antes de desplegar la imagen nueva del paso 3. Cualquier
+venta que entre desde ese momento en adelante existe solo en `db_v2`; un
+rollback después de eso la descarta en silencio, sin ningún error que lo
+avise en ningún lado.
 
-y redeploy. `db_dev` queda intacto con sus 156 ventas — ningún paso de este
-runbook lo modifica, así que sigue siendo un respaldo en vivo válido en
-cualquier momento hasta acá.
+**Si todavía no seteaste esa variable:** no hay nada que rollbackear —
+simplemente no avances al paso 8. `db_dev` sigue siendo el único lugar
+donde vive el tráfico.
+
+**Si ya seteaste la variable, con o sin haber desplegado la imagen nueva:**
+
+1. Redesplegá en Railway la imagen **anterior a este cutover** — la que
+   **no** tiene `alembic upgrade head` en `entrypoint.sh` (anterior al
+   commit `7306fb8`), usando el historial de deployments de Railway. No
+   alcanza con redesplegar la imagen actual: esa imagen corre
+   `alembic upgrade head` al arrancar, y con `POSTGRES_SCHEMA=db_dev` eso
+   dispara el guard de `alembic/env.py`, `set -e` aborta, y el contenedor
+   no arranca — exactamente lo que el paso 8 advierte más arriba.
+2. Seteá `POSTGRES_SCHEMA=db_dev`.
+
+Hacé estos dos pasos como una sola operación — cualquier estado
+intermedio deja el servicio mal: la imagen vieja con `POSTGRES_SCHEMA=db_v2`
+le serviría a los clientes el schema equivocado, y la imagen nueva con
+`POSTGRES_SCHEMA=db_dev` directamente no arranca.
+
+Incluso con la imagen vieja corriendo de nuevo, hay una segunda falla
+independiente si la imagen que quedó desplegada es la **nueva**: sus
+modelos seleccionan columnas que `db_dev` no tiene — `payment_date`,
+`payment_method`, `expected_unit_margin`, y toda la tabla `cash_movements`.
+Por eso el rollback tiene que volver también a la imagen vieja, no solo al
+schema viejo: la imagen nueva contra `db_dev` fallaría igual aunque el
+guard no existiera.
+
+**Ninguna venta que haya entrado a `db_v2` después del corte del paso 8
+vuelve a aparecer al hacer este rollback.** Quedó en `db_v2`, no en
+`db_dev`, y este procedimiento no las mueve. Si ya hubo tráfico de
+producción real contra `db_v2` antes de decidir el rollback, hay que
+migrarlo a mano de vuelta a `db_dev` antes de considerar el rollback
+"completo" — de lo contrario esas ventas simplemente no existen para nadie.
+
+`db_dev` en sí sigue intacto durante todo este runbook — ningún paso
+escribe en él — así que como respaldo de los datos que tenía **antes** del
+cutover, sigue siendo válido en cualquier momento, incluido después de un
+rollback.
 
 ## Limpieza (semanas después, no ahora)
 
-Cuando `db_v2` lleve tiempo estable: borrar las tablas vacías que hayan
-quedado huérfanas en `public` y, solo entonces, considerar qué hacer con
-`db_dev`.
+Cuando `db_v2` lleve tiempo estable: borrar las 4 tablas vacías de `public`
+(restos de antes de que existiera `POSTGRES_SCHEMA`) y, solo entonces,
+considerar qué hacer con `db_dev`.
