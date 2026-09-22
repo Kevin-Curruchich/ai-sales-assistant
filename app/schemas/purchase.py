@@ -9,12 +9,12 @@ from pydantic import BaseModel, field_validator
 
 class PurchaseItemCreate(BaseModel):
     productId: uuid.UUID
-    quantity: int
+    quantity: Decimal
     unitCost: Decimal
 
     @field_validator("quantity")
     @classmethod
-    def quantity_must_be_positive(cls, v: int) -> int:
+    def quantity_must_be_positive(cls, v: Decimal) -> Decimal:
         if v <= 0:
             raise ValueError("quantity must be greater than 0")
         return v
@@ -48,7 +48,7 @@ class PurchaseUpdate(BaseModel):
 class PurchaseItemResponse(BaseModel):
     id: uuid.UUID
     product_id: uuid.UUID
-    quantity: int
+    quantity: Decimal
     unit_cost: Decimal
     subtotal: Decimal
     # Enriched product info
