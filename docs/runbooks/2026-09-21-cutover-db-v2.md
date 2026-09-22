@@ -116,8 +116,8 @@ from sqlalchemy import create_engine, text
 from app.core.config import settings
 from scripts.copy_schema_data import TABLE_ORDER
 e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
-q = ("SELECT column_name, data_type, numeric_precision, numeric_scale, "
-     "character_maximum_length FROM information_schema.columns "
+q = ("SELECT column_name, data_type, udt_name, numeric_precision, "
+     "numeric_scale, character_maximum_length FROM information_schema.columns "
      "WHERE table_schema=:s AND table_name=:t ORDER BY column_name")
 with e.connect() as c:
     for t in TABLE_ORDER:
@@ -131,12 +131,17 @@ with e.connect() as c:
 PY
 ```
 
-Nota: esta consulta trae `numeric_precision`, `numeric_scale` y
-`character_maximum_length` además de `data_type`, porque `numeric(10,2)` y
-`numeric(10,4)` imprimen igual (`numeric`) si solo mirás el tipo — y esa es
-justo la clase de diferencia que puede redondear plata en silencio. Sin
-esas tres columnas, este diff podía dar "sin salida" y aun así dejar pasar
-un desajuste de precisión.
+Nota: esta consulta trae `udt_name`, `numeric_precision`, `numeric_scale` y
+`character_maximum_length` además de `data_type`. Las tres últimas están
+porque `numeric(10,2)` y `numeric(10,4)` imprimen igual (`numeric`) si solo
+mirás el tipo — justo la clase de diferencia que puede redondear plata en
+silencio. `udt_name` está porque este proyecto tiene un enum nativo
+(`earning_mode_enum`): dos enums nativos distintos reportan
+`data_type='USER-DEFINED'` con `numeric_precision`, `numeric_scale` y
+`character_maximum_length` en `NULL` los dos, así que sin `udt_name` esta
+consulta podía dar "sin salida" y aun así dejar pasar un tipo de enum
+distinto entre `db_dev` y `db_v2` — que el script de copia sí detecta y
+aborta.
 
 **Éxito:** sin salida. Eso confirma, contra el estado real de hoy, lo mismo
 que ya mostró la auditoría del 2026-09-21.
@@ -177,17 +182,20 @@ actualizá `TABLE_ORDER` o confirmá explícitamente que la tabla nueva nace
 vacía antes de reintentar.
 
 **Si aborta con `SchemaMismatch` sobre columnas con "tipos distintos":** el
-script está comparando tipo, precisión y escala entre `db_dev` y `db_v2`
-para esa columna, no solo el nombre — el paso 2 (ya con precisión y escala
-incluidas) debería haber mostrado esto mismo. Si llegaste hasta acá de
-todos modos, es que algo cambió en `db_dev` entre el paso 2 y este, o que
-saltaste el paso 2. No copies con ese mensaje en pantalla: los datos
-podrían truncarse o redondearse en silencio.
+script está comparando tipo, `udt_name`, precisión y escala entre `db_dev`
+y `db_v2` para esa columna, no solo el nombre — el paso 2 (ya con
+`udt_name`, precisión y escala incluidos) debería haber mostrado esto
+mismo. Si llegaste hasta acá de todos modos, es que algo cambió en
+`db_dev` entre el paso 2 y este, o que saltaste el paso 2. No copies con
+ese mensaje en pantalla: los datos podrían truncarse o redondearse en
+silencio.
 
 **Si aborta citando `db_dev` y `REVENEW_ALLOW_DB_DEV`:** eso solo puede
 pasar si `--target` terminó apuntando a `db_dev` — revisá que no invertiste
 `--source` y `--target` al escribirlos. `--source db_dev` en sí es
 esperado y no dispara este guard. No setees la variable.
+
+Resultado real obtenido: ____________________________________________
 
 ## 4. Copia real
 
@@ -305,9 +313,11 @@ Esto aplica `8df5b1f79497` (campos de pago + `cash_movements`) y
 `2208c8e60855` (consistencia numérica de cantidades) sobre los datos que
 acabás de copiar.
 
-**Éxito:** el comando termina sin error. Repetí el censo del paso 0 contra
-`db_v2` una vez más — los conteos y el `SUM(sales.total)` no deben haber
-cambiado respecto del paso 5. Además, ahora sí, verificá `cash_movements`:
+**Éxito:** el comando termina sin error. Repetí el bloque del paso 5 (el que
+consulta `db_dev` y `db_v2` en la misma pasada — el censo del paso 0 solo
+sabe leer `db_dev`, así que no sirve acá sin editarlo a mano) — los
+conteos y el `SUM(sales.total)` no deben haber cambiado respecto del
+paso 5. Además, ahora sí, verificá `cash_movements`:
 
 ```bash
 venv/bin/python - <<'PY'
@@ -372,11 +382,15 @@ POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002
 curl -s http://127.0.0.1:8002/health
 ```
 
-Si solo tenés una terminal disponible, corré `uvicorn` en segundo plano:
+Si solo tenés una terminal disponible, corré `uvicorn` en segundo plano.
+El servidor tarda un instante en levantar, así que el primer intento de
+`curl` inmediatamente después puede fallar con "connection refused" sin
+que eso signifique nada malo — por eso `--retry-connrefused` en vez de
+disparar el `curl` una sola vez:
 
 ```bash
 POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002 &
-curl -s http://127.0.0.1:8002/health
+curl -s --retry 5 --retry-delay 1 --retry-connrefused http://127.0.0.1:8002/health
 # cuando termines de probar:
 kill %1
 ```
@@ -420,10 +434,21 @@ Con eso confirmado, dos operaciones **en este orden exacto**:
 
 1. **Primero, la variable.** En Railway, `POSTGRES_SCHEMA=db_v2`. Guardarla
    dispara un redeploy automático de la imagen que está corriendo ahora
-   mismo — la que todavía **no** corre `alembic upgrade head` al
-   arrancar. Ese redeploy es seguro: no migra nada al bootear, simplemente
-   empieza a leer y escribir `db_v2` en vez de `db_dev` con el código
-   actual.
+   mismo — la que todavía **no** tiene `alembic upgrade head` en el
+   entrypoint. Esa imagen no es inofensiva porque "no toque la base": su
+   `lifespan` corre `prepare_schema_bootstrap()`,
+   `Base.metadata.create_all()` y `ensure_schema_compatibility()` — DDL de
+   verdad, heredada de antes de este plan, contra lo que sea que
+   `POSTGRES_SCHEMA` nombre en ese momento. El redeploy es seguro porque,
+   contra `db_v2` ya en `head`, esa DDL no tiene nada para hacer: el
+   `DROP TYPE` del enum está condicionado a labels fuera de
+   `percent`/`fee` (no hay ninguno), cada `ADD COLUMN` es `IF NOT EXISTS`
+   (las columnas ya las puso Alembic), y las promociones a `NUMERIC` solo
+   actúan sobre columnas que todavía sean `integer` (ya son numéricas).
+   Y para las ventas nuevas que esta imagen vieja escriba contra `db_v2`
+   sin conocer `payment_date` ni `payment_method`: tampoco hay problema —
+   la migración `8df5b1f79497` agregó esas columnas como `nullable=True`,
+   así que un `INSERT` que las omita funciona igual.
 
    **Este es el momento en que el tráfico real pasa a `db_v2`** — no el
    deploy del paso 3 de abajo. A partir de acá, cualquier venta que entra
@@ -481,27 +506,68 @@ donde vive el tráfico.
 
 **Si ya seteaste la variable, con o sin haber desplegado la imagen nueva:**
 
-1. Redesplegá en Railway la imagen **anterior a este cutover** — la que
-   **no** tiene `alembic upgrade head` en `entrypoint.sh` (anterior al
-   commit `7306fb8`), usando el historial de deployments de Railway. No
-   alcanza con redesplegar la imagen actual: esa imagen corre
-   `alembic upgrade head` al arrancar, y con `POSTGRES_SCHEMA=db_dev` eso
-   dispara el guard de `alembic/env.py`, `set -e` aborta, y el contenedor
-   no arranca — exactamente lo que el paso 8 advierte más arriba.
-2. Seteá `POSTGRES_SCHEMA=db_dev`.
+Dos operaciones, **en este orden** — al revés del orden del paso 8, por un
+motivo distinto (ver más abajo):
 
-Hacé estos dos pasos como una sola operación — cualquier estado
-intermedio deja el servicio mal: la imagen vieja con `POSTGRES_SCHEMA=db_v2`
-le serviría a los clientes el schema equivocado, y la imagen nueva con
-`POSTGRES_SCHEMA=db_dev` directamente no arranca.
+1. **Primero, la imagen.** Redesplegá en Railway **el deployment que
+   estaba en producción antes de que este plan de migración empezara** —
+   no cualquier imagen sin `alembic upgrade head`, sino específicamente
+   una que además tenga los modelos viejos. Son dos condiciones y las dos
+   importan:
+   - Sin `alembic upgrade head` en el arranque, para no pisar el guard de
+     `db_dev` (ver paso 8).
+   - Con modelos que coinciden columna por columna con lo que `db_dev`
+     realmente tiene, para no devolver 500 en cada consulta que toque
+     `payment_date`, `payment_method`, `expected_unit_margin` o
+     `cash_movements` — columnas que esas tablas no tienen en `db_dev`.
 
-Incluso con la imagen vieja corriendo de nuevo, hay una segunda falla
-independiente si la imagen que quedó desplegada es la **nueva**: sus
-modelos seleccionan columnas que `db_dev` no tiene — `payment_date`,
-`payment_method`, `expected_unit_margin`, y toda la tabla `cash_movements`.
-Por eso el rollback tiene que volver también a la imagen vieja, no solo al
-schema viejo: la imagen nueva contra `db_dev` fallaría igual aunque el
-guard no existiera.
+     Una imagen construida entre el commit `51cfa6a` (que agregó esos
+     campos a los modelos) y el commit `7306fb8` (que agregó
+     `alembic upgrade head` al entrypoint) cumple la primera condición y
+     falla la segunda: arranca limpio y después rompe en cada venta. Si
+     vas a identificar el deployment por commit en vez de por el
+     historial de Railway, el límite es **anterior a `51cfa6a`**, no
+     anterior a `7306fb8`. En la práctica es más simple y más seguro
+     elegirlo directamente del historial de deployments de Railway: "el
+     que estaba corriendo en producción antes de que este cutover
+     empezara" ya cumple las dos condiciones sin que tengas que mapear
+     commits bajo presión.
+
+   Hacelo con `POSTGRES_SCHEMA` todavía en lo que sea que esté seteada en
+   ese momento (probablemente `db_v2`) — esta imagen no tiene
+   `alembic upgrade head` en el arranque (como mucho, la misma DDL
+   heredada del paso 8, inofensiva contra un schema ya en `head` por las
+   mismas razones explicadas ahí), así que no importa contra qué schema
+   apunte en este paso intermedio.
+
+2. **Confirmá que arrancó bien** antes de seguir: `/health` responde, y el
+   log de arranque no menciona el guard de `db_dev` ni ningún error de
+   `alembic`.
+
+3. **Recién ahora, la variable:** `POSTGRES_SCHEMA=db_dev`.
+
+**Por qué este orden y no el del paso 8:** ahí la variable iba primero
+porque la imagen vieja es segura contra cualquier schema. Acá es al
+revés: guardar la variable dispara un redeploy en Railway, y si ese
+redeploy reconstruye desde el HEAD de la branch en vez de reusar la
+imagen que acabás de fijar en el paso 1, lo que sale a producción es de
+nuevo la imagen que sí corre `alembic upgrade head` — ahora apuntando a
+`db_dev`. Es el mismo loop guard-abort que este rollback existe para
+evitar. Fijando primero la imagen vieja confirmada, el peor caso de un
+redeploy disparado por la variable es que vuelva a traer esa misma
+imagen vieja, no la nueva.
+
+**Éxito:** después del paso 3, `/health` responde desde producción y el
+log de arranque no menciona el guard de `db_dev`.
+
+**Si el log del paso 3 menciona el guard de `db_dev`:** Railway
+reconstruyó desde el HEAD de la branch en vez de mantener la imagen que
+fijaste en el paso 1 — la imagen nueva volvió a llegar, ahora con
+`POSTGRES_SCHEMA=db_dev`, y el guard la rechazó. Volvé a fijar/redesplegar
+explícitamente la imagen del paso 1 (si Railway te deja pinear ese
+deployment, hacelo, para que un futuro cambio de variable no lo vuelva a
+reemplazar). **Bajo ninguna circunstancia** setees
+`REVENEW_ALLOW_DB_DEV` para sortear esto.
 
 **Ninguna venta que haya entrado a `db_v2` después del corte del paso 8
 vuelve a aparecer al hacer este rollback.** Quedó en `db_v2`, no en
