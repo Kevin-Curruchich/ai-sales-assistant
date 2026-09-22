@@ -70,3 +70,21 @@ def migrated_schema(alembic_config):
     """Schema desechable ya migrado a head."""
     command.upgrade(alembic_config, "head")
     return alembic_config.attributes["target_schema"]
+
+
+@pytest.fixture
+def second_migrated_schema(test_engine):
+    """Un segundo schema desechable, ya migrado, para probar copias."""
+    from alembic.config import Config as _Config
+
+    name = f"test_{uuid.uuid4().hex[:12]}"
+    cfg = _Config("alembic.ini")
+    cfg.set_main_option("script_location", "alembic")
+    cfg.attributes["sqlalchemy_url"] = TEST_DATABASE_URL
+    cfg.attributes["target_schema"] = name
+    command.upgrade(cfg, "head")
+    try:
+        yield name
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{name}" CASCADE'))
