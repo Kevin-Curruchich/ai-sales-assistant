@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, event, MetaData, text
+from sqlalchemy import create_engine, event, MetaData
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from app.core.config import settings
 
@@ -40,89 +40,5 @@ NAMING_CONVENTION = {
 # de test.
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
-
-
-def prepare_schema_bootstrap() -> None:
-    """Drop stale enum types before create_all so it can recreate them cleanly."""
-    with engine.begin() as conn:
-        # If the enum exists with wrong-case labels (e.g. PERCENT/FEE from old runs),
-        # drop it so create_all can recreate it with correct lowercase values.
-        conn.execute(
-            text(
-                "DO $$ BEGIN "
-                f"IF EXISTS ("
-                f"SELECT 1 FROM pg_enum e "
-                f"JOIN pg_type t ON t.oid = e.enumtypid "
-                f"JOIN pg_namespace n ON n.oid = t.typnamespace "
-                f"WHERE t.typname = 'earning_mode_enum' "
-                f"AND n.nspname = '{SCHEMA}' "
-                f"AND e.enumlabel NOT IN ('percent', 'fee')"
-                f") THEN "
-                f"DROP TYPE {SCHEMA}.earning_mode_enum CASCADE; "
-                "END IF; END $$;"
-            )
-        )
-        # Also drop from public if it was accidentally created there.
-        conn.execute(text("DROP TYPE IF EXISTS public.earning_mode_enum CASCADE"))
-
-
-def ensure_schema_compatibility() -> None:
-    """Apply additive schema updates for running environments without Alembic."""
-    with engine.begin() as conn:
-        conn.execute(
-            text(
-                "DO $$ BEGIN "
-                "IF NOT EXISTS ("
-                "SELECT 1 FROM information_schema.columns "
-                f"WHERE table_schema = '{SCHEMA}' AND table_name = 'purchase_items' AND column_name = 'remaining_quantity'"
-                ") THEN "
-                f"ALTER TABLE {SCHEMA}.purchase_items ADD COLUMN remaining_quantity INTEGER NOT NULL DEFAULT 0; "
-                f"UPDATE {SCHEMA}.purchase_items pi "
-                f"SET remaining_quantity = pi.quantity "
-                f"FROM {SCHEMA}.purchases p "
-                "WHERE p.id = pi.purchase_id AND p.status = 'confirmed'; "
-                "END IF; "
-                "END $$;"
-            )
-        )
-
-        conn.execute(
-            text(
-                f"ALTER TABLE {SCHEMA}.sale_items "
-                "ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5, 2), "
-                "ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(14, 2);"
-            )
-        )
-
-        conn.execute(
-            text(
-                f"ALTER TABLE {SCHEMA}.sales "
-                "ADD COLUMN IF NOT EXISTS is_payment_pending BOOLEAN NOT NULL DEFAULT FALSE;"
-            )
-        )
-
-        # Decimal quantity support: promote integer quantity columns to NUMERIC(10,4)
-        for table, column in [
-            ("sale_items", "quantity"),
-            ("sale_item_lot_allocations", "quantity_allocated"),
-            ("purchase_items", "remaining_quantity"),
-            ("products", "stock"),
-            ("customer_product_cycles", "last_quantity"),
-        ]:
-            conn.execute(
-                text(
-                    "DO $$ BEGIN "
-                    "IF EXISTS ("
-                    "SELECT 1 FROM information_schema.columns "
-                    f"WHERE table_schema = '{SCHEMA}' "
-                    f"AND table_name = '{table}' "
-                    f"AND column_name = '{column}' "
-                    "AND data_type = 'integer'"
-                    ") THEN "
-                    f"ALTER TABLE {SCHEMA}.{table} "
-                    f"ALTER COLUMN {column} TYPE NUMERIC(10, 4) USING {column}::NUMERIC(10, 4); "
-                    "END IF; END $$;"
-                )
-            )
 
 
