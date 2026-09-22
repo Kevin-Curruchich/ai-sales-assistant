@@ -14,6 +14,13 @@ FORBIDDEN_HOST_MARKERS = ("rlwy.net", "railway", "proxy.rlwy")
 
 
 def pytest_configure(config):
+    if not TEST_DATABASE_URL.strip():
+        raise pytest.UsageError(
+            "TEST_DATABASE_URL esta vacia. Definila (o desdefinila para usar el "
+            "default local) antes de correr los tests: crear/destruir schemas "
+            "contra una URL vacia terminaria cayendo al fallback de settings, "
+            "que puede apuntar a Railway."
+        )
     for marker in FORBIDDEN_HOST_MARKERS:
         if marker in TEST_DATABASE_URL:
             raise pytest.UsageError(

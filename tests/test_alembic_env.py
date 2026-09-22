@@ -1,3 +1,4 @@
+import pytest
 from alembic import command
 from sqlalchemy import text
 
@@ -38,3 +39,17 @@ def test_version_table_lives_inside_the_target_schema(test_engine, alembic_confi
         ).scalar()
     assert in_target == 1
     assert in_public == 0
+
+
+def test_db_dev_guard_blocks_migrations_without_explicit_opt_in(alembic_config, monkeypatch):
+    """env.py debe negarse a migrar contra db_dev salvo opt-in explicito.
+
+    db_dev es el schema de produccion (156 ventas reales). El default de
+    settings.POSTGRES_SCHEMA y el .env del proyecto apuntan ahi, asi que un
+    `alembic upgrade head` corrido sin argumentos no debe poder tocarlo.
+    """
+    monkeypatch.delenv("REVENEW_ALLOW_DB_DEV", raising=False)
+    alembic_config.attributes["target_schema"] = "db_dev"
+
+    with pytest.raises(RuntimeError, match="db_dev"):
+        command.upgrade(alembic_config, "head")

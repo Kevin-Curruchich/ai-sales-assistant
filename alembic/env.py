@@ -1,3 +1,4 @@
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -17,6 +18,13 @@ target_metadata = Base.metadata
 # Clave del advisory lock: si dos deploys migran a la vez, se serializan.
 MIGRATION_LOCK_KEY = 0x5245564E  # "REVN"
 
+# db_dev es el schema que .env apunta por defecto y contiene datos reales de
+# produccion (156 ventas al momento de escribir esto). Un `alembic upgrade head`
+# corrido sin argumentos, en una maquina con el .env normal del proyecto, no debe
+# poder tocarlo silenciosamente.
+PROTECTED_SCHEMA = "db_dev"
+ALLOW_PROTECTED_SCHEMA_ENV_VAR = "REVENEW_ALLOW_DB_DEV"
+
 
 def _url() -> str:
     return config.attributes.get("sqlalchemy_url") or settings.SQLALCHEMY_DATABASE_URI
@@ -26,22 +34,31 @@ def _schema() -> str:
     return config.attributes.get("target_schema") or settings.POSTGRES_SCHEMA
 
 
+def _guard_against_protected_schema(schema: str) -> None:
+    if schema == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+        raise RuntimeError(
+            f"Alembic resolved the target schema to {schema!r}. That schema holds "
+            "live production data and this project's plan forbids migrating it "
+            "implicitly. Refusing to run migrations.\n"
+            f"If you deliberately intend to migrate {schema!r}, set "
+            f"{ALLOW_PROTECTED_SCHEMA_ENV_VAR}=1 in the environment and re-run."
+        )
+
+
 def run_migrations_offline() -> None:
-    context.configure(
-        url=_url(),
-        target_metadata=target_metadata,
-        literal_binds=True,
-        dialect_opts={"paramstyle": "named"},
-        version_table_schema=_schema(),
-        include_schemas=False,
-        compare_type=True,
+    raise NotImplementedError(
+        "Offline mode ('alembic upgrade head --sql') is not supported by this "
+        "project's env.py: the target schema is resolved at connection time via "
+        "SET search_path, so generating SQL without a live connection would emit "
+        "DDL for the wrong schema (or no schema at all) while only the "
+        "alembic_version stamp would be qualified correctly. Run migrations "
+        "online (the default) instead."
     )
-    with context.begin_transaction():
-        context.run_migrations()
 
 
 def run_migrations_online() -> None:
     schema = _schema()
+    _guard_against_protected_schema(schema)
     engine = create_engine(_url(), poolclass=pool.NullPool)
     try:
         with engine.connect() as connection:
