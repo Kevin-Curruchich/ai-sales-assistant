@@ -1,4 +1,5 @@
 import os
+import time
 from logging.config import fileConfig
 
 from alembic import context
@@ -16,7 +17,22 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 # Clave del advisory lock: si dos deploys migran a la vez, se serializan.
+# Se combina con hashtext(schema) (la forma de dos enteros de
+# pg_advisory_lock) para que migrar db_v2 no bloquee una migracion
+# concurrente de public, de un schema de test, o de un futuro db_v3 en la
+# misma base: cada schema tiene su propio lock.
 MIGRATION_LOCK_KEY = 0x5245564E  # "REVN"
+
+# Cuanto esperar, en total, a que otra sesion suelte el advisory lock antes
+# de rendirse con un error explicito. Sin este limite, `alembic upgrade
+# head` bloquea indefinidamente y no imprime nada: bajo `set -e` en un
+# entrypoint de contenedor eso no es un fallo ruidoso, es un boot que
+# cuelga hasta que el healthcheck de la plataforma lo mata, y vuelve a
+# colgar en cada reintento sin ninguna linea de log que explique por que.
+MIGRATION_LOCK_TIMEOUT_SECONDS = float(
+    os.environ.get("REVENEW_MIGRATION_LOCK_TIMEOUT_SECONDS", "30")
+)
+MIGRATION_LOCK_POLL_INTERVAL_SECONDS = 0.2
 
 # db_dev es el schema que .env apunta por defecto y contiene datos reales de
 # produccion (156 ventas al momento de escribir esto). Un `alembic upgrade head`
@@ -45,6 +61,43 @@ def _guard_against_protected_schema(schema: str) -> None:
         )
 
 
+def _acquire_migration_lock(connection, schema: str) -> None:
+    """Adquiere el advisory lock para `schema`, con espera acotada.
+
+    Usa la forma de dos enteros de pg_try_advisory_lock: la clave fija
+    MIGRATION_LOCK_KEY combinada con hashtext(schema), asi que el lock esta
+    "particionado" por schema y una migracion de db_v2 no bloquea una de
+    public, de un schema de test, o de un futuro db_v3 contra la misma
+    base.
+
+    pg_advisory_lock (la version bloqueante) fue el bug que el reviewer
+    encontro: con el lock tomado por otra sesion, colgaba para siempre y no
+    imprimia nada. En su lugar, se sondea pg_try_advisory_lock en un loop
+    acotado por MIGRATION_LOCK_TIMEOUT_SECONDS y, si se agota el tiempo, se
+    levanta un error explicito en vez de seguir esperando en silencio.
+    """
+    deadline = time.monotonic() + MIGRATION_LOCK_TIMEOUT_SECONDS
+    while True:
+        acquired = connection.execute(
+            text("SELECT pg_try_advisory_lock(:key, hashtext(:schema))"),
+            {"key": MIGRATION_LOCK_KEY, "schema": schema},
+        ).scalar()
+        if acquired:
+            return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"No se pudo obtener el advisory lock de migraciones para el "
+                f"schema {schema!r} despues de esperar "
+                f"{MIGRATION_LOCK_TIMEOUT_SECONDS:.0f}s. Otra migracion "
+                f"contra {schema!r} sigue en curso (o quedo colgada) y "
+                "sostiene el lock. Esperá a que termine y reintentá; si no "
+                "hay ninguna migracion legitima corriendo, encontrá y "
+                "cerrá la sesion que quedo con el lock tomado "
+                "(pg_locks / pg_stat_activity) antes de reintentar."
+            )
+        time.sleep(MIGRATION_LOCK_POLL_INTERVAL_SECONDS)
+
+
 def run_migrations_offline() -> None:
     raise NotImplementedError(
         "Offline mode ('alembic upgrade head --sql') is not supported by this "
@@ -66,9 +119,7 @@ def run_migrations_online() -> None:
             connection.execute(text(f'SET search_path TO "{schema}"'))
             connection.commit()
 
-            connection.execute(
-                text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK_KEY}
-            )
+            _acquire_migration_lock(connection, schema)
             connection.commit()
             try:
                 # version_table_schema=None es DELIBERADO, no un olvido.  El
@@ -99,7 +150,8 @@ def run_migrations_online() -> None:
                     context.run_migrations()
             finally:
                 connection.execute(
-                    text("SELECT pg_advisory_unlock(:key)"), {"key": MIGRATION_LOCK_KEY}
+                    text("SELECT pg_advisory_unlock(:key, hashtext(:schema))"),
+                    {"key": MIGRATION_LOCK_KEY, "schema": schema},
                 )
                 connection.commit()
     finally:

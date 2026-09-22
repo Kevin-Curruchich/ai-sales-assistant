@@ -1,4 +1,6 @@
+import fnmatch
 import os
+import re
 import stat
 import subprocess
 from pathlib import Path
@@ -70,10 +72,57 @@ def test_successful_migration_runs_before_the_server(tmp_path):
 
 
 def test_alembic_is_a_declared_dependency():
-    assert "alembic" in REQUIREMENTS.read_text().lower()
+    """A comment mentioning alembic would pass a plain substring check without
+    pinning anything runnable. Require an actual pin."""
+    requirements = REQUIREMENTS.read_text().lower()
+    assert re.search(r"^alembic==", requirements, re.MULTILINE), (
+        "requirements.txt must pin alembic with alembic==<version>"
+    )
+
+
+def _dockerignore_pattern_excludes(pattern: str, path: str) -> bool:
+    """Approximate whether a .dockerignore line would exclude `path`.
+
+    Not a full re-implementation of dockerignore semantics, but it covers
+    the forms that matter here: a bare name (`alembic`), a leading anchor
+    (`/alembic`), a trailing-slash directory marker (`alembic/`), a
+    contents-only wildcard (`alembic/*`), and a `**/`-prefixed pattern
+    (`**/alembic`) — the exact spellings that a literal `in ["alembic/",
+    "alembic"]` check would miss.
+    """
+    pattern = pattern.strip()
+    if not pattern or pattern.startswith("#") or pattern.startswith("!"):
+        return False
+
+    candidates = {pattern}
+    if pattern.startswith("**/"):
+        candidates.add(pattern[3:])
+    if pattern.startswith("/"):
+        candidates.add(pattern[1:])
+    trimmed = pattern.rstrip("/")
+    candidates.add(trimmed)
+    candidates.add(trimmed + "/*")
+    candidates.add(trimmed + "/**")
+
+    parts = path.split("/")
+    path_candidates = {path} | {"/".join(parts[i:]) for i in range(len(parts))}
+
+    return any(
+        fnmatch.fnmatch(p, c) for c in candidates for p in path_candidates
+    )
 
 
 def test_dockerignore_does_not_exclude_migrations():
-    ignored = DOCKERIGNORE.read_text().splitlines()
-    assert "alembic/" not in ignored
-    assert "alembic" not in ignored
+    """Any pattern that would exclude the alembic/ directory, its contents,
+    or alembic.ini breaks the container boot (entrypoint.sh runs `alembic
+    upgrade head` before serving) — alembic.ini is just as load-bearing as
+    the migrations directory and a config missing it would boot-loop
+    silently. This checks more than the two literal spellings the original
+    test covered.
+    """
+    lines = DOCKERIGNORE.read_text().splitlines()
+    for path in ("alembic", "alembic/env.py", "alembic.ini"):
+        for line in lines:
+            assert not _dockerignore_pattern_excludes(line, path), (
+                f".dockerignore pattern {line!r} would exclude {path!r}"
+            )

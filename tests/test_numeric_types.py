@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from sqlalchemy import Numeric
 
 from app.core.database import Base

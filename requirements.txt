@@ -78,3 +78,4 @@ pydantic-settings==2.9.1
 firebase-admin==6.7.0
 email-validator==2.3.0
 alembic==1.14.0
+Mako==1.4.1

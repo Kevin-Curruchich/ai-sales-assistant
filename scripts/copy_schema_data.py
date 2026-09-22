@@ -202,11 +202,29 @@ def _select_expr(column: str, dst_info: dict[str, dict]) -> str:
 def _copy_all(conn, source: str, target: str) -> dict[str, int]:
     unknown = _unknown_source_tables(conn, source)
     if unknown:
-        raise SchemaMismatch(
-            f"{source} tiene tablas que TABLE_ORDER no conoce: {unknown}.  "
-            "Actualiza TABLE_ORDER (o confirma que nacen vacias, como "
-            "cash_movements) antes de copiar: si no, se copia de menos y sin avisar."
-        )
+        # Las tablas de BORN_EMPTY_TABLES que aparecen aca ya perdieron su
+        # exencion (dejaron de estar vacias en el origen): decirle al
+        # operador que "confirme que nacen vacias" para esa tabla puntual
+        # esta mal - es justo la excepcion que se acaba de negar a aplicar.
+        # El mensaje tiene que distinguir ese caso del de una tabla
+        # realmente nueva y desconocida.
+        rearmed = sorted(set(unknown) & BORN_EMPTY_TABLES)
+        genuinely_unknown = sorted(set(unknown) - BORN_EMPTY_TABLES)
+
+        parts = [f"{source} tiene tablas que TABLE_ORDER no conoce: {unknown}."]
+        if rearmed:
+            parts.append(
+                f"{rearmed} estan en BORN_EMPTY_TABLES, pero esa exencion solo "
+                "aplica mientras la tabla este vacia en el origen, y ahora tiene "
+                "filas. Actualiza TABLE_ORDER para incluirla(s) antes de copiar."
+            )
+        if genuinely_unknown:
+            parts.append(
+                f"Actualiza TABLE_ORDER (o confirma que {genuinely_unknown} "
+                "nace(n) vacia(s), como cash_movements) antes de copiar."
+            )
+        parts.append("Si no, se copia de menos y sin avisar.")
+        raise SchemaMismatch(" ".join(parts))
 
     copied: dict[str, int] = {}
     for table in TABLE_ORDER:

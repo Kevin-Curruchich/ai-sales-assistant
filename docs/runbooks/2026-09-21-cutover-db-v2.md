@@ -98,6 +98,24 @@ tabla de negocio en `0` filas. El nombre de la tabla solo en la lista no
 alcanza como prueba de "vacía" — por eso el conteo va abajo, no solo el
 listado.
 
+Además, confirmá el valor exacto de `alembic_version` — si tipeaste mal el
+comando y corrió `upgrade head` en lugar de `upgrade 7c8a87a5384a`,
+aparecerían diez tablas en vez de nueve y una lectura rápida de la lista
+puede no notarlo:
+
+```bash
+venv/bin/python - <<'PY'
+from sqlalchemy import create_engine, text
+from app.core.config import settings
+e = create_engine(settings.SQLALCHEMY_DATABASE_URI)
+with e.connect() as c:
+    print(c.execute(text('SELECT version_num FROM db_v2.alembic_version')).scalar())
+PY
+```
+
+Tiene que dar exactamente `7c8a87a5384a` — inequívoco, y sale con una línea
+más.
+
 **Si falla citando `db_dev` y el guard `REVENEW_ALLOW_DB_DEV`:** no setees
 esa variable. Revisá `POSTGRES_SCHEMA` en el entorno desde el que corriste
 el comando — probablemente no se exportó y Alembic cayó al default
@@ -368,13 +386,18 @@ Resultado real obtenido: ____________________________________________
 
 ## 7. Probar la app contra db_v2
 
-`uvicorn` queda corriendo en primer plano, así que el `curl` no puede ir
+Producción sirve con `hypercorn` (ver `entrypoint.sh`), no con `uvicorn`.
+Probá el camino de despliegue con el mismo servidor que lo va a correr en
+producción — ambos están en el venv, pero solo uno es el que realmente
+importa acá.
+
+`hypercorn` queda corriendo en primer plano, así que el `curl` no puede ir
 en la misma terminal después de ese comando — no va a llegar a ejecutarse
 mientras el server siga arriba. Usá dos terminales:
 
 ```bash
 # Terminal A — queda corriendo:
-POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002
+POSTGRES_SCHEMA=db_v2 venv/bin/hypercorn app.main:app --bind 127.0.0.1:8002
 ```
 
 ```bash
@@ -382,14 +405,14 @@ POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002
 curl -s http://127.0.0.1:8002/health
 ```
 
-Si solo tenés una terminal disponible, corré `uvicorn` en segundo plano.
+Si solo tenés una terminal disponible, corré `hypercorn` en segundo plano.
 El servidor tarda un instante en levantar, así que el primer intento de
 `curl` inmediatamente después puede fallar con "connection refused" sin
 que eso signifique nada malo — por eso `--retry-connrefused` en vez de
 disparar el `curl` una sola vez:
 
 ```bash
-POSTGRES_SCHEMA=db_v2 venv/bin/uvicorn app.main:app --port 8002 &
+POSTGRES_SCHEMA=db_v2 venv/bin/hypercorn app.main:app --bind 127.0.0.1:8002 &
 curl -s --retry 5 --retry-delay 1 --retry-connrefused http://127.0.0.1:8002/health
 # cuando termines de probar:
 kill %1
