@@ -60,3 +60,13 @@ def alembic_config(throwaway_schema):
     cfg.attributes["sqlalchemy_url"] = TEST_DATABASE_URL
     cfg.attributes["target_schema"] = throwaway_schema
     return cfg
+
+
+from alembic import command
+
+
+@pytest.fixture
+def migrated_schema(alembic_config):
+    """Schema desechable ya migrado a head."""
+    command.upgrade(alembic_config, "head")
+    return alembic_config.attributes["target_schema"]
