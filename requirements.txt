@@ -77,3 +77,4 @@ psycopg2-binary==2.9.10
 pydantic-settings==2.9.1
 firebase-admin==6.7.0
 email-validator==2.3.0
+alembic==1.14.0

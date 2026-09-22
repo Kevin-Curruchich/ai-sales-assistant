@@ -40,3 +40,16 @@ def throwaway_schema(test_engine):
     finally:
         with test_engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{name}" CASCADE'))
+
+
+from alembic.config import Config as AlembicConfig
+
+
+@pytest.fixture
+def alembic_config(throwaway_schema):
+    """Config de Alembic apuntada al schema desechable del test."""
+    cfg = AlembicConfig("alembic.ini")
+    cfg.set_main_option("script_location", "alembic")
+    cfg.attributes["sqlalchemy_url"] = TEST_DATABASE_URL
+    cfg.attributes["target_schema"] = throwaway_schema
+    return cfg
