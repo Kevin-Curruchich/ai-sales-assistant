@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
-from app.services.sale_service import SaleService
+from app.services.sales import SaleService
 from app.schemas.purchase import (
     PurchaseCreate, PurchaseUpdate, PurchaseItemResponse, PurchaseResponse,
 )

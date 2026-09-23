@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_current_user
 from app.schemas.sale import PaginatedFollowUpResponse, FollowUpMetrics
-from app.services.sale_service import SaleService
+from app.services.sales import SaleService
 
 router = APIRouter(prefix="/follow-ups", tags=["Follow-ups"])
 
