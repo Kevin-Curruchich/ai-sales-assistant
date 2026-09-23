@@ -659,7 +659,12 @@ class SaleService:
             purchase_dates.append(sale_date)
         purchase_dates.sort()
 
-        total_purchases = len(purchase_dates)
+        # Distinta de purchase_dates (que cuenta ocurrencias de venta): tres
+        # ventas al mismo cliente el mismo dia son una ocasion de compra, no
+        # tres, y es exactamente lo que project() observa para calcular la
+        # confianza. Guardar aqui el conteo de ocurrencias dejaria
+        # total_purchases en desacuerdo con projection_confidence.
+        total_purchases = len(set(purchase_dates))
 
         interval, next_date, method, confidence = project(purchase_dates)
 

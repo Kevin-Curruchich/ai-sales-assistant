@@ -85,6 +85,44 @@ def test_confidence_thresholds():
     assert confidence_for(8) == "high"
 
 
+def test_project_reports_medium_confidence_for_five_distinct_dates():
+    """Ninguna prueba existente afirmaba la confianza de project() en el caso
+    suficiente; todas las que la usan estan en la rama insufficient."""
+    _, _, _, confidence = project(
+        [
+            date(2026, 9, 1),
+            date(2026, 9, 5),
+            date(2026, 9, 12),
+            date(2026, 9, 20),
+            date(2026, 9, 25),
+        ]
+    )
+    assert confidence == "medium"
+
+
+def test_project_confidence_counts_distinct_dates_not_raw_occurrences():
+    """Documenta la decision de Fix Round 2: total_purchases y
+    projection_confidence tienen que estar de acuerdo sobre la misma fila, y
+    el numero que ambos deben usar es el de fechas distintas, no el de
+    ocurrencias de venta. Con dos ventas el mismo dia mas otras tres fechas
+    distintas hay 5 ocurrencias mas 4 fechas distintas: sin deduplicar,
+    confidence_for(5) daria 'medium'; deduplicando, confidence_for(4)
+    tambien da 'medium' -- asi que se elige un total donde ambos conteos
+    caen en distintos escalones para que la prueba realmente distinga el
+    criterio equivocado del correcto.
+    """
+    dates_with_a_repeat = [
+        date(2026, 9, 1),
+        date(2026, 9, 1),  # misma ocasion de compra que la anterior
+        date(2026, 9, 5),
+        date(2026, 9, 12),
+    ]
+    # 4 ocurrencias crudas -> confidence_for(4) == "medium"
+    # 3 fechas distintas    -> confidence_for(3) == "low"
+    _, _, _, confidence = project(dates_with_a_repeat)
+    assert confidence == "low"
+
+
 def test_projection_date_is_the_last_purchase_plus_the_interval():
     interval, next_date, _, _ = project([date(2026, 9, 1), date(2026, 9, 11)])
     assert interval == Decimal("10")
