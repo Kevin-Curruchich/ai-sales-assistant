@@ -1,11 +1,10 @@
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum as PyEnum
 from typing import Optional
 
 from sqlalchemy import (
-    Date,
     DateTime,
     Enum as SQLEnum,
     ForeignKey,
@@ -31,7 +30,7 @@ class CashMovement(Base):
     """Libro de caja.
 
     El saldo acumulado NO se guarda: se calcula al leer con
-    SUM(...) OVER (ORDER BY movement_date).  Guardarlo como columna fue la
+    SUM(...) OVER (ORDER BY occurred_at).  Guardarlo como columna fue la
     fuente de desincronizacion en la hoja de calculo de la que viene este modelo.
 
     Limitacion conocida: un movimiento apunta a una sola venta.  Un cobro que
@@ -43,7 +42,9 @@ class CashMovement(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
     )
-    movement_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     type: Mapped[CashMovementType] = mapped_column(
         SQLEnum(
             CashMovementType,

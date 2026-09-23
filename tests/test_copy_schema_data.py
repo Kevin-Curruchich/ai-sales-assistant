@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -189,10 +189,10 @@ def test_cash_movements_is_exempt_only_while_it_is_empty(
         conn.execute(text(f'SET search_path TO "{source}"'))
         conn.execute(
             text(
-                "INSERT INTO cash_movements (movement_date, type, amount) "
+                "INSERT INTO cash_movements (occurred_at, type, amount) "
                 "VALUES (:d, CAST(:t AS cash_movement_type_enum), :a)"
             ),
-            {"d": date(2026, 9, 3), "t": "entrada", "a": Decimal("115.00")},
+            {"d": datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), "t": "entrada", "a": Decimal("115.00")},
         )
 
     with pytest.raises(SchemaMismatch, match="cash_movements"):
