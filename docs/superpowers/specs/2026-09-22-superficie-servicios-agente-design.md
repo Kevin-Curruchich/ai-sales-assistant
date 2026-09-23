@@ -256,6 +256,12 @@ Queda anotado para la pieza 2, sin tocar ahora: `registrar-venta` está escrita 
 mientras las otras ocho están en español, y las nueve referencian Google Sheets. Eso se
 reescribe cuando las herramientas pasen a Postgres.
 
+> **El export todavía no está versionado.** `Revenew/` vive en el árbol de trabajo pero fuera
+> de git: esta pieza no lo lee, así que traerlo al repo se decide en la pieza 2, junto con qué
+> hacer con los identificadores de `config.json`. Las dos correcciones de arriba están
+> aplicadas a esos archivos, pero **la fuente durable de esas decisiones es este spec**, no el
+> export — si la carpeta se pierde, las ediciones se rehacen desde aquí.
+
 ## Riesgos
 
 | Riesgo | Mitigación |
