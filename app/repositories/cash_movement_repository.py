@@ -7,15 +7,14 @@ from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.models import CashMovement, CashMovementType
+from app.models.cash_movement import CASH_OUTFLOW_TYPES
 
 
 def _signed_amount():
     """Las salidas y los retiros restan; las entradas y los aportes suman."""
     return case(
         (
-            CashMovement.type.in_(
-                [CashMovementType.SALIDA, CashMovementType.RETIRO_SOCIO]
-            ),
+            CashMovement.type.in_(list(CASH_OUTFLOW_TYPES)),
             -CashMovement.amount,
         ),
         else_=CashMovement.amount,

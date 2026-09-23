@@ -6,11 +6,11 @@ from typing import Optional
 from sqlalchemy.orm import Session
 
 from app.models import CashMovement, CashMovementType
+from app.models.cash_movement import CASH_OUTFLOW_TYPES
 from app.models.payment_method import PaymentMethod
 from app.repositories.cash_movement_repository import CashMovementRepository
 
 MONEY = Decimal("0.01")
-OUTFLOWS = {CashMovementType.SALIDA, CashMovementType.RETIRO_SOCIO}
 
 
 class CashService:
@@ -70,6 +70,6 @@ class CashService:
         balance = Decimal("0.00")
         out: list[tuple[CashMovement, Decimal]] = []
         for m in movements:
-            balance += -m.amount if m.type in OUTFLOWS else m.amount
+            balance += -m.amount if m.type in CASH_OUTFLOW_TYPES else m.amount
             out.append((m, self._money(balance)))
         return out

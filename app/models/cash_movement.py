@@ -26,6 +26,13 @@ class CashMovementType(str, PyEnum):
     RETIRO_SOCIO = "retiro_socio"
 
 
+# Unica fuente de verdad de que tipos restan del saldo. La repite quien lea el
+# libro (CashMovementRepository via SQL, CashService.ledger via Python): un
+# quinto tipo agregado a un lado y no al otro haria que el ultimo saldo del
+# ledger difiera del running_balance calculado en SQL.
+CASH_OUTFLOW_TYPES = frozenset({CashMovementType.SALIDA, CashMovementType.RETIRO_SOCIO})
+
+
 class CashMovement(Base):
     """Libro de caja.
 
