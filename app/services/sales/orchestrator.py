@@ -16,6 +16,7 @@ from app.repositories.customer_repository import CustomerRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_repository import SaleRepository
+from app.services.sales.fifo import InsufficientLots, allocate_fifo
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -72,35 +73,16 @@ class SaleService:
             as_of_date=sale_date,
             lock_for_update=True,
         )
-
-        to_consume = Decimal(str(quantity))
-        allocations: list[tuple[PurchaseItem, Decimal]] = []
-        total_cost = Decimal("0.00")
-
-        for lot in lots:
-            if to_consume <= 0:
-                break
-
-            take = min(lot.remaining_quantity, to_consume)
-            if take <= 0:
-                continue
-
-            allocations.append((lot, take))
-            total_cost = self._money(total_cost + self._money(lot.unit_cost) * take)
-            to_consume -= take
-
-        if to_consume > 0:
-            available = quantity - to_consume
+        try:
+            return allocate_fifo(lots, quantity)
+        except InsufficientLots as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
                     "Insufficient FIFO lots to price sale item. "
-                    f"Available priced quantity={available}, requested={quantity}."
+                    f"Available priced quantity={exc.available}, requested={exc.requested}."
                 ),
-            )
-
-        cost_basis = self._money(total_cost / quantity)
-        return allocations, cost_basis
+            ) from exc
 
     def _suggested_unit_price(self, product, cost_basis: Decimal) -> Decimal:
         mode = getattr(product.earning_mode, "value", product.earning_mode)
