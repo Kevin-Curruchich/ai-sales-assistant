@@ -140,3 +140,62 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
     finally:
         session.close()
         engine.dispose()
+
+
+def test_a_fractional_ewma_interval_flows_through_follow_ups_without_raising(
+    test_engine, migrated_schema
+):
+    """FollowUpItemResponse.avg_interval_days debe aceptar un Decimal fraccionario.
+
+    Con la media simple, avg_interval_days siempre daba un entero. Con EWMA
+    (Task 6) y el backfill (Task 7), la mayoria de los ciclos van a tener un
+    intervalo fraccionario real como el de Cecy (19.3318). Si el schema todavia
+    espera `int`, `/api/v1/follow-ups` devuelve 500 en cuanto un ciclo asi pasa
+    por get_follow_ups. Este test lo prueba de punta a punta, a traves del
+    orquestador, no solo instanciando el schema a mano.
+    """
+    import uuid as _uuid
+    from datetime import date as _date, timedelta as _timedelta
+    from decimal import Decimal as _Decimal
+
+    from sqlalchemy import create_engine, event
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models import Customer, CustomerProductCycle, Product
+    from app.services.sales import SaleService
+    from tests.conftest import TEST_DATABASE_URL
+
+    engine = create_engine(TEST_DATABASE_URL)
+
+    @event.listens_for(engine, "connect")
+    def _sp(dbapi_connection, _record):
+        cur = dbapi_connection.cursor()
+        cur.execute(f'SET search_path TO "{migrated_schema}"')
+        cur.close()
+        dbapi_connection.commit()
+
+    session = sessionmaker(bind=engine)()
+    try:
+        customer = Customer(name="Cecy con gas")
+        product = Product(sku=f"SKU-{_uuid.uuid4().hex[:6]}", name="Cilindro de gas")
+        session.add_all([customer, product])
+        session.flush()
+        session.add(
+            CustomerProductCycle(
+                customer_id=customer.id, product_id=product.id,
+                avg_interval_days=_Decimal("19.3318"),
+                estimated_next_purchase=_date.today() + _timedelta(days=5),
+                last_purchase_date=_date(2026, 8, 1), last_quantity=_Decimal("1"),
+                total_purchases=5, projection_method="ewma",
+                projection_confidence="medium",
+            )
+        )
+        session.commit()
+
+        # No debe levantar pydantic.ValidationError.
+        follow_ups, total = SaleService(session).get_follow_ups(filter_type="all")
+        encontrado = next(f for f in follow_ups if f.customer == "Cecy con gas")
+        assert encontrado.items[0].avg_interval_days == _Decimal("19.3318")
+    finally:
+        session.close()
+        engine.dispose()

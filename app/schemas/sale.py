@@ -174,7 +174,7 @@ class FollowUpItemResponse(BaseModel):
     """A single product that a customer is expected to need."""
     product_id: uuid.UUID
     product_name: str
-    avg_interval_days: Optional[int] = None
+    avg_interval_days: Optional[Decimal] = None
     last_purchase_date: Optional[date] = None
     last_quantity: Decimal = Decimal("0")
     estimated_next_purchase: Optional[date] = None
