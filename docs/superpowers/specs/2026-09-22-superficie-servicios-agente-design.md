@@ -54,6 +54,7 @@ margen estándar del producto.
 | Ciclos existentes | Recalcular desde el historial | Deja los 26 con valor, método y confianza fundamentados |
 | Precio habitual | También en `preview_sale` | Panel y agente deben sugerir lo mismo |
 | Estructura | Paquete `app/services/sales/` | Las skills marcan las costuras; solo 5 imports cambian |
+| `payment_method` | Enum de Python + CHECK | Vocabulario abierto: crece con migraciones normales, no con `ALTER TYPE` |
 
 ### Por qué se descarta Croston
 
@@ -170,7 +171,35 @@ services".
 `SaleService` conserva `create`, `update`, `preview_sale`, `update_payment_status_enriched` y
 la serialización. Pasa a componer los servicios anteriores en vez de implementarlos.
 
-## Migración `004` y backfill
+## `payment_method`: enum de Python con CHECK
+
+Hoy es `varchar(50)` sin restricción en `sales`, `purchases` y `cash_movements` — mientras
+que `cash_movements.type`, en la misma tabla, sí está restringido por
+`cash_movement_type_enum`. El agente podría escribir `efectivo`, `Efectivo` y `efectvo` y las
+tres pasarían.
+
+```python
+class PaymentMethod(str, PyEnum):
+    EFECTIVO = "efectivo"
+    TRANSFERENCIA = "transferencia"
+```
+
+Aplicado a las tres columnas con `native_enum=False` y `length=50`: SQLAlchemy lo renderiza
+como `varchar(50)` más un `CHECK`, nombrado por la convención del repo (`ck_sales_...`).
+
+**Por qué no un enum nativo**, a diferencia de `earning_mode_enum` y `cash_movement_type_enum`:
+esos dos son vocabularios cerrados que no van a crecer. Los medios de pago sí crecen, y en
+Postgres `ALTER TYPE ... ADD VALUE` se lleva mal con el DDL transaccional de Alembic, mientras
+que quitar un valor es prácticamente imposible. Con un CHECK, agregar `tarjeta` mañana es
+soltar y recrear la constraint: una migración normal.
+
+Se mantienen los 50 caracteres a propósito, para que un medio de pago con nombre largo no
+obligue a redimensionar la columna además de tocar el CHECK.
+
+**El momento es ahora:** las 194 filas tienen `payment_method` en NULL, así que el cambio no
+reconcilia ni un solo valor. Con datos dentro, sería un trabajo de limpieza.
+
+## Migraciones y backfill
 
 **Migración:** `customer_product_cycles.avg_interval_days` de `Integer` a `Numeric(10,4)`,
 con `postgresql_using` para conservar los valores. El `downgrade` pierde decimales y debe
@@ -182,6 +211,10 @@ y `projection_confidence`. Para los 7 ciclos de una sola compra, `estimated_next
 pasa a NULL y la confianza a `insufficient`.
 
 Es idempotente: recalcula desde el historial, no acumula.
+
+**Migración `005`, separada:** los `CHECK` de `payment_method` en las tres tablas. Va aparte
+de la `004` siguiendo el patrón del repo — una revisión, un asunto — para que cada una se
+revierta sin arrastrar a la otra.
 
 ## Verificación
 
@@ -204,16 +237,24 @@ caja a las ventas y compras existentes.
 `preview_sale` devuelve `SaleItemPreview` y el precio habitual tiene que ser visible ahí. Se
 permite ese único campo, `is_habitual_price`. Ningún schema nuevo, ninguna otra adición.
 
-## Incoherencias en las skills del agente
+## Incoherencias en las skills del agente — resueltas
 
-El `AGENTS.md` es la autoridad. Estas dos se corrigen al portar las skills en la pieza 2, no
-aquí:
+El `AGENTS.md` es la autoridad. Ambas se corrigieron en el propio export (`Revenew/skills/`)
+antes de escribir código, para no arrastrarlas a la pieza 2:
 
-1. `registrar-venta/SKILL.md` dice `pagada = FALSE` por defecto y habla de "si el workbook no
-   tiene todavía ese campo". El `AGENTS.md` sección 4 dice `pagada = true` por defecto. La
-   skill quedó vieja.
-2. `registrar-compra/SKILL.md` omite `medio_pago` y `monto_aporte_propio`, que el `AGENTS.md`
-   sección 4 exige.
+1. **`registrar-venta`** decía `pagada = FALSE` por defecto y arrastraba tres viñetas sobre
+   "si el workbook todavía no tiene ese campo" — obsoletas desde que `is_payment_pending` y
+   `payment_date` existen. Ahora: **venta pagada por defecto**, con `fecha_pago` igual a la
+   fecha de la venta salvo indicación contraria, y `pagada = FALSE` solo cuando Kevin lo dice.
+   El movimiento de caja se registra únicamente cuando la venta está pagada.
+2. **`registrar-compra`** omitía `medio_pago`. Ahora lo declara con default `efectivo`. Para
+   el aporte propio no se añadió columna: la skill remite a registrar un `aporte_socio` en
+   `Caja`, coherente con el esquema y con la sección 4 del `AGENTS.md`, y deja explícito que
+   el `costo_unitario` del lote es siempre el completo.
+
+Queda anotado para la pieza 2, sin tocar ahora: `registrar-venta` está escrita en inglés
+mientras las otras ocho están en español, y las nueve referencian Google Sheets. Eso se
+reescribe cuando las herramientas pasen a Postgres.
 
 ## Riesgos
 
