@@ -22,6 +22,7 @@ from app.services.sales.pricing import (
     detect_habitual_margin,
     suggested_unit_price as _pricing_suggested_unit_price,
 )
+from app.services.sales.projection import project
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -660,34 +661,28 @@ class SaleService:
 
         total_purchases = len(purchase_dates)
 
-        if total_purchases >= 2:
-            intervals = [
-                (purchase_dates[i + 1] - purchase_dates[i]).days
-                for i in range(len(purchase_dates) - 1)
-            ]
-            avg = sum(intervals) / len(intervals)
-            avg_interval = max(int(avg), 1)
-            estimated_next = sale_date + timedelta(days=avg_interval)
-        else:
-            avg_interval = 30
-            estimated_next = sale_date + timedelta(days=30)
+        interval, next_date, method, confidence = project(purchase_dates)
 
         if cycle:
-            cycle.avg_interval_days = avg_interval
-            cycle.estimated_next_purchase = estimated_next
+            cycle.avg_interval_days = interval
+            cycle.estimated_next_purchase = next_date
             cycle.last_purchase_date = sale_date
             cycle.last_quantity = quantity
             cycle.total_purchases = total_purchases
+            cycle.projection_method = method
+            cycle.projection_confidence = confidence
             self.cycle_repo.update(cycle)
         else:
             cycle = CustomerProductCycle(
                 customer_id=customer_id,
                 product_id=product_id,
-                avg_interval_days=avg_interval,
-                estimated_next_purchase=estimated_next,
+                avg_interval_days=interval,
+                estimated_next_purchase=next_date,
                 last_purchase_date=sale_date,
                 last_quantity=quantity,
                 total_purchases=total_purchases,
+                projection_method=method,
+                projection_confidence=confidence,
             )
             self.cycle_repo.create(cycle)
 
@@ -697,7 +692,7 @@ class SaleService:
 
     def get_follow_ups(self, filter_type: str = "all", limit: int = 10, offset: int = 0) -> tuple[list[FollowUpResponse], int]:
         today = date.today()
-        cycles = self.cycle_repo.get_all_with_estimation()
+        cycles = self.cycle_repo.get_all_for_follow_ups()
 
         customer_cycles: dict[uuid.UUID, list[CustomerProductCycle]] = {}
         for c in cycles:
@@ -733,9 +728,10 @@ class SaleService:
                     worst_days = days_until
 
             if worst_days is None:
-                continue
-
-            if worst_days < 0:
+                # Ningun producto de este cliente tiene proyeccion: hace falta un
+                # estimado inicial. Antes se descartaba en silencio.
+                fu_status = "needs_estimate"
+            elif worst_days < 0:
                 fu_status = "overdue"
             elif worst_days <= 7:
                 fu_status = "urgent"
@@ -743,6 +739,9 @@ class SaleService:
                 fu_status = "upcoming"
             else:
                 fu_status = "normal"
+
+            if filter_type != "all" and fu_status == "needs_estimate":
+                continue
 
             if filter_type == "overdue" and fu_status != "overdue":
                 continue

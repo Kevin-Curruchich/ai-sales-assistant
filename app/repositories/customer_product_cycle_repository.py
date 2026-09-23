@@ -41,6 +41,22 @@ class CustomerProductCycleRepository:
         )
         return list(self.db.execute(stmt).unique().scalars().all())
 
+    def get_all_for_follow_ups(self) -> list[CustomerProductCycle]:
+        """Todos los ciclos, con y sin proyeccion.
+
+        Los que no tienen fecha estimada son justamente los que hay que pedirle
+        a Kevin, asi que no pueden filtrarse fuera del seguimiento.
+        """
+        stmt = (
+            select(CustomerProductCycle)
+            .options(
+                joinedload(CustomerProductCycle.customer),
+                joinedload(CustomerProductCycle.product),
+            )
+            .order_by(CustomerProductCycle.estimated_next_purchase.asc().nullslast())
+        )
+        return list(self.db.execute(stmt).unique().scalars().all())
+
     def create(self, cycle: CustomerProductCycle) -> CustomerProductCycle:
         self.db.add(cycle)
         self.db.commit()

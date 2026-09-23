@@ -188,7 +188,7 @@ class FollowUpResponse(BaseModel):
     customer_id: uuid.UUID
     customer: str
     email: Optional[str] = None
-    status: str  # "overdue" | "urgent" | "upcoming" | "normal" (worst among products)
+    status: str  # "overdue" | "urgent" | "upcoming" | "normal" | "needs_estimate" (worst among products)
     items: list[FollowUpItemResponse] = []
 
 
