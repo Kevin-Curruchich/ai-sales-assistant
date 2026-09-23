@@ -17,6 +17,11 @@ from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_repository import SaleRepository
 from app.services.sales.fifo import InsufficientLots, allocate_fifo
+from app.services.sales.pricing import (
+    base_margin_for,
+    detect_habitual_margin,
+    suggested_unit_price as _pricing_suggested_unit_price,
+)
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -85,20 +90,17 @@ class SaleService:
             ) from exc
 
     def _suggested_unit_price(self, product, cost_basis: Decimal) -> Decimal:
-        mode = getattr(product.earning_mode, "value", product.earning_mode)
-        if mode == "percent":
-            percent = Decimal(str(product.earning_percent or 0))
-            return self._money(cost_basis * (Decimal("1") + (percent / HUNDRED)))
-
-        fee_amount = Decimal(str(product.earning_fee_amount or 0))
-        return self._money(cost_basis + fee_amount)
+        return _pricing_suggested_unit_price(product, cost_basis)
 
     def _resolve_sale_item_pricing(
         self,
         product,
         cost_basis: Decimal,
         item_data: SaleItemCreate,
-    ) -> tuple[Decimal, Decimal, Decimal, Decimal, bool, Optional[str], Optional[Decimal], Optional[Decimal]]:
+        customer_id: uuid.UUID,
+    ) -> tuple[
+        Decimal, Decimal, Decimal, Decimal, bool, Optional[str], Optional[Decimal], Optional[Decimal], bool
+    ]:
         if item_data.discountPercent is not None and item_data.discountAmount is not None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -109,6 +111,29 @@ class SaleService:
             )
 
         suggested = self._suggested_unit_price(product, cost_basis)
+        is_habitual = False
+
+        if (
+            item_data.unitPrice is None
+            and item_data.discountPercent is None
+            and item_data.discountAmount is None
+        ):
+            recent = self.sale_repo.get_recent_items_for_customer_product(
+                customer_id=customer_id, product_id=product.id
+            )
+            observed = [
+                Decimal(str(i.unit_price)) - Decimal(str(i.cost_basis_unit))
+                for i in recent
+                if i.cost_basis_unit is not None
+            ]
+            habitual = detect_habitual_margin(
+                observed_margins=observed,
+                base_margin=base_margin_for(product, cost_basis),
+            )
+            if habitual is not None:
+                suggested = self._money(cost_basis + habitual)
+                is_habitual = True
+
         discount_percent = self._money(item_data.discountPercent) if item_data.discountPercent is not None else None
         discount_amount = self._money(item_data.discountAmount) if item_data.discountAmount is not None else None
 
@@ -160,6 +185,7 @@ class SaleService:
             reason,
             discount_percent,
             discount_amount,
+            is_habitual,
         )
 
     def _to_sale_response(self, sale: Sale) -> SaleResponse:
@@ -396,15 +422,17 @@ class SaleService:
                     final_price,
                     cost_basis,
                     gross_profit_unit,
-                    _,
+                    suggested,
                     is_overridden,
                     reason,
                     discount_percent,
                     discount_amount,
+                    is_habitual,
                 ) = self._resolve_sale_item_pricing(
                     product=product,
                     cost_basis=cost_basis,
                     item_data=item_data,
+                    customer_id=customer.id,
                 )
             except HTTPException as exc:
                 # Pricing rules violated — surface as a warning instead of aborting
@@ -415,6 +443,7 @@ class SaleService:
                 reason = None
                 discount_percent = None
                 discount_amount = None
+                is_habitual = False
 
             subtotal = self._money(final_price * item_data.quantity)
             gross_profit_total = self._money(gross_profit_unit * item_data.quantity)
@@ -437,6 +466,7 @@ class SaleService:
                     discount_percent=discount_percent,
                     discount_amount=discount_amount,
                     is_price_overridden=is_overridden,
+                    is_habitual_price=is_habitual,
                     pricing_exception_reason=reason,
                     subtotal=subtotal,
                     gross_profit_unit=gross_profit_unit,
@@ -510,10 +540,12 @@ class SaleService:
                 reason,
                 discount_percent,
                 discount_amount,
+                _,
             ) = self._resolve_sale_item_pricing(
                 product=product,
                 cost_basis=cost_basis,
                 item_data=item_data,
+                customer_id=data.customerId,
             )
 
             subtotal = self._money(unit_price * item_data.quantity)

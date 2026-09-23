@@ -85,6 +85,7 @@ class SaleItemPreview(BaseModel):
     discount_percent: Optional[Decimal] = None
     discount_amount: Optional[Decimal] = None
     is_price_overridden: bool = False
+    is_habitual_price: bool = False
     pricing_exception_reason: Optional[str] = None
     subtotal: Decimal
     gross_profit_unit: Decimal
