@@ -29,7 +29,7 @@
 Cinco clases de entrada que el spec implica y que ningún test obvio ejercita. Cada una tiene su test asignado a la task dueña del código.
 
 1. **Dos ventas al mismo cliente y producto el mismo día** → intervalo de 0 días. EWMA lo propagaría y proyectaría "hoy" para siempre. El código actual se protege con `max(int(avg), 1)`; el nuevo debe conservar un piso de 1 día. → Task 6.
-2. **Movimientos de caja en la misma fecha** → `SUM() OVER (ORDER BY movement_date)` deja el orden indefinido entre empates, así que el saldo por fila sería ambiguo. La hoja original tenía varios movimientos por día. El `ORDER BY` necesita un desempate estable. → Task 2.
+2. **Movimientos de caja con el mismo instante** → una carga en lote los produce, y `SUM() OVER (ORDER BY ...)` sin desempate deja el orden indefinido entre empates, así que el saldo por fila cambia entre corridas. Peor: el marco por defecto de una ventana es `RANGE`, no `ROWS`, y con `RANGE` **todas las filas empatadas reciben el acumulado del grupo entero** — tres movimientos del mismo día mostrarían el mismo saldo. El total final coincide igual, así que hay que asertar los intermedios. → Task 2.
 3. **`CHECK` sobre una columna nullable con las 194 filas en NULL.** Un `CHECK` pasa con NULL en SQL, pero si se escribe mal la migración falla contra datos reales. → Task 1.
 4. **Cantidad pedida mayor que todos los lotes juntos.** Hoy `_allocate_fifo_lots` levanta un 409; al volverse función pura sin HTTP, ese contrato tiene que sobrevivir de alguna forma explícita. → Task 4.
 5. **Tercera venta con descuento puntual.** `detectar-precio-habitual` mira las últimas 3 ventas; un descuento aislado no debe convertirse en el patrón del cliente. → Task 5.
@@ -40,7 +40,7 @@ Cinco clases de entrada que el spec implica y que ningún test obvio ejercita. C
 
 **Files:**
 - Create: `app/models/payment_method.py`
-- Modify: `app/models/sale.py`, `app/models/purchase.py`, `app/models/cash_movement.py`
+- Modify: `app/models/sale.py`, `app/models/purchase.py`
 - Create: `alembic/versions/<rev>_payment_method_check.py` (generada)
 - Create: `tests/test_payment_method.py`
 
@@ -205,25 +205,55 @@ git commit -m "feat: Constrain payment_method to a checked vocabulary"
 Primera pieza de valor propio: la tabla existe desde la migración `002` y nada la usa.
 
 **Files:**
+- Modify: `app/models/cash_movement.py` (`movement_date` → `occurred_at`)
+- Create: `alembic/versions/<rev>_cash_occurred_at.py` (generada)
 - Create: `app/repositories/cash_movement_repository.py`
 - Create: `app/services/cash_service.py`
 - Create: `tests/test_cash_service.py`
 
+**La tabla nace con el instante, no con la fecha.** `cash_movements` está vacía, así que
+cambiar `movement_date: Date` por `occurred_at: timestamptz` no cuesta nada ahora y evita
+construir el repositorio y el servicio contra una columna que habría que reemplazar. Un
+instante también hace que el orden del libro casi nunca empate, en vez de depender del
+desempate como mecanismo principal.
+
 **Interfaces:**
 - Consumes: `PaymentMethod` (Task 1).
 - Produces:
-  - `CashMovementRepository(db)` con `create(movement) -> CashMovement`, `get_all(start_date=None, end_date=None, limit=100, offset=0) -> list[CashMovement]`, `get_running_balance(as_of=None) -> Decimal`, `get_owner_balance() -> Decimal`.
-  - `CashService(db)` con `record(movement_date, type, amount, payment_method=None, sale_id=None, purchase_id=None, note=None) -> CashMovement`, `running_balance(as_of=None) -> Decimal`, `owner_balance() -> Decimal`, `ledger(start_date=None, end_date=None) -> list[tuple[CashMovement, Decimal]]`.
+  - `CashMovementRepository(db)` con `create(movement) -> CashMovement`, `get_all(start=None, end=None, limit=100, offset=0) -> list[CashMovement]`, `get_running_balance(as_of=None) -> Decimal`, `get_owner_balance() -> Decimal`.
+  - `CashService(db)` con `record(occurred_at, type, amount, payment_method=None, sale_id=None, purchase_id=None, note=None) -> CashMovement`, `running_balance(as_of=None) -> Decimal`, `owner_balance() -> Decimal`, `ledger(start=None, end=None) -> list[tuple[CashMovement, Decimal]]`.
+  - `occurred_at` y los parámetros `as_of`, `start` y `end` son `datetime` con zona.
 
 `ledger` devuelve cada movimiento con su saldo acumulado calculado, sin almacenarlo.
 
-- [ ] **Step 1: Escribir los tests que fallan**
+- [ ] **Step 1: Cambiar el modelo y generar la migración**
+
+En `app/models/cash_movement.py`, reemplazar `movement_date` por:
+
+```python
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+```
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+TEST_DATABASE_URL=postgresql://revenew@localhost:55432/revenew_test \
+POSTGRES_SCHEMA=gen_tmp0 \
+DATABASE_URL=postgresql://revenew@localhost:55432/revenew_test \
+  venv/bin/python -m alembic revision --autogenerate -m "cash movements occurred at"
+```
+
+Revisar que borre `movement_date` y cree `occurred_at` como NOT NULL **sin**
+`server_default`: la tabla está vacía, no hay filas que rellenar.
+
+- [ ] **Step 2: Escribir los tests que fallan**
 
 `tests/test_cash_service.py`:
 
 ```python
 import uuid
-from datetime import date
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -259,38 +289,40 @@ def cash(migrated_schema):
 
 
 def test_running_balance_adds_entries_and_subtracts_exits(cash):
-    cash.record(date(2026, 9, 3), CashMovementType.ENTRADA, Decimal("115.00"))
-    cash.record(date(2026, 9, 3), CashMovementType.ENTRADA, Decimal("37.00"))
-    cash.record(date(2026, 9, 5), CashMovementType.SALIDA, Decimal("285.00"))
+    cash.record(datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("115.00"))
+    cash.record(datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("37.00"))
+    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.SALIDA, Decimal("285.00"))
     assert cash.running_balance() == Decimal("-133.00")
 
 
 def test_owner_balance_is_contributions_minus_withdrawals(cash):
-    cash.record(date(2026, 9, 5), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
-    cash.record(date(2026, 9, 9), CashMovementType.APORTE_SOCIO, Decimal("125.02"))
-    cash.record(date(2026, 9, 20), CashMovementType.RETIRO_SOCIO, Decimal("100.00"))
+    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
+    cash.record(datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("125.02"))
+    cash.record(datetime(2026, 9, 20, 9, 0, tzinfo=timezone.utc), CashMovementType.RETIRO_SOCIO, Decimal("100.00"))
     assert cash.owner_balance() == Decimal("120.02")
 
 
 def test_partner_contribution_raises_the_business_balance(cash):
     """aporte_socio es dinero que entra a la caja del negocio."""
-    cash.record(date(2026, 9, 5), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
+    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
     assert cash.running_balance() == Decimal("95.00")
 
 
-def test_ledger_running_balance_is_stable_with_same_day_movements(cash):
-    """Varios movimientos en la misma fecha deben dar un acumulado determinista.
+def test_ledger_running_balance_is_stable_with_identical_instants(cash):
+    """Tres movimientos con el MISMO instante deben dar un acumulado estable.
 
-    Sin un desempate en el ORDER BY, la ventana deja el orden indefinido entre
-    empates y el saldo por fila cambia entre corridas.
+    Con occurred_at los empates son raros, pero una carga en lote los produce.
+    Sin desempate por created_at e id, el orden queda indefinido y el saldo por
+    fila cambia entre corridas.  El total final coincide igual, asi que hay que
+    asertar los intermedios: es lo unico que distingue lo correcto de lo roto.
     """
     for amount in ("10.00", "20.00", "30.00"):
-        cash.record(date(2026, 9, 3), CashMovementType.ENTRADA, Decimal(amount))
+        cash.record(datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal(amount))
 
     primera = [balance for _, balance in cash.ledger()]
     segunda = [balance for _, balance in cash.ledger()]
     assert primera == segunda
-    assert primera[-1] == Decimal("60.00")
+    assert primera == [Decimal("10.00"), Decimal("30.00"), Decimal("60.00")]
 
 
 def test_ledger_is_empty_before_anything_is_recorded(cash):
@@ -299,18 +331,18 @@ def test_ledger_is_empty_before_anything_is_recorded(cash):
     assert cash.owner_balance() == Decimal("0.00")
 ```
 
-- [ ] **Step 2: Correr los tests para verificar que fallan**
+- [ ] **Step 3: Correr los tests para verificar que fallan**
 
 Run: `venv/bin/python -m pytest tests/test_cash_service.py -v`
 Expected: FAIL con `ModuleNotFoundError: app.services.cash_service`.
 
-- [ ] **Step 3: Escribir el repositorio**
+- [ ] **Step 4: Escribir el repositorio**
 
 `app/repositories/cash_movement_repository.py`:
 
 ```python
 import uuid
-from datetime import date
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -345,27 +377,28 @@ class CashMovementRepository:
 
     def get_all(
         self,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[CashMovement]:
         stmt = select(CashMovement)
-        if start_date is not None:
-            stmt = stmt.where(CashMovement.movement_date >= start_date)
-        if end_date is not None:
-            stmt = stmt.where(CashMovement.movement_date <= end_date)
-        # created_at e id desempatan: sin ellos, dos movimientos del mismo dia
-        # salen en orden indefinido y el saldo acumulado deja de ser reproducible.
+        if start is not None:
+            stmt = stmt.where(CashMovement.occurred_at >= start)
+        if end is not None:
+            stmt = stmt.where(CashMovement.occurred_at <= end)
+        # created_at e id desempatan.  Con occurred_at los empates son raros,
+        # pero una carga en lote los produce, y sin desempate el orden queda
+        # indefinido y el saldo acumulado deja de ser reproducible.
         stmt = stmt.order_by(
-            CashMovement.movement_date, CashMovement.created_at, CashMovement.id
+            CashMovement.occurred_at, CashMovement.created_at, CashMovement.id
         ).limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
 
-    def get_running_balance(self, as_of: Optional[date] = None) -> Decimal:
+    def get_running_balance(self, as_of: Optional[datetime] = None) -> Decimal:
         stmt = select(func.coalesce(func.sum(_signed_amount()), 0))
         if as_of is not None:
-            stmt = stmt.where(CashMovement.movement_date <= as_of)
+            stmt = stmt.where(CashMovement.occurred_at <= as_of)
         return Decimal(str(self.db.execute(stmt).scalar_one()))
 
     def get_owner_balance(self) -> Decimal:
@@ -390,13 +423,13 @@ class CashMovementRepository:
         return Decimal(str(self.db.execute(select(contributed - withdrawn)).scalar_one()))
 ```
 
-- [ ] **Step 4: Escribir el servicio**
+- [ ] **Step 5: Escribir el servicio**
 
 `app/services/cash_service.py`:
 
 ```python
 import uuid
-from datetime import date
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
@@ -428,7 +461,7 @@ class CashService:
 
     def record(
         self,
-        movement_date: date,
+        occurred_at: datetime,
         type: CashMovementType,
         amount: Decimal,
         payment_method: Optional[PaymentMethod] = None,
@@ -441,7 +474,7 @@ class CashService:
             raise ValueError("El monto de un movimiento de caja debe ser mayor a 0")
 
         movement = CashMovement(
-            movement_date=movement_date,
+            occurred_at=occurred_at,
             type=type,
             amount=amount,
             payment_method=payment_method,
@@ -453,7 +486,7 @@ class CashService:
         self.db.commit()
         return created
 
-    def running_balance(self, as_of: Optional[date] = None) -> Decimal:
+    def running_balance(self, as_of: Optional[datetime] = None) -> Decimal:
         return self._money(self.repo.get_running_balance(as_of=as_of))
 
     def owner_balance(self) -> Decimal:
@@ -461,11 +494,9 @@ class CashService:
         return self._money(self.repo.get_owner_balance())
 
     def ledger(
-        self, start_date: Optional[date] = None, end_date: Optional[date] = None
+        self, start: Optional[datetime] = None, end: Optional[datetime] = None
     ) -> list[tuple[CashMovement, Decimal]]:
-        movements = self.repo.get_all(
-            start_date=start_date, end_date=end_date, limit=10_000, offset=0
-        )
+        movements = self.repo.get_all(start=start, end=end, limit=10_000, offset=0)
         balance = Decimal("0.00")
         out: list[tuple[CashMovement, Decimal]] = []
         for m in movements:
@@ -474,20 +505,32 @@ class CashService:
         return out
 ```
 
-- [ ] **Step 5: Correr los tests**
+- [ ] **Step 6: Correr los tests**
 
 Run: `venv/bin/python -m pytest tests/test_cash_service.py -v`
 Expected: PASS (5 tests).
 
-- [ ] **Step 6: Correr toda la suite**
+- [ ] **Step 7: Actualizar el test de la Task 1**
+
+`tests/test_payment_method.py` inserta en `cash_movements` usando `movement_date`, que esta
+task acaba de borrar. Reemplazar en sus dos inserts:
+
+```python
+                    "INSERT INTO cash_movements (occurred_at, type, amount, payment_method) "
+                    f"VALUES ('2026-09-23T09:00:00Z', CAST('entrada' AS cash_movement_type_enum), 10, {value})"
+```
+
+Es el precio normal de cambiar un esquema: los tests que lo tocan se actualizan con él.
+
+- [ ] **Step 8: Correr toda la suite**
 
 Run: `venv/bin/python -m pytest tests/ -v`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add app/repositories/cash_movement_repository.py app/services/cash_service.py tests/test_cash_service.py
+git add app/models/cash_movement.py alembic/versions/ app/repositories/ app/services/cash_service.py tests/
 git commit -m "feat: Add the cash book service the agent's skills depend on"
 ```
 
@@ -1779,3 +1822,231 @@ git commit -m "refactor: Extract profit report aggregation"
 - **Dos migraciones**, cada una con su asunto: `payment_method` (Task 1) y `avg_interval_days` (Task 6). Anotar los hashes: el backfill de la Task 7 corre después de la segunda.
 - **El backfill contra `db_v2` no es parte del plan.** Es un paso de operador, con `--dry-run` primero.
 - Si `test_models_and_migrations_do_not_drift` falla en cualquier momento, parar: los modelos y las migraciones divergieron y todo lo que venga después hereda el problema.
+
+---
+
+### Task 9: Instantes y zona de negocio
+
+Task añadida después de escribir el plan. Nace de una pregunta sobre cómo guardar la hora de una venta, y al medirlo apareció un bug vivo: **106 filas muestran el día equivocado** en el panel.
+
+**Files:**
+- Modify: `app/core/config.py` (constante de zona)
+- Create: `app/core/datetime_utils.py`
+- Modify: `app/models/sale.py`, `app/models/purchase.py`, `app/models/cash_movement.py`
+- Modify: `app/schemas/sale.py`, `app/schemas/purchase.py`, `app/schemas/product.py`
+- Modify: `app/services/customer_service.py`, `app/services/product_service.py`, `app/services/purchase_service.py`, `app/services/sales/orchestrator.py`
+- Create: `alembic/versions/<rev>_occurred_at.py` (generada) — tercera migración del plan
+- Create: `tests/test_business_timezone.py`
+
+**Interfaces:**
+- Produces:
+  - `settings.BUSINESS_TIMEZONE: str = "America/Guatemala"`.
+  - `to_business_tz(value: datetime) -> datetime`.
+  - `format_business_date(value) -> str` → `"%d/%m/%Y"` en zona de negocio.
+  - `format_business_datetime(value) -> str` → `"%d/%m/%Y %H:%M"` en zona de negocio.
+  - `sales.occurred_at`, `purchases.occurred_at` — `timestamptz` nullable.
+
+`cash_movements` ya nació con `occurred_at` en la Task 2; esta task no lo toca.
+
+**El bug, medido:** los `_formatted` se generan con `strftime` sobre un datetime en UTC, sin convertir. Guatemala está a UTC−6, así que toda fila registrada entre 00:00 y 06:00 UTC muestra el día siguiente. Afecta a `created_at_formatted` y `updated_at_formatted`; **no** a `date_formatted` de las ventas, porque `sale.date` es una columna `Date` sin hora.
+
+**Lo que NO cambia:** los campos `_formatted` se quedan. El panel los usa para mostrar y romperlos no aporta nada. `created_at` y `updated_at` sí pasan de `str` truncado a `datetime` real — confirmado con el usuario que el panel no los lee directamente.
+
+- [ ] **Step 1: Escribir los tests que fallan**
+
+`tests/test_business_timezone.py`:
+
+```python
+from datetime import date, datetime, timezone
+from decimal import Decimal
+
+from app.core.config import settings
+from app.core.datetime_utils import (
+    format_business_date,
+    format_business_datetime,
+    to_business_tz,
+)
+
+
+def test_business_timezone_is_configured():
+    assert settings.BUSINESS_TIMEZONE == "America/Guatemala"
+
+
+def test_a_late_night_sale_keeps_its_own_day():
+    """Caso real: 2026-04-07 03:48 UTC son las 21:48 del 6 en Guatemala.
+
+    El panel venia mostrando 07/04 para 78 de 156 ventas.
+    """
+    utc = datetime(2026, 4, 7, 3, 48, 44, tzinfo=timezone.utc)
+    assert format_business_date(utc) == "06/04/2026"
+    assert to_business_tz(utc).date() == date(2026, 4, 6)
+
+
+def test_a_midday_timestamp_is_unaffected():
+    utc = datetime(2026, 8, 27, 17, 26, 44, tzinfo=timezone.utc)
+    assert format_business_date(utc) == "27/08/2026"
+
+
+def test_datetime_format_shows_the_local_hour():
+    utc = datetime(2026, 4, 7, 3, 48, 44, tzinfo=timezone.utc)
+    assert format_business_datetime(utc) == "06/04/2026 21:48"
+
+
+def test_a_naive_datetime_is_assumed_utc_not_silently_local():
+    """Un naive que se interprete en la zona del servidor es como nacen los
+    desfases de seis horas."""
+    naive = datetime(2026, 4, 7, 3, 48, 44)
+    assert format_business_date(naive) == "06/04/2026"
+
+
+def test_none_formats_as_empty_not_as_a_crash():
+    assert format_business_date(None) == ""
+    assert format_business_datetime(None) == ""
+
+
+def test_occurred_at_exists_and_is_timestamptz(test_engine, migrated_schema):
+    from sqlalchemy import text
+
+    with test_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT table_name, is_nullable, data_type "
+                "FROM information_schema.columns "
+                "WHERE table_schema = :s AND column_name = 'occurred_at'"
+            ),
+            {"s": migrated_schema},
+        ).all()
+
+    by_table = {r[0]: (r[1], r[2]) for r in rows}
+    assert by_table["sales"] == ("YES", "timestamp with time zone")
+    assert by_table["purchases"] == ("YES", "timestamp with time zone")
+    # La caja nace con el instante en la Task 2: NOT NULL, sin filas historicas.
+    assert by_table["cash_movements"] == ("NO", "timestamp with time zone")
+```
+
+- [ ] **Step 2: Correr los tests para verificar que fallan**
+
+Run: `venv/bin/python -m pytest tests/test_business_timezone.py -v`
+Expected: FAIL con `ModuleNotFoundError: app.core.datetime_utils`.
+
+- [ ] **Step 3: Añadir la zona a la configuración**
+
+En `app/core/config.py`, dentro de `Settings`:
+
+```python
+    # Zona del negocio.  Los reportes agrupan por dia de negocio y las fechas se
+    # muestran en esta zona para todo el mundo: una venta ocurrio en Guatemala,
+    # y verla como otro dia desde otra zona rompe el vinculo con el hecho real.
+    BUSINESS_TIMEZONE: str = "America/Guatemala"
+```
+
+- [ ] **Step 4: Escribir el módulo de fechas**
+
+`app/core/datetime_utils.py`:
+
+```python
+from datetime import date, datetime, timezone
+from typing import Optional, Union
+from zoneinfo import ZoneInfo
+
+from app.core.config import settings
+
+DATE_FORMAT = "%d/%m/%Y"
+DATETIME_FORMAT = "%d/%m/%Y %H:%M"
+
+
+def business_tz() -> ZoneInfo:
+    return ZoneInfo(settings.BUSINESS_TIMEZONE)
+
+
+def to_business_tz(value: datetime) -> datetime:
+    """Proyecta un instante a la zona del negocio.
+
+    Un datetime naive se asume UTC en vez de interpretarse en la zona del
+    proceso: el servidor corre en UTC y el escritorio no, y esa diferencia
+    silenciosa es de donde salen los desfases de seis horas.
+    """
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(business_tz())
+
+
+def format_business_date(value: Optional[Union[datetime, date]]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return to_business_tz(value).strftime(DATE_FORMAT)
+    # Un date puro no tiene hora: no hay nada que convertir.
+    return value.strftime(DATE_FORMAT)
+
+
+def format_business_datetime(value: Optional[datetime]) -> str:
+    if value is None:
+        return ""
+    return to_business_tz(value).strftime(DATETIME_FORMAT)
+```
+
+- [ ] **Step 5: Añadir `occurred_at` a los modelos**
+
+En `app/models/sale.py` y `app/models/purchase.py` (clase `Purchase`):
+
+```python
+    # El instante exacto de la venta, cuando se conoce.  NULL en las filas
+    # historicas: no sabemos a que hora fue, e inventarlo seria peor.
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+```
+
+`cash_movements` no se toca: la Task 2 ya la creó con `occurred_at`.
+
+- [ ] **Step 6: Generar y revisar la migración**
+
+```bash
+TEST_DATABASE_URL=postgresql://revenew@localhost:55432/revenew_test \
+POSTGRES_SCHEMA=gen_tmp3 \
+DATABASE_URL=postgresql://revenew@localhost:55432/revenew_test \
+  venv/bin/python -m alembic revision --autogenerate -m "occurred at instants"
+```
+
+Revisar: las dos columnas nuevas son nullable, no llevan `server_default`, y ninguna operación emite `schema=`. **No debe aparecer nada de `cash_movements`** — si sale, es que la Task 2 no se aplicó.
+
+- [ ] **Step 7: Corregir el formateo en los cuatro servicios**
+
+Reemplazar cada `strftime` de fechas por los helpers. En `app/services/customer_service.py:68-79` y sus equivalentes en `product_service.py`, `purchase_service.py` y `sales/orchestrator.py`:
+
+```python
+    customer_dict["created_at"] = customer.created_at          # datetime, sin truncar
+    customer_dict["updated_at"] = customer.updated_at
+    customer_dict["created_at_formatted"] = format_business_datetime(customer.created_at)
+    customer_dict["updated_at_formatted"] = format_business_datetime(customer.updated_at)
+```
+
+`date_formatted` de las ventas sigue usando `format_business_date(sale.date)`: `sale.date` es un `date` puro y el helper lo pasa tal cual, sin conversión.
+
+- [ ] **Step 8: Cambiar el tipo en los tres schemas**
+
+En `app/schemas/sale.py:155-156`, `app/schemas/purchase.py:75-76` y `app/schemas/product.py:119-120`:
+
+```python
+    created_at: datetime
+    updated_at: datetime
+```
+
+Los cuatro campos `_formatted` **se quedan**: el panel los usa para mostrar. Añadir `from datetime import datetime` donde falte.
+
+- [ ] **Step 9: Correr toda la suite**
+
+Run: `venv/bin/python -m pytest tests/ -v`
+Expected: PASS.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add app/core/ app/models/ app/schemas/ app/services/ app/repositories/ alembic/versions/ tests/test_business_timezone.py
+git commit -m "fix: Format dates in the business timezone and record exact instants"
+```
+
+> **Nota para el operador:** esta migración corre contra `db_v2` en vivo. Las dos
+> columnas nuevas son nullable, así que no reescribe ni una fila existente. El efecto visible es que 106 filas dejan de
+> mostrar el día equivocado en el panel.
