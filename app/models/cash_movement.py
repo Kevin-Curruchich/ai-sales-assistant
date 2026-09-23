@@ -10,7 +10,6 @@ from sqlalchemy import (
     Enum as SQLEnum,
     ForeignKey,
     Numeric,
-    String,
     Text,
     Uuid,
     func,
@@ -18,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
 class CashMovementType(str, PyEnum):
@@ -55,7 +55,9 @@ class CashMovement(Base):
         nullable=False,
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    payment_method: Mapped[Optional[PaymentMethod]] = mapped_column(
+        PAYMENT_METHOD_COLUMN, nullable=True
+    )
     sale_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("sales.id", ondelete="SET NULL"), nullable=True, index=True
     )
