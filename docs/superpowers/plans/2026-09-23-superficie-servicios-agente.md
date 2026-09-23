@@ -1013,6 +1013,9 @@ def detect_habitual_margin(
 
     Una rebaja puntual no reescribe el patron: rompe la consistencia entre los
     tres y el resultado es None, que es exactamente lo que pide la skill.
+
+    `tolerance` mide solo la consistencia entre las tres ventas.  La comparacion
+    contra el estandar es exacta.
     """
     if len(observed_margins) < MIN_SALES_FOR_PATTERN:
         return None
@@ -1022,7 +1025,12 @@ def detect_habitual_margin(
         return None
 
     habitual = _money(sum(recent) / len(recent))
-    if abs(habitual - _money(base_margin)) <= tolerance:
+    # Distinto del estandar significa distinto, no "distinto por mas de la
+    # tolerancia".  Usar aqui los mismos Q2 que miden la consistencia entre si
+    # se tragaria el caso que motiva esta funcion: un cliente que paga Q36 donde
+    # el estandar son Q37 tiene un margen habitual de 2.50 contra 3.50 — una
+    # diferencia de Q1 que quedaria dentro de la tolerancia y nunca se detectaria.
+    if habitual == _money(base_margin):
         return None
     return habitual
 ```
@@ -1109,7 +1117,7 @@ git commit -m "feat: Suggest each customer's habitual price instead of the stand
 
 **Interfaces:**
 - Produces:
-  - `ALPHA = Decimal("0.3")`, `MIN_INTERVAL_DAYS = 1`.
+  - `ALPHA = Decimal("0.3")`.
   - `ewma_interval(intervals: list[int], alpha=ALPHA) -> Decimal`.
   - `confidence_for(total_purchases: int) -> str`.
   - `project(purchase_dates: list[date]) -> tuple[Optional[Decimal], Optional[date], str, str]` → `(intervalo, fecha_proyectada, metodo, confianza)`.
@@ -1147,14 +1155,26 @@ def test_ewma_weights_the_most_recent_observation_most():
     assert subiendo > bajando
 
 
-def test_same_day_repeat_purchase_never_projects_zero_days():
-    """Dos compras el mismo dia dan intervalo 0; proyectar 'hoy' para siempre
-    dejaria al cliente en alerta permanente."""
-    interval, next_date, _, _ = project(
+def test_same_day_purchases_count_as_one_occasion():
+    """Tres ventas al mismo cliente el mismo dia son UNA ocasion de compra.
+
+    Sin deduplicar, los intervalos de 0 dias arrastrarian el EWMA a cero y el
+    cliente quedaria proyectado para 'hoy' de forma permanente.  Con una sola
+    fecha distinta no hay historial suficiente, que es la respuesta honesta.
+    """
+    interval, next_date, _, confidence = project(
         [date(2026, 9, 1), date(2026, 9, 1), date(2026, 9, 1)]
     )
-    assert interval >= Decimal("1")
-    assert next_date > date(2026, 9, 1)
+    assert (interval, next_date, confidence) == (None, None, "insufficient")
+
+
+def test_repeats_within_a_real_history_do_not_shrink_the_interval():
+    """Dos ventas el dia 1 y una el 11: el intervalo es 10, no 5."""
+    interval, next_date, _, _ = project(
+        [date(2026, 9, 1), date(2026, 9, 1), date(2026, 9, 11)]
+    )
+    assert interval == Decimal("10")
+    assert next_date == date(2026, 9, 21)
 
 
 def test_a_single_purchase_is_not_projected():
@@ -1205,7 +1225,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 ALPHA = Decimal("0.3")
-MIN_INTERVAL_DAYS = Decimal("1")
 METHOD_EWMA = "ewma"
 FOUR_PLACES = Decimal("0.0001")
 
@@ -1253,13 +1272,10 @@ def project(
         return None, None, METHOD_EWMA, confidence
 
     intervals = [(dates[i + 1] - dates[i]).days for i in range(len(dates) - 1)]
-    estimate = ewma_interval(intervals)
-
-    # Piso de un dia: dos compras el mismo dia dan intervalo 0, y proyectar
-    # "hoy" dejaria al cliente en alerta permanente.
-    estimate = max(estimate, MIN_INTERVAL_DAYS).quantize(
-        FOUR_PLACES, rounding=ROUND_HALF_UP
-    )
+    # No hace falta un piso de un dia: sorted(set(...)) garantiza fechas
+    # distintas, asi que todo intervalo es >= 1 y el EWMA de valores >= 1
+    # tambien lo es.  Un piso aqui seria una rama que ningun test puede alcanzar.
+    estimate = ewma_interval(intervals).quantize(FOUR_PLACES, rounding=ROUND_HALF_UP)
     next_date = dates[-1] + timedelta(days=int(estimate.to_integral_value(ROUND_HALF_UP)))
     return estimate, next_date, METHOD_EWMA, confidence
 ```
@@ -1689,7 +1705,8 @@ git commit -m "feat: Add an idempotent projection backfill"
 - Create: `tests/test_sales_reporting.py`
 
 **Interfaces:**
-- Consumes: `margins` de `pricing` (Task 5).
+- Consumes: nada de tasks anteriores. `build_profit_rows` lee `item.gross_profit_total`, que
+  ya viene calculado en la venta; no recalcula márgenes.
 - Produces: `build_profit_rows(sales, group_by) -> list[ProfitReportRow]`, función pura sobre ventas ya cargadas.
 
 - [ ] **Step 1: Escribir el test que falla**
