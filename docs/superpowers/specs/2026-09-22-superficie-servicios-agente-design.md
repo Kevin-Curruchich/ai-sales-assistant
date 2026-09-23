@@ -154,9 +154,27 @@ desaparezcan del calendario. Es lo que manda el `AGENTS.md`.
 
 Nuevos desde cero. Tipos `entrada`, `salida`, `aporte_socio`, `retiro_socio`.
 
-`saldo_acumulado` se **calcula al leer** con `SUM(...) OVER (ORDER BY movement_date)`, nunca
-se almacena — decisión ya tomada en el spec de migraciones y que la hoja de cálculo original
-demostró correcta al desincronizarse.
+La tabla está vacía, así que `movement_date: Date` pasa a **`occurred_at: timestamptz`** antes
+de construir nada encima: un instante hace que el orden del libro casi nunca empate, y evita
+levantar repositorio, servicio y tests contra una columna que habría que reemplazar después.
+
+`saldo_acumulado` se **calcula al leer**, nunca se almacena — decisión ya tomada en el spec
+de migraciones y que la hoja de cálculo original demostró correcta al desincronizarse.
+
+Una advertencia sobre cómo calcularlo, porque la forma obvia está mal. El marco por defecto
+de una función de ventana con `ORDER BY` es `RANGE`, no `ROWS`, y `RANGE` trata como pares a
+todas las filas con el mismo valor de orden: **les da a todas el acumulado del grupo entero**.
+Tres movimientos del mismo instante mostrarían los tres el mismo saldo. Verificado contra
+Postgres:
+
+```
+SUM(monto) OVER (ORDER BY fecha)                               -> 188, 188, 188
+SUM(monto) OVER (ORDER BY fecha, id ROWS UNBOUNDED PRECEDING)  -> 115, 152, 188
+```
+
+El total final coincide en ambos casos, así que un test que solo mire el último valor pasa
+igual. `CashService.ledger()` acumula en Python sobre una lista ya ordenada por
+`(occurred_at, created_at, id)`, lo que esquiva el problema y hace explícito el desempate.
 
 `owner_balance` (lo que el negocio le debe a Kevin) = suma de `aporte_socio` − suma de
 `retiro_socio`.
@@ -215,6 +233,44 @@ Es idempotente: recalcula desde el historial, no acumula.
 **Migración `005`, separada:** los `CHECK` de `payment_method` en las tres tablas. Va aparte
 de la `004` siguiendo el patrón del repo — una revisión, un asunto — para que cada una se
 revierta sin arrastrar a la otra.
+
+## Instantes y zona de negocio
+
+Añadido después de aprobar el spec, a raíz de una pregunta sobre cómo guardar la hora de una
+venta. Al medirlo apareció un bug vivo.
+
+**El bug:** los campos `_formatted` se generan con `strftime` sobre un datetime en UTC, sin
+convertir. Guatemala está en UTC−6, así que toda fila registrada entre 00:00 y 06:00 UTC
+muestra el día siguiente. Medido contra `db_v2`: **106 filas** — 78 de 156 ventas, 20 de 38
+compras, 7 de 21 clientes, 1 de 2 productos. Las ventas se registran de noche, y las 21:48 del
+6 de abril en Guatemala son las 03:48 del 7 en UTC.
+
+Afecta a `created_at_formatted` y `updated_at_formatted`. **No** a `date_formatted` de las
+ventas: `sale.date` es una columna `Date` sin hora, escrita explícitamente.
+
+**Qué se hace:**
+
+- `settings.BUSINESS_TIMEZONE = "America/Guatemala"` y un módulo `app/core/datetime_utils.py`
+  que convierte antes de formatear. Un datetime naive se asume UTC en vez de interpretarse en
+  la zona del proceso, que es de donde salen los desfases de seis horas.
+- `sales.occurred_at` y `purchases.occurred_at` como `timestamptz` **nullable**. Las filas
+  históricas quedan en NULL: no se sabe a qué hora fue cada venta, y rellenarlo con medianoche
+  sería inventar datos.
+- `created_at` y `updated_at` pasan de `str` truncado a `datetime` real en los tres schemas
+  de respuesta.
+
+**Los campos `_formatted` se quedan.** El panel los usa para mostrar; romperlos no aporta nada
+y obligaría a un cambio coordinado en otro repositorio. Lo que se arregla es que el campo
+crudo deje de venir truncado y que el formateado deje de mentir el día.
+
+**Por qué la zona va clavada y no viene del cliente:** una venta ocurrió en Guatemala. Verla
+como otro día desde otra zona rompe el vínculo con el hecho real, y los reportes agrupan por
+día de negocio — si la agrupación usara la zona del que mira, dos personas verían totales
+diarios distintos sobre los mismos datos. En SQL eso es
+`(occurred_at AT TIME ZONE 'America/Guatemala')::date`.
+
+Guardar el instante en UTC es justamente lo que deja elegir: la zona de presentación es un
+parámetro de una línea, no una propiedad del dato.
 
 ## Verificación
 
