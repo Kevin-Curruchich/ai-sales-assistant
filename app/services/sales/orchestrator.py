@@ -23,6 +23,7 @@ from app.services.sales.pricing import (
     suggested_unit_price as _pricing_suggested_unit_price,
 )
 from app.services.sales.projection import project
+from app.services.sales.reporting import build_profit_rows
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -33,7 +34,6 @@ from app.schemas.sale import (
     FollowUpResponse,
     LotAllocationPreview,
     ProfitReportResponse,
-    ProfitReportRow,
     SaleCreate,
     SaleItemCreate,
     SaleItemLotAllocationResponse,
@@ -850,42 +850,11 @@ class SaleService:
         end_date: Optional[date] = None,
         limit: int = 100,
     ) -> ProfitReportResponse:
-        rows: dict[str, ProfitReportRow] = {}
         sales = self.sale_repo.get_all(start_date=start_date, end_date=end_date, limit=10000, offset=0)
 
-        for sale in sales:
-            for item in sale.items:
-                if group_by == "sale":
-                    key = str(sale.id)
-                    label = f"{sale.date} - {sale.customer.name if sale.customer else 'Unknown'}"
-                elif group_by == "customer":
-                    key = str(sale.customer_id)
-                    label = sale.customer.name if sale.customer else "Unknown"
-                elif group_by == "product":
-                    key = str(item.product_id)
-                    label = item.product.name if item.product else "Unknown"
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="group_by must be one of: sale, customer, product",
-                    )
+        rows = build_profit_rows(sales, group_by=group_by)
 
-                if key not in rows:
-                    rows[key] = ProfitReportRow(
-                        key=key,
-                        label=label,
-                        quantity=Decimal("0"),
-                        revenue=Decimal("0.00"),
-                        gross_profit=Decimal("0.00"),
-                    )
-
-                rows[key].quantity += item.quantity
-                rows[key].revenue = self._money(rows[key].revenue + self._money(item.subtotal))
-                rows[key].gross_profit = self._money(
-                    rows[key].gross_profit + self._money(item.gross_profit_total)
-                )
-
-        ordered = sorted(rows.values(), key=lambda r: r.gross_profit, reverse=True)
+        ordered = sorted(rows, key=lambda r: r.gross_profit, reverse=True)
         return ProfitReportResponse(data=ordered[:limit])
 
     # ------------------------------------------------------------------
