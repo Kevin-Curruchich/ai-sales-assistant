@@ -787,10 +787,15 @@ class SaleService:
             if c.customer_id not in customer_worst or days < customer_worst[c.customer_id]:
                 customer_worst[c.customer_id] = days
 
+        # Los tres tiles de "proximos N dias" llevan cota inferior.  Sin ella
+        # un cliente vencido hace 40 dias contaba en los tres, y con todos los
+        # clientes vencidos los cuatro numeros quedaban iguales -- dejando de
+        # distinguir justo cuando mas falta hace.  `d == 0` (vence hoy) cuenta
+        # como proximo, no como vencido.
         overdue = sum(1 for d in customer_worst.values() if d < 0)
-        next_7 = sum(1 for d in customer_worst.values() if d <= 7)
-        next_14 = sum(1 for d in customer_worst.values() if d <= 14)
-        next_30 = sum(1 for d in customer_worst.values() if d <= 30)
+        next_7 = sum(1 for d in customer_worst.values() if 0 <= d <= 7)
+        next_14 = sum(1 for d in customer_worst.values() if 0 <= d <= 14)
+        next_30 = sum(1 for d in customer_worst.values() if 0 <= d <= 30)
 
         return FollowUpMetrics(overdue=overdue, next7Days=next_7, next14Days=next_14, next30Days=next_30)
 
