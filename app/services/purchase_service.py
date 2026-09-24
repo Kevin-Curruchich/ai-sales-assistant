@@ -4,7 +4,7 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
-from app.models.cash_movement import CashMovementType
+from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
@@ -291,7 +291,8 @@ class PurchaseService:
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
     def cancel(self, purchase_id: uuid.UUID) -> PurchaseResponse:
-        """Cancel a purchase. If it was confirmed, reverse the stock adjustments."""
+        """Cancel a purchase. If it was confirmed, reverse the stock adjustments
+        and the cash exit that confirming it created."""
         purchase = self.get_by_id(purchase_id)
         affected_product_ids: set[uuid.UUID] = set()
 
@@ -328,6 +329,15 @@ class PurchaseService:
                 product.stock = new_stock
                 item.remaining_quantity = 0
                 affected_product_ids.add(item.product_id)
+
+            # confirm() rejects this whole method above (consumed_quantity > 0
+            # raises) unless every unit is still unsold, so cancelling here is
+            # a full undo, not a partial refund: nothing downstream depends on
+            # this purchase having happened, so its SALIDA is removed rather
+            # than offset.
+            stale_movements = self.db.query(CashMovement).filter_by(purchase_id=purchase.id).all()
+            for movement in stale_movements:
+                self.db.delete(movement)
 
         purchase.status = "cancelled"
         self.db.commit()

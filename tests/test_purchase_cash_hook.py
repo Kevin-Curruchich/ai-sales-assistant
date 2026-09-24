@@ -25,3 +25,29 @@ def test_confirming_twice_does_not_duplicate_the_cash_exit(db_session, seeded_pu
     service.confirm(seeded_purchase_draft.id)
 
     assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
+
+
+def test_cancelling_a_confirmed_purchase_removes_its_cash_exit(db_session, seeded_purchase_draft):
+    service = PurchaseService(db_session)
+    service.confirm(seeded_purchase_draft.id)
+    assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
+
+    service.cancel(seeded_purchase_draft.id)
+
+    assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 0
+
+
+def test_cancelling_a_draft_purchase_records_nothing_to_remove(db_session, seeded_purchase_draft):
+    service = PurchaseService(db_session)
+    service.cancel(seeded_purchase_draft.id)
+
+    assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 0
+
+
+def test_cancelling_twice_does_not_error_after_the_cash_exit_is_gone(db_session, seeded_purchase_draft):
+    service = PurchaseService(db_session)
+    service.confirm(seeded_purchase_draft.id)
+    service.cancel(seeded_purchase_draft.id)
+    service.cancel(seeded_purchase_draft.id)
+
+    assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 0
