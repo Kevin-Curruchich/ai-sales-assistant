@@ -379,16 +379,26 @@ class SaleService:
                 lock_for_update=False,
             )
 
-            to_consume = item_data.quantity
+            # Same cost basis engine as create(): rounds once, at the end,
+            # so the preview reports the exact cents the sale will store.
             lot_previews: list[LotAllocationPreview] = []
-            total_item_cost = Decimal("0.00")
+            try:
+                allocations, cost_basis = allocate_fifo(lots, item_data.quantity)
+            except InsufficientLots as exc:
+                available_qty = exc.available
+                warnings.append(
+                    f"Only {available_qty} of {item_data.quantity} units have confirmed FIFO lot cost. "
+                    "This sale would be blocked at creation time."
+                )
+                # Best-effort: price whatever quantity the lots actually cover,
+                # through the same allocate_fifo path, instead of inventing a
+                # separate per-iteration rounding for the partial case.
+                if available_qty > 0:
+                    allocations, cost_basis = allocate_fifo(lots, available_qty)
+                else:
+                    allocations, cost_basis = [], Decimal("0.00")
 
-            for lot in lots:
-                if to_consume <= 0:
-                    break
-                take = min(lot.remaining_quantity, to_consume)
-                if take <= 0:
-                    continue
+            for lot, take in allocations:
                 lot_previews.append(
                     LotAllocationPreview(
                         purchase_item_id=lot.id,
@@ -399,22 +409,6 @@ class SaleService:
                         quantity_taken=take,
                     )
                 )
-                total_item_cost = self._money(total_item_cost + self._money(lot.unit_cost) * take)
-                to_consume -= take
-
-            if to_consume > 0:
-                available_qty = item_data.quantity - to_consume
-                warnings.append(
-                    f"Only {available_qty} of {item_data.quantity} units have confirmed FIFO lot cost. "
-                    "This sale would be blocked at creation time."
-                )
-                # Best-effort: use whatever cost we could compute
-                if available_qty > 0:
-                    cost_basis = self._money(total_item_cost / available_qty)
-                else:
-                    cost_basis = Decimal("0.00")
-            else:
-                cost_basis = self._money(total_item_cost / item_data.quantity)
 
             suggested = self._suggested_unit_price(product, cost_basis)
 
