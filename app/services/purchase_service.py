@@ -4,14 +4,16 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from app.models.cash_movement import CashMovementType
 from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
+from app.services.cash_service import CashService
 from app.services.sales import SaleService
 from app.schemas.purchase import (
     PurchaseCreate, PurchaseUpdate, PurchaseItemResponse, PurchaseResponse,
 )
-from app.core.datetime_utils import format_business_datetime
+from app.core.datetime_utils import business_midnight, format_business_datetime
 
 
 class PurchaseService:
@@ -19,6 +21,7 @@ class PurchaseService:
         self.repo = PurchaseRepository(db)
         self.product_repo = ProductRepository(db)
         self.sale_service = SaleService(db)
+        self.cash_service = CashService(db)
         self.db = db
 
     def _money(self, value: Decimal | float | int | None) -> Decimal:
@@ -266,6 +269,20 @@ class PurchaseService:
             affected_product_ids.add(item.product_id)
 
         purchase.status = "confirmed"
+
+        # commit=False: la salida de caja y la confirmacion son una sola
+        # transaccion (mismo patron que SaleService.create, Task 4). Un
+        # borrador no gasto nada -- el movimiento existe solo a partir de aqui.
+        self.cash_service.record(
+            occurred_at=business_midnight(purchase.date),
+            type=CashMovementType.SALIDA,
+            amount=purchase.total,
+            payment_method=purchase.payment_method,
+            purchase_id=purchase.id,
+            note=None,
+            commit=False,
+        )
+
         self.db.commit()
         self.sale_service.recalculate_sale_snapshots_for_products(
             product_ids=affected_product_ids,
