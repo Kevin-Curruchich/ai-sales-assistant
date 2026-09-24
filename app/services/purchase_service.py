@@ -169,6 +169,7 @@ class PurchaseService:
             notes=data.notes,
             total=Decimal("0.00"),
             status="draft",
+            payment_method=data.medioPago,
         )
         self.db.add(purchase)
         self.db.flush()  # get purchase.id before adding items

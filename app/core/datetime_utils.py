@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional, Union
 from zoneinfo import ZoneInfo
 
@@ -10,6 +10,11 @@ DATETIME_FORMAT = "%d/%m/%Y %H:%M"
 
 def business_tz() -> ZoneInfo:
     return ZoneInfo(settings.BUSINESS_TIMEZONE)
+
+
+def business_midnight(day: date) -> datetime:
+    """El instante en que empieza `day` en la zona del negocio."""
+    return datetime.combine(day, time.min, tzinfo=ZoneInfo(settings.BUSINESS_TIMEZONE))
 
 
 def to_business_tz(value: datetime) -> datetime:

@@ -583,6 +583,9 @@ class SaleService:
             date=data.date,
             total=total,
             is_payment_pending=data.isPaymentPending,
+            payment_method=data.medioPago,
+            payment_date=data.fechaPago,
+            occurred_at=data.occurredAt,
             items=sale_items,
         )
         sale = self.sale_repo.create(sale)
