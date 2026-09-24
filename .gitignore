@@ -57,3 +57,8 @@ revenew-*-firebase-adminsdk-*-*.json
 # ni `.env.local`: el patron `*.env` exige que el nombre TERMINE en `.env`.
 .env.*
 !.env.example
+
+# Salida de graphify.  El grafo se construye leyendo la carpeta entera y la
+# herramienta no documenta redaccion de secretos: si alguna vez se corre desde
+# la raiz, lo que haya leido no debe terminar en el repo.
+graphify-out/
