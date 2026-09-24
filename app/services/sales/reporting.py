@@ -1,10 +1,22 @@
 from decimal import ROUND_HALF_UP, Decimal
 
-from fastapi import HTTPException, status
-
 from app.schemas.sale import ProfitReportRow
 
 MONEY = Decimal("0.01")
+ALLOWED_GROUP_BY = ("sale", "customer", "product")
+
+
+class InvalidGroupBy(Exception):
+    """El group_by pedido no es uno de los soportados.
+
+    Es un error de dominio, no HTTP: el orquestador lo traduce a 422 para la
+    API, y el agente lo recibe como excepcion normal.
+    """
+
+    def __init__(self, group_by: str, allowed: tuple[str, ...] = ALLOWED_GROUP_BY):
+        self.group_by = group_by
+        self.allowed = allowed
+        super().__init__(f"group_by must be one of: {', '.join(allowed)}")
 
 
 def _money(value: Decimal | float | int | None) -> Decimal:
@@ -36,10 +48,7 @@ def build_profit_rows(sales, group_by: str = "product") -> list[ProfitReportRow]
                 key = str(item.product_id)
                 label = item.product.name if item.product else "Unknown"
             else:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="group_by must be one of: sale, customer, product",
-                )
+                raise InvalidGroupBy(group_by)
 
             if key not in rows:
                 rows[key] = ProfitReportRow(

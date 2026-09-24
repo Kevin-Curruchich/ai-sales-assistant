@@ -104,8 +104,13 @@ def test_groups_by_customer_merges_across_sales():
     assert rows[0].gross_profit == Decimal("23.50")
 
 
-def test_invalid_group_by_raises_http_exception():
-    from fastapi import HTTPException
+def test_invalid_group_by_raises_a_domain_exception_not_http():
+    """reporting.py es una superficie pura: nada de FastAPI en su interfaz.
+
+    Un agente que llama build_profit_rows en proceso, sin HTTP de por medio,
+    debe recibir una excepcion de dominio normal, no un HTTPException.
+    """
+    from app.services.sales.reporting import InvalidGroupBy
 
     sales = [
         _sale(
@@ -118,6 +123,32 @@ def test_invalid_group_by_raises_http_exception():
     ]
     try:
         build_profit_rows(sales, group_by="bogus")
+        assert False, "expected InvalidGroupBy"
+    except InvalidGroupBy as exc:
+        assert exc.group_by == "bogus"
+        assert exc.allowed == ("sale", "customer", "product")
+
+
+def test_orchestrator_translates_invalid_group_by_to_422_with_the_same_detail():
+    """El contrato HTTP se conserva: reporting.py es de dominio, la API sigue en 422."""
+    from fastapi import HTTPException
+
+    from app.services.sales.orchestrator import SaleService
+
+    service = SaleService(db=None)
+    service.sale_repo.get_all = lambda **kwargs: [
+        _sale(
+            "s1",
+            "2026-01-01",
+            "c1",
+            "Ana",
+            [_item("p1", "Carton de huevos", "1", "37.00", "3.50")],
+        )
+    ]
+
+    try:
+        service.get_profit_report(group_by="bogus")
         assert False, "expected HTTPException"
     except HTTPException as exc:
         assert exc.status_code == 422
+        assert exc.detail == "group_by must be one of: sale, customer, product"

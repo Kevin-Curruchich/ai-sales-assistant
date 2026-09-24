@@ -23,7 +23,7 @@ from app.services.sales.pricing import (
     suggested_unit_price as _pricing_suggested_unit_price,
 )
 from app.services.sales.projection import project
-from app.services.sales.reporting import build_profit_rows
+from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -852,7 +852,13 @@ class SaleService:
     ) -> ProfitReportResponse:
         sales = self.sale_repo.get_all(start_date=start_date, end_date=end_date, limit=10000, offset=0)
 
-        rows = build_profit_rows(sales, group_by=group_by)
+        try:
+            rows = build_profit_rows(sales, group_by=group_by)
+        except InvalidGroupBy as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="group_by must be one of: sale, customer, product",
+            ) from exc
 
         ordered = sorted(rows, key=lambda r: r.gross_profit, reverse=True)
         return ProfitReportResponse(data=ordered[:limit])
