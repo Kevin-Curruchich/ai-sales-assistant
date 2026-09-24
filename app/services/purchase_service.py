@@ -335,8 +335,15 @@ class PurchaseService:
             # raises) unless every unit is still unsold, so cancelling here is
             # a full undo, not a partial refund: nothing downstream depends on
             # this purchase having happened, so its SALIDA is removed rather
-            # than offset.
-            stale_movements = self.db.query(CashMovement).filter_by(purchase_id=purchase.id).all()
+            # than offset. Filtered by type as well as purchase_id: Task 8
+            # lets an aporte_socio point at the same purchase_id, and that is
+            # money a partner actually put in -- a blanket delete on
+            # purchase_id alone would erase it too.
+            stale_movements = (
+                self.db.query(CashMovement)
+                .filter_by(purchase_id=purchase.id, type=CashMovementType.SALIDA)
+                .all()
+            )
             for movement in stale_movements:
                 self.db.delete(movement)
 
