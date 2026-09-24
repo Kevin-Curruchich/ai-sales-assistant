@@ -222,8 +222,14 @@ Una venta pagada genera entrada de caja, **desde el agente y desde el panel**
 dejen el mismo rastro por donde se registren. Es un cambio de comportamiento en
 un endpoint vivo y va en el checklist de despliegue.
 
-La compra es simétrica y vive en `PurchaseService.create`: genera una `salida`
-por lo efectivamente pagado. El `aporte_socio` de los pasos 5–6 de la skill
+La compra **no** es simétrica: tiene ciclo de vida. `create()` deja
+`status="draft"` y `confirm()` es la que la vuelve real y libera los lotes. El
+movimiento de caja va en `PurchaseService.confirm()`, no en `create()` — un
+borrador todavía no gastó nada. Genera una `salida` por lo efectivamente pagado.
+
+Por eso la herramienta `registrar_compra` crea **y confirma** en una sola
+operación confirmada por vos: un borrador que el agente deja colgado es peor que
+no haberlo creado. El `aporte_socio` de los pasos 5–6 de la skill
 `registrar-compra` **no es automático** — sólo existe cuando el dinero lo pone
 un socio, y eso el agente lo pregunta antes de confirmar. Una compra pagada con
 caja del negocio genera `salida` y nada más.
