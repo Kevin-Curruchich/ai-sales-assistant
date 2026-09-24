@@ -36,7 +36,7 @@ def test_check_accepts_the_two_values_and_null(test_engine, migrated_schema):
             conn.execute(
                 text(
                     "INSERT INTO cash_movements (occurred_at, type, amount, payment_method) "
-                    f"VALUES ('2026-09-23T09:00:00Z', CAST('entrada' AS cash_movement_type_enum), 10, {value})"
+                    f"VALUES ('2026-09-23T09:00:00Z', 'entrada', 10, {value})"
                 )
             )
         total = conn.execute(text("SELECT count(*) FROM cash_movements")).scalar()
@@ -50,6 +50,6 @@ def test_check_rejects_anything_else(test_engine, migrated_schema):
             conn.execute(
                 text(
                     "INSERT INTO cash_movements (occurred_at, type, amount, payment_method) "
-                    "VALUES ('2026-09-23T09:00:00Z', CAST('entrada' AS cash_movement_type_enum), 10, 'Efectivo')"
+                    "VALUES ('2026-09-23T09:00:00Z', 'entrada', 10, 'Efectivo')"
                 )
             )
