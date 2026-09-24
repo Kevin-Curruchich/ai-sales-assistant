@@ -1,0 +1,32 @@
+# Base de datos de desarrollo local.
+#
+# Separada a proposito de docker-compose.test.yml:
+#   - los tests usan tmpfs (se borra al reiniciar docker) y crean/destruyen
+#     schemas en cada corrida; esta persiste en un volumen nombrado.
+#   - puertos distintos (55432 tests / 55433 dev) para que una corrida de
+#     tests no pueda tocar lo que estes desarrollando.
+#
+# El schema se llama `db_local`, no `db_v2`.  Es deliberado: si alguna vez
+# una conexion mal dirigida llega a Railway con la configuracion local,
+# `db_local` no existe alla y la conexion falla, en vez de escribir sobre
+# los datos reales del negocio.  El nombre distinto es el guard.
+services:
+  dev-db:
+    image: postgres:17-alpine
+    container_name: revenew-dev-db
+    environment:
+      POSTGRES_USER: revenew
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_DB: revenew_dev
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - revenew-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U revenew -d revenew_dev"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  revenew-dev-data:

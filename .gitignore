@@ -52,3 +52,8 @@ build/
 
 # Ignore the firebase-adminsdk.json file which contains sensitive credentials
 revenew-*-firebase-adminsdk-*-*.json
+
+# Credenciales por entorno.  `.env` y `*.env` no cubren `.env.production`
+# ni `.env.local`: el patron `*.env` exige que el nombre TERMINE en `.env`.
+.env.*
+!.env.example
