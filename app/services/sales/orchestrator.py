@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.customer_product_cycle import CustomerProductCycle
-from app.models.cash_movement import CashMovementType
+from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import PurchaseItem
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
@@ -26,7 +26,7 @@ from app.services.sales.pricing import (
 )
 from app.services.sales.projection import project
 from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
-from app.core.datetime_utils import format_business_datetime
+from app.core.datetime_utils import business_midnight, format_business_datetime
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -652,7 +652,36 @@ class SaleService:
         data: SalePaymentStatusUpdate,
     ) -> SaleResponse:
         sale = self.get_by_id(sale_id)
+        was_pending = sale.is_payment_pending
         sale.is_payment_pending = data.isPaymentPending
+
+        if was_pending and not data.isPaymentPending:
+            # Pendiente -> pagada: se cobro ahora. Fija la fecha de pago si
+            # todavia no tenia una y registra la entrada de caja, compuesta
+            # con commit=False para que la venta y el movimiento sean una
+            # sola transaccion (mismo patron que SaleService.create, Task 4).
+            if sale.payment_date is None:
+                sale.payment_date = date.today()
+            self.cash_service.record(
+                occurred_at=business_midnight(sale.payment_date),
+                type=CashMovementType.ENTRADA,
+                amount=sale.total,
+                payment_method=sale.payment_method,
+                sale_id=sale.id,
+                note=None,
+                commit=False,
+            )
+        elif not was_pending and data.isPaymentPending:
+            # Pagada -> pendiente: se esta corrigiendo que el cobro no era
+            # cierto. El libro de caja no debe seguir mostrando un ingreso
+            # que, segun el estado actual de la venta, no ocurrio -- mismo
+            # invariante que una venta pendiente no registra nada al
+            # crearse. Se retira el/los movimientos de esa venta en vez de
+            # dejar una entrada que ya no refleja la realidad.
+            stale_movements = self.db.query(CashMovement).filter_by(sale_id=sale.id).all()
+            for movement in stale_movements:
+                self.db.delete(movement)
+
         self.sale_repo.update(sale)
         return self._to_sale_response(self.get_by_id(sale_id))
 
