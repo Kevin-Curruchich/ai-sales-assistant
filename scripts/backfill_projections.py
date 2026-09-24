@@ -12,12 +12,20 @@ Los ciclos con una sola compra pierden su fecha inventada y quedan marcados
 from __future__ import annotations
 
 import argparse
+import os
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import CustomerProductCycle, Sale, SaleItem
 from app.services.sales.projection import project
+
+# db_dev es el schema que .env apunta por defecto y contiene los datos reales
+# de produccion (156 ventas al momento de escribir esto). Los mismos nombres
+# que usan alembic/env.py y scripts/copy_schema_data.py: un solo par de
+# variables para aprender, no una por script.
+PROTECTED_SCHEMA = "db_dev"
+ALLOW_PROTECTED_SCHEMA_ENV_VAR = "REVENEW_ALLOW_DB_DEV"
 
 
 def _purchase_dates(session: Session, customer_id, product_id) -> list:
@@ -43,6 +51,7 @@ def backfill_projections(session: Session, dry_run: bool = False) -> dict[str, i
             and cycle.estimated_next_purchase == next_date
             and cycle.projection_method == method
             and cycle.projection_confidence == confidence
+            and cycle.total_purchases == len(set(dates))
         )
         if unchanged:
             counts["unchanged"] += 1
@@ -67,12 +76,28 @@ def backfill_projections(session: Session, dry_run: bool = False) -> dict[str, i
     return counts
 
 
+def _guard_against_protected_schema(schema: str, *, dry_run: bool) -> None:
+    if dry_run:
+        return
+    if schema == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+        raise RuntimeError(
+            f"POSTGRES_SCHEMA resolvio a {schema!r}. Ese schema tiene los datos "
+            "reales de produccion y este script no debe escribirle "
+            "silenciosamente.\n"
+            f"Si de verdad queres escribir sobre {schema!r}, seteá "
+            f"{ALLOW_PROTECTED_SCHEMA_ENV_VAR}=1 en el entorno y corré de nuevo."
+        )
+
+
 def main() -> None:
-    from app.core.database import SessionLocal
+    from app.core.database import SCHEMA, SessionLocal
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+
+    print(f"  schema resuelto: {SCHEMA!r}")
+    _guard_against_protected_schema(SCHEMA, dry_run=args.dry_run)
 
     session = SessionLocal()
     try:
