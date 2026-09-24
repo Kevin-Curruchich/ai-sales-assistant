@@ -120,10 +120,15 @@ def test_all_three_counters_in_a_single_run(session):
 
     Antes del fix, `unchanged` solo comparaba cuatro de los cinco campos que
     escribe el bloque de write, asi que un total_purchases desactualizado
-    podia colarse como "sin cambios". Este test siembra un tercer ciclo ya
-    consistente con lo que `project()` calcularia -- incluido total_purchases
-    -- para que el bucket `unchanged` este genuinamente verificado, no solo
-    inferido por ausencia de las otras dos categorias.
+    podia colarse como "sin cambios". `stale_total_purchases` es el
+    discriminador: sus otros cuatro campos ya coinciden exactamente con lo
+    que `project()` calcularia para su historial, pero su total_purchases
+    (5) esta desactualizado frente al valor correcto (3). Bajo el chequeo de
+    cuatro campos esa fila clasificaba `unchanged` -- el bug que este test
+    existe para atrapar; bajo el chequeo de cinco campos clasifica
+    `updated`. `already_consistent` se mantiene aparte, con
+    total_purchases ya correcto, para seguir teniendo una fila genuinamente
+    `unchanged` en el lote.
     """
     three_dates = [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)]
 
@@ -139,10 +144,19 @@ def test_all_three_counters_in_a_single_run(session):
         projection_method=method,
         projection_confidence=confidence,
     )
+    stale_total_purchases = _seed_pair(
+        session,
+        three_dates,
+        avg_interval_days=interval,
+        estimated_next_purchase=next_date,
+        projection_method=method,
+        projection_confidence=confidence,
+        total_purchases=5,          # desactualizado; el correcto es 3
+    )
 
     result = backfill_projections(session)
 
-    assert result == {"updated": 1, "cleared": 1, "unchanged": 1}
+    assert result == {"updated": 2, "cleared": 1, "unchanged": 1}
 
     session.refresh(needs_update)
     assert needs_update.avg_interval_days == interval
@@ -151,6 +165,8 @@ def test_all_three_counters_in_a_single_run(session):
     session.refresh(already_consistent)
     assert already_consistent.avg_interval_days == interval
     assert already_consistent.estimated_next_purchase == next_date
+    session.refresh(stale_total_purchases)
+    assert stale_total_purchases.total_purchases == 3
 
 
 def test_guard_allows_a_dry_run_against_the_protected_schema(monkeypatch):
