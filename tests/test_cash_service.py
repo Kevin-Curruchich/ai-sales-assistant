@@ -103,3 +103,23 @@ def test_ledger_last_balance_matches_running_balance_across_all_types(cash):
     ledger = cash.ledger()
     assert ledger[-1][1] == cash.running_balance()
     assert ledger[-1][1] == Decimal("305.00")
+
+
+def test_saldo_inicial_adds_to_the_running_balance(cash):
+    # `cash` entrega un CashService pelado, no una tupla.
+    cash.record(
+        occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
+        type=CashMovementType.SALDO_INICIAL,
+        amount=Decimal("500.00"),
+        note="efectivo al momento del corte",
+    )
+    assert cash.running_balance() == Decimal("500.00")
+
+
+def test_saldo_inicial_does_not_count_as_owner_contribution(cash):
+    cash.record(
+        occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
+        type=CashMovementType.SALDO_INICIAL,
+        amount=Decimal("500.00"),
+    )
+    assert cash.owner_balance() == Decimal("0.00")

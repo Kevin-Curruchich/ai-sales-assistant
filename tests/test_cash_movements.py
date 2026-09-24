@@ -11,6 +11,7 @@ def test_cash_movement_type_values():
         "salida",
         "aporte_socio",
         "retiro_socio",
+        "saldo_inicial",
     }
 
 
@@ -60,3 +61,21 @@ def test_running_balance_is_not_stored(test_engine, migrated_schema):
         }
     assert "running_balance" not in cols
     assert "saldo_acumulado" not in cols
+
+
+def test_saldo_inicial_is_accepted_by_the_check_constraint(test_engine, migrated_schema):
+    """`type` es un enum nativo de Postgres (cash_movement_type_enum), no un
+    VARCHAR+CHECK como payment_method: el nombre del test se mantiene por el
+    plan, pero lo que valida es que el enum nativo acepta el quinto valor."""
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(
+            text(
+                "INSERT INTO cash_movements (id, occurred_at, type, amount) "
+                "VALUES (gen_random_uuid(), now(), 'saldo_inicial', 500.00)"
+            )
+        )
+        count = conn.execute(
+            text("SELECT count(*) FROM cash_movements WHERE type = 'saldo_inicial'")
+        ).scalar()
+    assert count == 1

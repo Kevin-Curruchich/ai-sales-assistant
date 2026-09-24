@@ -24,6 +24,7 @@ class CashMovementType(str, PyEnum):
     SALIDA = "salida"
     APORTE_SOCIO = "aporte_socio"
     RETIRO_SOCIO = "retiro_socio"
+    SALDO_INICIAL = "saldo_inicial"
 
 
 # Unica fuente de verdad de que tipos restan del saldo. La repite quien lea el
