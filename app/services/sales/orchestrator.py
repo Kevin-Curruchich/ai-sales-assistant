@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.customer_product_cycle import CustomerProductCycle
+from app.models.cash_movement import CashMovementType
 from app.models.purchase import PurchaseItem
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
@@ -16,6 +17,7 @@ from app.repositories.customer_repository import CustomerRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_repository import SaleRepository
+from app.services.cash_service import CashService
 from app.services.sales.fifo import InsufficientLots, allocate_fifo
 from app.services.sales.pricing import (
     base_margin_for,
@@ -59,6 +61,7 @@ class SaleService:
         self.purchase_repo = PurchaseRepository(db)
         self.customer_repo = CustomerRepository(db)
         self.cycle_repo = CustomerProductCycleRepository(db)
+        self.cash_service = CashService(db)
 
     # ------------------------------------------------------------------
     # Money and pricing helpers
@@ -590,8 +593,24 @@ class SaleService:
         )
         sale = self.sale_repo.create(sale)
 
+        if not data.isPaymentPending:
+            # commit=False: la entrada de caja y la venta son una sola
+            # transaccion. Si una falla, ninguna queda escrita.
+            self.cash_service.record(
+                occurred_at=data.occurredAt,
+                type=CashMovementType.ENTRADA,
+                amount=total,
+                payment_method=data.medioPago,
+                sale_id=sale.id,
+                note=None,
+                commit=False,
+            )
+
         for item_data in data.items:
             self._update_cycle(data.customerId, item_data.productId, data.date, item_data.quantity)
+
+        self.db.commit()
+        self.db.refresh(sale)
 
         return sale
 
