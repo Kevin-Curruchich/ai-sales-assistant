@@ -93,24 +93,23 @@ En `tests/test_cash_service.py`:
 
 ```python
 def test_saldo_inicial_adds_to_the_running_balance(cash):
-    service, _ = cash
-    service.record(
+    # `cash` entrega un CashService pelado, no una tupla.
+    cash.record(
         occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
         type=CashMovementType.SALDO_INICIAL,
         amount=Decimal("500.00"),
         note="efectivo al momento del corte",
     )
-    assert service.running_balance() == Decimal("500.00")
+    assert cash.running_balance() == Decimal("500.00")
 
 
 def test_saldo_inicial_does_not_count_as_owner_contribution(cash):
-    service, _ = cash
-    service.record(
+    cash.record(
         occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
         type=CashMovementType.SALDO_INICIAL,
         amount=Decimal("500.00"),
     )
-    assert service.owner_balance() == Decimal("0.00")
+    assert cash.owner_balance() == Decimal("0.00")
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -195,8 +194,11 @@ git commit -m "feat: Add saldo_inicial as a fifth cash movement type"
 - [ ] **Step 1: Write the failing test**
 
 ```python
-def test_record_without_commit_leaves_the_row_rollbackable(cash):
-    service, session = cash
+def test_record_without_commit_leaves_the_row_rollbackable(cash_session):
+    # Fixture NUEVA de esta task: `cash` no expone la sesion y este test la
+    # necesita para hacer rollback.  `cash` se deja como esta -- cambiarla a
+    # tupla obligaria a tocar sus cinco call sites existentes.
+    service, session = cash_session
     service.record(
         occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
         type=CashMovementType.ENTRADA,
@@ -208,10 +210,9 @@ def test_record_without_commit_leaves_the_row_rollbackable(cash):
 
 
 def test_record_rejects_a_zero_or_negative_amount(cash):
-    service, _ = cash
     for bad in (Decimal("0"), Decimal("-5.00")):
         with pytest.raises(ValueError):
-            service.record(
+            cash.record(
                 occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
                 type=CashMovementType.ENTRADA,
                 amount=bad,
@@ -256,9 +257,19 @@ Las columnas existen desde la pieza 1 y ninguna ruta de código las escribe.
 
 **Files:**
 - Modify: `app/schemas/sale.py`, `app/schemas/purchase.py`, `app/services/sales/orchestrator.py`, `app/services/purchase_service.py`
+- Create: `tests/fixtures_domain.py`
 - Test: `tests/test_sale_payment_fields.py` (crear)
 
 **Interfaces:**
+- Produces: **los fixtures de dominio que usan las Tasks 4, 5, 7 y 8**, en
+  `tests/fixtures_domain.py`, registrados en `tests/conftest.py`: `db_session`
+  (sesion contra un schema migrado desechable), `seeded_user`, `seeded_customer`,
+  `seeded_product_with_lot` (producto con un lote de 6 unidades a Q33.33),
+  `seeded_product_with_one_lot` (un solo lote, para agotarlo en los tests de la T8)
+  y `seeded_purchase_draft`. Hoy no existe ninguno: `tests/conftest.py` solo tiene
+  `test_engine`, `throwaway_schema`, `alembic_config`, `migrated_schema` y
+  `second_migrated_schema`. Segui el patron de `_session_for` en
+  `tests/test_cash_service.py`, que fija el `search_path` por conexion.
 - Produces: `SaleCreate.medioPago: Optional[PaymentMethod]`, `SaleCreate.fechaPago: Optional[date]`, `SaleCreate.occurredAt: Optional[datetime]`, `PurchaseCreate.medioPago: Optional[PaymentMethod]`
 
 - [ ] **Step 1: Write the failing test**
@@ -420,7 +431,8 @@ Va en `SaleService.create`, no en la herramienta: las mismas ventas deben dejar 
 - Test: `tests/test_sale_cash_hook.py` (crear)
 
 **Interfaces:**
-- Consumes: `CashService.record(..., commit=False)` de la Task 2, `CashMovementType.ENTRADA`
+- Consumes: `CashService.record(..., commit=False)` de la Task 2; `data.occurredAt` y
+  `data.medioPago` de la Task 3; los fixtures de dominio de la Task 3; `CashMovementType.ENTRADA`
 - Produces: una venta con `is_payment_pending=False` deja exactamente un `CashMovement` de tipo `entrada`, con `sale_id` apuntándola y `amount` igual a `sale.total`
 
 - [ ] **Step 1: Write the failing test**
@@ -537,6 +549,8 @@ La compra tiene ciclo de vida: `create()` deja `status="draft"` y `confirm()` la
 - Test: `tests/test_purchase_cash_hook.py` (crear)
 
 **Interfaces:**
+- Consumes: `CashService.record(..., commit=False)` de la Task 2; `purchase.payment_method`
+  y `business_midnight()` de la Task 3; el fixture `seeded_purchase_draft` de la Task 3
 - Produces: confirmar una compra deja exactamente un `CashMovement` de tipo `salida` con `purchase_id` apuntándola. Confirmar dos veces no duplica.
 
 - [ ] **Step 1: Write the failing test**
@@ -978,7 +992,7 @@ def registrar_venta(cliente_id: str, items: list[dict], fecha: str,
                 "actual": recalculado.model_dump(mode="json"),
             }
 
-        sale = service.create(data, user_id=uuid.UUID(config["configurable"]["user_id"]))
+        sale = service.create(data, user_id=user_id_from_config(config))
         return {
             "estado": "registrado",
             "venta_id": str(sale.id),
