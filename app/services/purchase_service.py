@@ -11,6 +11,7 @@ from app.services.sales import SaleService
 from app.schemas.purchase import (
     PurchaseCreate, PurchaseUpdate, PurchaseItemResponse, PurchaseResponse,
 )
+from app.core.datetime_utils import format_business_datetime
 
 
 class PurchaseService:
@@ -29,12 +30,12 @@ class PurchaseService:
     # Helpers
     # ------------------------------------------------------------------ #
 
-    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[str], Optional[str]]:
+    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[datetime], Optional[str]]:
         if value is None:
             return None, None
         if isinstance(value, str):
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return value.strftime("%Y-%m-%d"), value.strftime("%d/%m/%Y")
+        return value, format_business_datetime(value)
 
     def _to_purchase_response(self, purchase: Purchase) -> PurchaseResponse:
         user = purchase.user
@@ -68,8 +69,8 @@ class PurchaseService:
             total=self._money(purchase.total),
             status=purchase.status,
             items=items,
-            created_at=created_at or "",
-            updated_at=updated_at or "",
+            created_at=created_at,
+            updated_at=updated_at,
             created_at_formatted=created_at_formatted,
             updated_at_formatted=updated_at_formatted,
             user_name=user.display_name if user else "",

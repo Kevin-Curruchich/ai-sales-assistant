@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, field_validator
@@ -72,8 +72,8 @@ class PurchaseResponse(BaseModel):
     total: Decimal
     status: str
     items: list[PurchaseItemResponse] = []
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     created_at_formatted: Optional[str] = None
     updated_at_formatted: Optional[str] = None
     # Enriched user info

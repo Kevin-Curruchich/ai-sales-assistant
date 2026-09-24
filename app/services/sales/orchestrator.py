@@ -24,6 +24,7 @@ from app.services.sales.pricing import (
 )
 from app.services.sales.projection import project
 from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
+from app.core.datetime_utils import format_business_datetime
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -244,10 +245,10 @@ class SaleService:
             total=self._money(sale.total),
             is_payment_pending=sale.is_payment_pending,
             items=items,
-            created_at=created_at.strftime("%Y-%m-%d") if created_at else "",
-            updated_at=updated_at.strftime("%Y-%m-%d") if updated_at else "",
-            created_at_formatted=created_at.strftime("%d/%m/%Y") if created_at else None,
-            updated_at_formatted=updated_at.strftime("%d/%m/%Y") if updated_at else None,
+            created_at=created_at,
+            updated_at=updated_at,
+            created_at_formatted=format_business_datetime(created_at),
+            updated_at_formatted=format_business_datetime(updated_at),
             user_name=user.display_name if user else "",
             user_email=user.email if user else "",
             customer_name=customer.name if customer else "",

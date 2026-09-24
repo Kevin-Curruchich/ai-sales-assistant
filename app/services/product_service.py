@@ -10,6 +10,7 @@ from app.models.product import Product
 from app.repositories.product_repository import ProductRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.schemas.product import ProductCreate, ProductUpdate, ProductForSaleResponse, AvailableLotInfo, LotsAvailabilityResponse
+from app.core.datetime_utils import format_business_datetime
 
 
 class ProductService:
@@ -136,12 +137,12 @@ class ProductService:
     ) -> list[Product]:
         return self.repo.get_all(search=search, status=status_filter, limit=limit, offset=offset)
 
-    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[str], Optional[str]]:
+    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[datetime], Optional[str]]:
         if value is None:
             return None, None
         if isinstance(value, str):
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return value.strftime("%Y-%m-%d"), value.strftime("%d/%m/%Y")
+        return value, format_business_datetime(value)
 
     def _get_stock_alert(self, stock: Decimal, min_stock: Decimal) -> tuple[str, bool]:
         if stock <= 0:

@@ -13,6 +13,8 @@ from datetime import datetime
 import logging
 from dateutil.parser import parse
 
+from app.core.datetime_utils import format_business_date, format_business_datetime, to_business_tz
+
 logger = logging.getLogger("customers")
 
 
@@ -64,19 +66,21 @@ class CustomerService:
 
         # Now get the dictionary after conversion
         customer_dict = customer.__dict__.copy()
-        
-        customer_dict["created_at"] = customer.created_at.strftime("%Y-%m-%d")
-        customer_dict["updated_at"] = customer.updated_at.strftime("%Y-%m-%d")
-        customer_dict["created_at_formatted"] = customer.created_at.strftime("%d/%m/%Y")
-        customer_dict["updated_at_formatted"] = customer.updated_at.strftime("%d/%m/%Y")
+
+        customer_dict["created_at"] = customer.created_at          # datetime, sin truncar
+        customer_dict["updated_at"] = customer.updated_at
+        customer_dict["created_at_formatted"] = format_business_datetime(customer.created_at)
+        customer_dict["updated_at_formatted"] = format_business_datetime(customer.updated_at)
         return customer_dict
 
     def format_sale_dates(self, sale):
         sale_dict = sale.__dict__.copy()
-        sale_dict["created_at"] = sale.created_at.strftime("%Y-%m-%d")
-        sale_dict["updated_at"] = sale.updated_at.strftime("%Y-%m-%d")
+        sale_dict["created_at"] = to_business_tz(sale.created_at).strftime("%Y-%m-%d")
+        sale_dict["updated_at"] = to_business_tz(sale.updated_at).strftime("%Y-%m-%d")
         sale_dict["date"] = sale.date.strftime("%Y-%m-%d")
-        sale_dict["date_formatted"] = sale.date.strftime("%d/%m/%Y")
+        # sale.date es un date puro y no un datetime: format_business_date lo pasa
+        # tal cual, sin conversion de zona.
+        sale_dict["date_formatted"] = format_business_date(sale.date)
         
         # Format sale items with product details
         items = []

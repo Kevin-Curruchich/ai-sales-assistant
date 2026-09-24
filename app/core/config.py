@@ -58,7 +58,12 @@ class Settings(BaseSettings):
     
     # Firebase Configuration
     FIREBASE_CREDENTIALS_PATH: Optional[str] = None # Path to the firebase-adminsdk.json file
-    
+
+    # Zona del negocio.  Los reportes agrupan por dia de negocio y las fechas se
+    # muestran en esta zona para todo el mundo: una venta ocurrio en Guatemala,
+    # y verla como otro dia desde otra zona rompe el vinculo con el hecho real.
+    BUSINESS_TIMEZONE: str = "America/Guatemala"
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
 
 settings = Settings()
