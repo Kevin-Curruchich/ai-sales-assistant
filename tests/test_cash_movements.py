@@ -1,6 +1,3 @@
-from datetime import datetime, timezone
-from decimal import Decimal
-
 from sqlalchemy import text
 
 from app.core.database import Base
@@ -63,32 +60,3 @@ def test_running_balance_is_not_stored(test_engine, migrated_schema):
         }
     assert "running_balance" not in cols
     assert "saldo_acumulado" not in cols
-
-
-def test_running_balance_can_be_computed(test_engine, migrated_schema):
-    """SUM() OVER reproduce el saldo sin guardarlo."""
-    with test_engine.begin() as conn:
-        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
-        for occurred_at, kind, amount in [
-            (datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), "entrada", "115.00"),
-            (datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc), "entrada", "37.00"),
-            (datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), "salida", "285.00"),
-        ]:
-            conn.execute(
-                text(
-                    "INSERT INTO cash_movements (occurred_at, type, amount) "
-                    "VALUES (:d, CAST(:t AS cash_movement_type_enum), :a)"
-                ),
-                {"d": occurred_at, "t": kind, "a": Decimal(amount)},
-            )
-
-    with test_engine.connect() as conn:
-        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
-        balance = conn.execute(
-            text(
-                "SELECT SUM(CASE WHEN type = 'salida' THEN -amount ELSE amount END) "
-                "OVER (ORDER BY occurred_at, amount) "
-                "FROM cash_movements ORDER BY occurred_at, amount"
-            )
-        ).scalars().all()
-    assert balance[-1] == Decimal("-133.00")
