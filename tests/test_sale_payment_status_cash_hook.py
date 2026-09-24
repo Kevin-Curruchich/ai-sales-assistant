@@ -8,6 +8,8 @@ from decimal import Decimal
 
 import pytest
 
+import app.services.sales.orchestrator as orchestrator_module
+from app.core.datetime_utils import business_midnight
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.schemas.sale import SaleCreate, SaleItemCreate, SalePaymentStatusUpdate
 from app.services.sales import SaleService
@@ -95,6 +97,40 @@ def test_pending_to_paid_and_back_leaves_no_stray_cash_entry(
     service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=True))
 
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 0
+
+
+def test_a_second_paid_transition_after_a_correction_uses_the_new_payment_date(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """pendiente -> pagada -> pendiente -> pagada: la primera fecha de pago
+    era del dia de la correccion, no del dia del cobro real. Si
+    `payment_date` no se limpia junto con el movimiento al volver a
+    pendiente, la segunda entrada queda fechada con la fecha vieja en vez
+    de la fecha real del segundo cobro."""
+    service = SaleService(db_session)
+    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+
+    first_payment_date = date(2026, 9, 24)
+    second_payment_date = date(2026, 9, 30)
+    upcoming_dates = iter([first_payment_date, second_payment_date])
+
+    class FrozenDate(date):
+        @classmethod
+        def today(cls):
+            return next(upcoming_dates)
+
+    monkeypatch.setattr(orchestrator_module, "date", FrozenDate)
+
+    service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=False))
+    service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=True))
+    service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=False))
+
+    movements = db_session.query(CashMovement).filter_by(sale_id=sale.id).all()
+    assert len(movements) == 1
+    assert movements[0].occurred_at == business_midnight(second_payment_date)
+
+    reloaded = service.get_by_id(sale.id)
+    assert reloaded.payment_date == second_payment_date
 
 
 def test_the_enriched_response_exposes_the_payment_date_and_method(

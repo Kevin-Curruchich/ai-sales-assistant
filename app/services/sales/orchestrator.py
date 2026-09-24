@@ -684,6 +684,12 @@ class SaleService:
             stale_movements = self.db.query(CashMovement).filter_by(sale_id=sale.id).all()
             for movement in stale_movements:
                 self.db.delete(movement)
+            # payment_date sigue el mismo ciclo de vida que el movimiento: los
+            # dos quedan en None mientras la venta este pendiente. Si no se
+            # limpia, un pendiente -> pagada posterior lo encuentra no-None y
+            # no lo reemplaza (linea de abajo), fechando la entrada nueva con
+            # la fecha vieja en vez del cobro real.
+            sale.payment_date = None
 
         self.sale_repo.update(sale)
         return self._to_sale_response(self.get_by_id(sale_id))
