@@ -174,6 +174,9 @@ class SaleResponse(BaseModel):
     date: date
     total: Decimal
     is_payment_pending: bool
+    payment_date: Optional[date] = None
+    payment_date_formatted: Optional[str] = None
+    payment_method: Optional[PaymentMethod] = None
     items: list[SaleItemResponse] = []
     created_at: datetime
     updated_at: datetime

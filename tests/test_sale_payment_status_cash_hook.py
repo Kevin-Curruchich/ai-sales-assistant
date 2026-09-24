@@ -97,6 +97,21 @@ def test_pending_to_paid_and_back_leaves_no_stray_cash_entry(
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 0
 
 
+def test_the_enriched_response_exposes_the_payment_date_and_method(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user
+):
+    """SaleResponse no tenia payment_date ni payment_method: el panel no
+    podia ver lo que esta rama empezo a escribir."""
+    service = SaleService(db_session)
+    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+
+    result = service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=False))
+
+    assert result.payment_date is not None
+    assert result.payment_date_formatted
+    assert result.payment_method is None  # nunca se supo el medio: SalePaymentStatusUpdate no lo carga
+
+
 def test_the_cash_entry_shares_the_payment_status_transaction(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
 ):

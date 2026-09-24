@@ -71,6 +71,7 @@ class PurchaseService:
             notes=purchase.notes,
             total=self._money(purchase.total),
             status=purchase.status,
+            payment_method=purchase.payment_method,
             items=items,
             created_at=created_at,
             updated_at=updated_at,

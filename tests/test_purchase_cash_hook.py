@@ -3,6 +3,7 @@
 import pytest
 
 from app.models.cash_movement import CashMovement, CashMovementType
+from app.models.payment_method import PaymentMethod
 from app.services.purchase_service import PurchaseService
 
 
@@ -51,3 +52,14 @@ def test_cancelling_twice_does_not_error_after_the_cash_exit_is_gone(db_session,
     service.cancel(seeded_purchase_draft.id)
 
     assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 0
+
+
+def test_the_enriched_response_exposes_the_payment_method(db_session, seeded_purchase_draft):
+    """PurchaseResponse no tenia payment_method pese a que create() ya lo escribe (Task 3)."""
+    seeded_purchase_draft.payment_method = PaymentMethod.TRANSFERENCIA
+    db_session.commit()
+
+    service = PurchaseService(db_session)
+    result = service.confirm(seeded_purchase_draft.id)
+
+    assert result.payment_method == PaymentMethod.TRANSFERENCIA

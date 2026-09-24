@@ -26,7 +26,7 @@ from app.services.sales.pricing import (
 )
 from app.services.sales.projection import project
 from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
-from app.core.datetime_utils import business_midnight, format_business_datetime
+from app.core.datetime_utils import business_midnight, format_business_date, format_business_datetime
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -247,6 +247,9 @@ class SaleService:
             date=sale.date,
             total=self._money(sale.total),
             is_payment_pending=sale.is_payment_pending,
+            payment_date=sale.payment_date,
+            payment_date_formatted=format_business_date(sale.payment_date),
+            payment_method=sale.payment_method,
             items=items,
             created_at=created_at,
             updated_at=updated_at,

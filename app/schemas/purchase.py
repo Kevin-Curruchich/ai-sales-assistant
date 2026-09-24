@@ -74,6 +74,7 @@ class PurchaseResponse(BaseModel):
     notes: Optional[str] = None
     total: Decimal
     status: str
+    payment_method: Optional[PaymentMethod] = None
     items: list[PurchaseItemResponse] = []
     created_at: datetime
     updated_at: datetime
