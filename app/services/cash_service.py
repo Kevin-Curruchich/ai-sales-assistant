@@ -38,6 +38,7 @@ class CashService:
         sale_id: Optional[uuid.UUID] = None,
         purchase_id: Optional[uuid.UUID] = None,
         note: Optional[str] = None,
+        commit: bool = True,
     ) -> CashMovement:
         amount = self._money(amount)
         if amount <= 0:
@@ -53,7 +54,8 @@ class CashService:
             note=note,
         )
         created = self.repo.create(movement)
-        self.db.commit()
+        if commit:
+            self.db.commit()
         return created
 
     def running_balance(self, as_of: Optional[datetime] = None) -> Decimal:

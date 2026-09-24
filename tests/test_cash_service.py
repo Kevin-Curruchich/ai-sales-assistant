@@ -34,6 +34,16 @@ def cash(migrated_schema):
         engine.dispose()
 
 
+@pytest.fixture
+def cash_session(migrated_schema):
+    session, engine = _session_for(migrated_schema)
+    try:
+        yield CashService(session), session
+    finally:
+        session.close()
+        engine.dispose()
+
+
 def test_running_balance_adds_entries_and_subtracts_exits(cash):
     cash.record(datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("115.00"))
     cash.record(datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("37.00"))
@@ -123,3 +133,28 @@ def test_saldo_inicial_does_not_count_as_owner_contribution(cash):
         amount=Decimal("500.00"),
     )
     assert cash.owner_balance() == Decimal("0.00")
+
+
+def test_record_without_commit_leaves_the_row_rollbackable(cash_session):
+    # Fixture NUEVA de esta task: `cash` no expone la sesion y este test la
+    # necesita para hacer rollback.  `cash` se deja como esta -- cambiarla a
+    # tupla obligaria a tocar sus cinco call sites existentes.
+    service, session = cash_session
+    service.record(
+        occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
+        type=CashMovementType.ENTRADA,
+        amount=Decimal("10.00"),
+        commit=False,
+    )
+    session.rollback()
+    assert service.running_balance() == Decimal("0.00")
+
+
+def test_record_rejects_a_zero_or_negative_amount(cash):
+    for bad in (Decimal("0"), Decimal("-5.00")):
+        with pytest.raises(ValueError):
+            cash.record(
+                occurred_at=datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc),
+                type=CashMovementType.ENTRADA,
+                amount=bad,
+            )
