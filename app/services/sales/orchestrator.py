@@ -16,6 +16,15 @@ from app.repositories.customer_repository import CustomerRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_repository import SaleRepository
+from app.services.sales.fifo import InsufficientLots, allocate_fifo
+from app.services.sales.pricing import (
+    base_margin_for,
+    detect_habitual_margin,
+    suggested_unit_price as _pricing_suggested_unit_price,
+)
+from app.services.sales.projection import project
+from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
+from app.core.datetime_utils import format_business_datetime
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -26,7 +35,6 @@ from app.schemas.sale import (
     FollowUpResponse,
     LotAllocationPreview,
     ProfitReportResponse,
-    ProfitReportRow,
     SaleCreate,
     SaleItemCreate,
     SaleItemLotAllocationResponse,
@@ -72,51 +80,29 @@ class SaleService:
             as_of_date=sale_date,
             lock_for_update=True,
         )
-
-        to_consume = Decimal(str(quantity))
-        allocations: list[tuple[PurchaseItem, Decimal]] = []
-        total_cost = Decimal("0.00")
-
-        for lot in lots:
-            if to_consume <= 0:
-                break
-
-            take = min(lot.remaining_quantity, to_consume)
-            if take <= 0:
-                continue
-
-            allocations.append((lot, take))
-            total_cost = self._money(total_cost + self._money(lot.unit_cost) * take)
-            to_consume -= take
-
-        if to_consume > 0:
-            available = quantity - to_consume
+        try:
+            return allocate_fifo(lots, quantity)
+        except InsufficientLots as exc:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
                     "Insufficient FIFO lots to price sale item. "
-                    f"Available priced quantity={available}, requested={quantity}."
+                    f"Available priced quantity={exc.available}, requested={exc.requested}."
                 ),
-            )
-
-        cost_basis = self._money(total_cost / quantity)
-        return allocations, cost_basis
+            ) from exc
 
     def _suggested_unit_price(self, product, cost_basis: Decimal) -> Decimal:
-        mode = getattr(product.earning_mode, "value", product.earning_mode)
-        if mode == "percent":
-            percent = Decimal(str(product.earning_percent or 0))
-            return self._money(cost_basis * (Decimal("1") + (percent / HUNDRED)))
-
-        fee_amount = Decimal(str(product.earning_fee_amount or 0))
-        return self._money(cost_basis + fee_amount)
+        return _pricing_suggested_unit_price(product, cost_basis)
 
     def _resolve_sale_item_pricing(
         self,
         product,
         cost_basis: Decimal,
         item_data: SaleItemCreate,
-    ) -> tuple[Decimal, Decimal, Decimal, Decimal, bool, Optional[str], Optional[Decimal], Optional[Decimal]]:
+        customer_id: uuid.UUID,
+    ) -> tuple[
+        Decimal, Decimal, Decimal, Decimal, bool, Optional[str], Optional[Decimal], Optional[Decimal], bool
+    ]:
         if item_data.discountPercent is not None and item_data.discountAmount is not None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -127,6 +113,29 @@ class SaleService:
             )
 
         suggested = self._suggested_unit_price(product, cost_basis)
+        is_habitual = False
+
+        if (
+            item_data.unitPrice is None
+            and item_data.discountPercent is None
+            and item_data.discountAmount is None
+        ):
+            recent = self.sale_repo.get_recent_items_for_customer_product(
+                customer_id=customer_id, product_id=product.id
+            )
+            observed = [
+                Decimal(str(i.unit_price)) - Decimal(str(i.cost_basis_unit))
+                for i in recent
+                if i.cost_basis_unit is not None
+            ]
+            habitual = detect_habitual_margin(
+                observed_margins=observed,
+                base_margin=base_margin_for(product, cost_basis),
+            )
+            if habitual is not None:
+                suggested = self._money(cost_basis + habitual)
+                is_habitual = True
+
         discount_percent = self._money(item_data.discountPercent) if item_data.discountPercent is not None else None
         discount_amount = self._money(item_data.discountAmount) if item_data.discountAmount is not None else None
 
@@ -178,6 +187,7 @@ class SaleService:
             reason,
             discount_percent,
             discount_amount,
+            is_habitual,
         )
 
     def _to_sale_response(self, sale: Sale) -> SaleResponse:
@@ -235,10 +245,10 @@ class SaleService:
             total=self._money(sale.total),
             is_payment_pending=sale.is_payment_pending,
             items=items,
-            created_at=created_at.strftime("%Y-%m-%d") if created_at else "",
-            updated_at=updated_at.strftime("%Y-%m-%d") if updated_at else "",
-            created_at_formatted=created_at.strftime("%d/%m/%Y") if created_at else None,
-            updated_at_formatted=updated_at.strftime("%d/%m/%Y") if updated_at else None,
+            created_at=created_at,
+            updated_at=updated_at,
+            created_at_formatted=format_business_datetime(created_at),
+            updated_at_formatted=format_business_datetime(updated_at),
             user_name=user.display_name if user else "",
             user_email=user.email if user else "",
             customer_name=customer.name if customer else "",
@@ -369,16 +379,26 @@ class SaleService:
                 lock_for_update=False,
             )
 
-            to_consume = item_data.quantity
+            # Same cost basis engine as create(): rounds once, at the end,
+            # so the preview reports the exact cents the sale will store.
             lot_previews: list[LotAllocationPreview] = []
-            total_item_cost = Decimal("0.00")
+            try:
+                allocations, cost_basis = allocate_fifo(lots, item_data.quantity)
+            except InsufficientLots as exc:
+                available_qty = exc.available
+                warnings.append(
+                    f"Only {available_qty} of {item_data.quantity} units have confirmed FIFO lot cost. "
+                    "This sale would be blocked at creation time."
+                )
+                # Best-effort: price whatever quantity the lots actually cover,
+                # through the same allocate_fifo path, instead of inventing a
+                # separate per-iteration rounding for the partial case.
+                if available_qty > 0:
+                    allocations, cost_basis = allocate_fifo(lots, available_qty)
+                else:
+                    allocations, cost_basis = [], Decimal("0.00")
 
-            for lot in lots:
-                if to_consume <= 0:
-                    break
-                take = min(lot.remaining_quantity, to_consume)
-                if take <= 0:
-                    continue
+            for lot, take in allocations:
                 lot_previews.append(
                     LotAllocationPreview(
                         purchase_item_id=lot.id,
@@ -389,22 +409,6 @@ class SaleService:
                         quantity_taken=take,
                     )
                 )
-                total_item_cost = self._money(total_item_cost + self._money(lot.unit_cost) * take)
-                to_consume -= take
-
-            if to_consume > 0:
-                available_qty = item_data.quantity - to_consume
-                warnings.append(
-                    f"Only {available_qty} of {item_data.quantity} units have confirmed FIFO lot cost. "
-                    "This sale would be blocked at creation time."
-                )
-                # Best-effort: use whatever cost we could compute
-                if available_qty > 0:
-                    cost_basis = self._money(total_item_cost / available_qty)
-                else:
-                    cost_basis = Decimal("0.00")
-            else:
-                cost_basis = self._money(total_item_cost / item_data.quantity)
 
             suggested = self._suggested_unit_price(product, cost_basis)
 
@@ -414,15 +418,17 @@ class SaleService:
                     final_price,
                     cost_basis,
                     gross_profit_unit,
-                    _,
+                    suggested,
                     is_overridden,
                     reason,
                     discount_percent,
                     discount_amount,
+                    is_habitual,
                 ) = self._resolve_sale_item_pricing(
                     product=product,
                     cost_basis=cost_basis,
                     item_data=item_data,
+                    customer_id=customer.id,
                 )
             except HTTPException as exc:
                 # Pricing rules violated — surface as a warning instead of aborting
@@ -433,6 +439,7 @@ class SaleService:
                 reason = None
                 discount_percent = None
                 discount_amount = None
+                is_habitual = False
 
             subtotal = self._money(final_price * item_data.quantity)
             gross_profit_total = self._money(gross_profit_unit * item_data.quantity)
@@ -455,6 +462,7 @@ class SaleService:
                     discount_percent=discount_percent,
                     discount_amount=discount_amount,
                     is_price_overridden=is_overridden,
+                    is_habitual_price=is_habitual,
                     pricing_exception_reason=reason,
                     subtotal=subtotal,
                     gross_profit_unit=gross_profit_unit,
@@ -528,10 +536,12 @@ class SaleService:
                 reason,
                 discount_percent,
                 discount_amount,
+                _,
             ) = self._resolve_sale_item_pricing(
                 product=product,
                 cost_basis=cost_basis,
                 item_data=item_data,
+                customer_id=data.customerId,
             )
 
             subtotal = self._money(unit_price * item_data.quantity)
@@ -644,36 +654,35 @@ class SaleService:
             purchase_dates.append(sale_date)
         purchase_dates.sort()
 
-        total_purchases = len(purchase_dates)
+        # Distinta de purchase_dates (que cuenta ocurrencias de venta): tres
+        # ventas al mismo cliente el mismo dia son una ocasion de compra, no
+        # tres, y es exactamente lo que project() observa para calcular la
+        # confianza. Guardar aqui el conteo de ocurrencias dejaria
+        # total_purchases en desacuerdo con projection_confidence.
+        total_purchases = len(set(purchase_dates))
 
-        if total_purchases >= 2:
-            intervals = [
-                (purchase_dates[i + 1] - purchase_dates[i]).days
-                for i in range(len(purchase_dates) - 1)
-            ]
-            avg = sum(intervals) / len(intervals)
-            avg_interval = max(int(avg), 1)
-            estimated_next = sale_date + timedelta(days=avg_interval)
-        else:
-            avg_interval = 30
-            estimated_next = sale_date + timedelta(days=30)
+        interval, next_date, method, confidence = project(purchase_dates)
 
         if cycle:
-            cycle.avg_interval_days = avg_interval
-            cycle.estimated_next_purchase = estimated_next
+            cycle.avg_interval_days = interval
+            cycle.estimated_next_purchase = next_date
             cycle.last_purchase_date = sale_date
             cycle.last_quantity = quantity
             cycle.total_purchases = total_purchases
+            cycle.projection_method = method
+            cycle.projection_confidence = confidence
             self.cycle_repo.update(cycle)
         else:
             cycle = CustomerProductCycle(
                 customer_id=customer_id,
                 product_id=product_id,
-                avg_interval_days=avg_interval,
-                estimated_next_purchase=estimated_next,
+                avg_interval_days=interval,
+                estimated_next_purchase=next_date,
                 last_purchase_date=sale_date,
                 last_quantity=quantity,
                 total_purchases=total_purchases,
+                projection_method=method,
+                projection_confidence=confidence,
             )
             self.cycle_repo.create(cycle)
 
@@ -683,7 +692,7 @@ class SaleService:
 
     def get_follow_ups(self, filter_type: str = "all", limit: int = 10, offset: int = 0) -> tuple[list[FollowUpResponse], int]:
         today = date.today()
-        cycles = self.cycle_repo.get_all_with_estimation()
+        cycles = self.cycle_repo.get_all_for_follow_ups()
 
         customer_cycles: dict[uuid.UUID, list[CustomerProductCycle]] = {}
         for c in cycles:
@@ -719,9 +728,10 @@ class SaleService:
                     worst_days = days_until
 
             if worst_days is None:
-                continue
-
-            if worst_days < 0:
+                # Ningun producto de este cliente tiene proyeccion: hace falta un
+                # estimado inicial. Antes se descartaba en silencio.
+                fu_status = "needs_estimate"
+            elif worst_days < 0:
                 fu_status = "overdue"
             elif worst_days <= 7:
                 fu_status = "urgent"
@@ -729,6 +739,9 @@ class SaleService:
                 fu_status = "upcoming"
             else:
                 fu_status = "normal"
+
+            if filter_type != "all" and fu_status == "needs_estimate":
+                continue
 
             if filter_type == "overdue" and fu_status != "overdue":
                 continue
@@ -759,6 +772,11 @@ class SaleService:
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
         today = date.today()
+        # Deliberately get_all_with_estimation(), not get_all_for_follow_ups():
+        # all four tiles below are defined by days_until, which a
+        # needs_estimate customer (no estimated_next_purchase) does not have.
+        # Including them would mean inventing the number this branch exists
+        # to stop inventing, not an inconsistency to "fix".
         cycles = self.cycle_repo.get_all_with_estimation()
 
         customer_worst: dict[uuid.UUID, int] = {}
@@ -832,42 +850,17 @@ class SaleService:
         end_date: Optional[date] = None,
         limit: int = 100,
     ) -> ProfitReportResponse:
-        rows: dict[str, ProfitReportRow] = {}
         sales = self.sale_repo.get_all(start_date=start_date, end_date=end_date, limit=10000, offset=0)
 
-        for sale in sales:
-            for item in sale.items:
-                if group_by == "sale":
-                    key = str(sale.id)
-                    label = f"{sale.date} - {sale.customer.name if sale.customer else 'Unknown'}"
-                elif group_by == "customer":
-                    key = str(sale.customer_id)
-                    label = sale.customer.name if sale.customer else "Unknown"
-                elif group_by == "product":
-                    key = str(item.product_id)
-                    label = item.product.name if item.product else "Unknown"
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="group_by must be one of: sale, customer, product",
-                    )
+        try:
+            rows = build_profit_rows(sales, group_by=group_by)
+        except InvalidGroupBy as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="group_by must be one of: sale, customer, product",
+            ) from exc
 
-                if key not in rows:
-                    rows[key] = ProfitReportRow(
-                        key=key,
-                        label=label,
-                        quantity=Decimal("0"),
-                        revenue=Decimal("0.00"),
-                        gross_profit=Decimal("0.00"),
-                    )
-
-                rows[key].quantity += item.quantity
-                rows[key].revenue = self._money(rows[key].revenue + self._money(item.subtotal))
-                rows[key].gross_profit = self._money(
-                    rows[key].gross_profit + self._money(item.gross_profit_total)
-                )
-
-        ordered = sorted(rows.values(), key=lambda r: r.gross_profit, reverse=True)
+        ordered = sorted(rows, key=lambda r: r.gross_profit, reverse=True)
         return ProfitReportResponse(data=ordered[:limit])
 
     # ------------------------------------------------------------------

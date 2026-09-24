@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
@@ -116,8 +116,8 @@ class ProductResponse(BaseModel):
     stock: Decimal
     min_stock: Decimal
     status: str
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     created_at_formatted: Optional[str] = None
     updated_at_formatted: Optional[str] = None
     stock_alert_status: str

@@ -12,7 +12,7 @@ from app.schemas.sale import (
     SaleUpdate,
     ProfitReportResponse,
 )
-from app.services.sale_service import SaleService
+from app.services.sales import SaleService
 
 router = APIRouter(prefix="/sales", tags=["Sales"])
 

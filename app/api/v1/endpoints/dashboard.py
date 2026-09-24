@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.api.dependencies import get_db, get_current_user
 from app.schemas.dashboard import DashboardSummary
 from app.services.customer_service import CustomerService
-from app.services.sale_service import SaleService
+from app.services.sales import SaleService
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 

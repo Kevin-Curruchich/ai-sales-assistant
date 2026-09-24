@@ -1,16 +1,14 @@
 import uuid
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum as PyEnum
 from typing import Optional
 
 from sqlalchemy import (
-    Date,
     DateTime,
     Enum as SQLEnum,
     ForeignKey,
     Numeric,
-    String,
     Text,
     Uuid,
     func,
@@ -18,6 +16,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
 class CashMovementType(str, PyEnum):
@@ -27,11 +26,18 @@ class CashMovementType(str, PyEnum):
     RETIRO_SOCIO = "retiro_socio"
 
 
+# Unica fuente de verdad de que tipos restan del saldo. La repite quien lea el
+# libro (CashMovementRepository via SQL, CashService.ledger via Python): un
+# quinto tipo agregado a un lado y no al otro haria que el ultimo saldo del
+# ledger difiera del running_balance calculado en SQL.
+CASH_OUTFLOW_TYPES = frozenset({CashMovementType.SALIDA, CashMovementType.RETIRO_SOCIO})
+
+
 class CashMovement(Base):
     """Libro de caja.
 
     El saldo acumulado NO se guarda: se calcula al leer con
-    SUM(...) OVER (ORDER BY movement_date).  Guardarlo como columna fue la
+    SUM(...) OVER (ORDER BY occurred_at).  Guardarlo como columna fue la
     fuente de desincronizacion en la hoja de calculo de la que viene este modelo.
 
     Limitacion conocida: un movimiento apunta a una sola venta.  Un cobro que
@@ -43,7 +49,9 @@ class CashMovement(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid, primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
     )
-    movement_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     type: Mapped[CashMovementType] = mapped_column(
         SQLEnum(
             CashMovementType,
@@ -55,7 +63,9 @@ class CashMovement(Base):
         nullable=False,
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
-    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    payment_method: Mapped[Optional[PaymentMethod]] = mapped_column(
+        PAYMENT_METHOD_COLUMN, nullable=True
+    )
     sale_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         ForeignKey("sales.id", ondelete="SET NULL"), nullable=True, index=True
     )

@@ -5,6 +5,7 @@ from typing import Optional
 from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
+from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
 class Purchase(Base):
@@ -22,7 +23,14 @@ class Purchase(Base):
     notes: Mapped[Optional[str]] = mapped_column(Text)
     total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # "draft" | "confirmed" | "cancelled"
-    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    payment_method: Mapped[Optional[PaymentMethod]] = mapped_column(
+        PAYMENT_METHOD_COLUMN, nullable=True
+    )
+    # El instante exacto de la compra, cuando se conoce.  NULL en las filas
+    # historicas: no sabemos a que hora fue, e inventarlo seria peor.
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

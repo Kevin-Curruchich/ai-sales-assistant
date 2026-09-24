@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 from typing import Optional
 from decimal import Decimal
-from sqlalchemy import Date, DateTime, Float, Integer, Numeric, ForeignKey, String, UniqueConstraint, Uuid, func
+from sqlalchemy import Date, DateTime, Integer, Numeric, ForeignKey, String, UniqueConstraint, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
@@ -25,7 +25,9 @@ class CustomerProductCycle(Base):
     customer_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
     product_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("products.id"), nullable=False, index=True)
 
-    avg_interval_days: Mapped[Optional[int]] = mapped_column(Integer)  # None until ≥2 purchases
+    avg_interval_days: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 4)
+    )  # None until ≥2 purchases
     estimated_next_purchase: Mapped[Optional[date]] = mapped_column(Date)
     last_purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
     last_quantity: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)

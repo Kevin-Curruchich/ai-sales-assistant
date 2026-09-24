@@ -1,9 +1,10 @@
 import uuid
 from datetime import date, datetime
 from typing import Optional
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, String, Uuid, func
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
+from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
 class Sale(Base):
@@ -24,7 +25,14 @@ class Sale(Base):
     # Nullable a proposito: en los datos reales hay ventas pagadas sin fecha
     # registrada, y alguna con fecha anterior a la venta.  Sin CHECK.
     payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    payment_method: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    payment_method: Mapped[Optional[PaymentMethod]] = mapped_column(
+        PAYMENT_METHOD_COLUMN, nullable=True
+    )
+    # El instante exacto de la venta, cuando se conoce.  NULL en las filas
+    # historicas: no sabemos a que hora fue, e inventarlo seria peor.
+    occurred_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

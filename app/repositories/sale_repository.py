@@ -82,6 +82,19 @@ class SaleRepository:
         )
         return list(self.db.execute(stmt).scalars().all())
 
+    def get_recent_items_for_customer_product(
+        self, customer_id: uuid.UUID, product_id: uuid.UUID, limit: int = 3
+    ) -> list[SaleItem]:
+        """Los items mas recientes de ese par, el mas nuevo primero."""
+        stmt = (
+            select(SaleItem)
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.customer_id == customer_id, SaleItem.product_id == product_id)
+            .order_by(Sale.date.desc(), Sale.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.execute(stmt).scalars().all())
+
     def create(self, sale: Sale) -> Sale:
         self.db.add(sale)
         self.db.commit()

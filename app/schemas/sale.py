@@ -1,5 +1,5 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, field_validator
@@ -85,6 +85,7 @@ class SaleItemPreview(BaseModel):
     discount_percent: Optional[Decimal] = None
     discount_amount: Optional[Decimal] = None
     is_price_overridden: bool = False
+    is_habitual_price: bool = False
     pricing_exception_reason: Optional[str] = None
     subtotal: Decimal
     gross_profit_unit: Decimal
@@ -152,8 +153,8 @@ class SaleResponse(BaseModel):
     total: Decimal
     is_payment_pending: bool
     items: list[SaleItemResponse] = []
-    created_at: str
-    updated_at: str
+    created_at: datetime
+    updated_at: datetime
     created_at_formatted: Optional[str] = None
     updated_at_formatted: Optional[str] = None
     # Enriched user info
@@ -173,7 +174,7 @@ class FollowUpItemResponse(BaseModel):
     """A single product that a customer is expected to need."""
     product_id: uuid.UUID
     product_name: str
-    avg_interval_days: Optional[int] = None
+    avg_interval_days: Optional[Decimal] = None
     last_purchase_date: Optional[date] = None
     last_quantity: Decimal = Decimal("0")
     estimated_next_purchase: Optional[date] = None
@@ -187,7 +188,7 @@ class FollowUpResponse(BaseModel):
     customer_id: uuid.UUID
     customer: str
     email: Optional[str] = None
-    status: str  # "overdue" | "urgent" | "upcoming" | "normal" (worst among products)
+    status: str  # "overdue" | "urgent" | "upcoming" | "normal" | "needs_estimate" (worst among products)
     items: list[FollowUpItemResponse] = []
 
 
