@@ -772,6 +772,11 @@ class SaleService:
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
         today = date.today()
+        # Deliberately get_all_with_estimation(), not get_all_for_follow_ups():
+        # all four tiles below are defined by days_until, which a
+        # needs_estimate customer (no estimated_next_purchase) does not have.
+        # Including them would mean inventing the number this branch exists
+        # to stop inventing, not an inconsistency to "fix".
         cycles = self.cycle_repo.get_all_with_estimation()
 
         customer_worst: dict[uuid.UUID, int] = {}
