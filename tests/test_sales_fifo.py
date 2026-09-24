@@ -70,6 +70,17 @@ def test_stock_without_lots_is_reported_not_invented():
     assert "sin lotes" in problem.lower()
 
 
+def test_stock_with_only_exhausted_lots_is_reported_not_invented():
+    """La skill dice 'stock_actual > 0 pero ningun lote con existencia', no
+    'lista de lotes vacia'. Con un lote agotado presente, la condicion vieja
+    (`not lots`) caia al mensaje generico de 'Lotes insuficientes' en vez del
+    reporte de inconsistencia que es la razon de ser de esta funcion."""
+    lots = [FakeLot(Decimal("0"), Decimal("33.50"))]
+    ok, problem = check_availability(lots=lots, stock_actual=Decimal("5"), requested=Decimal("1"))
+    assert ok is False
+    assert "sin lotes" in problem.lower()
+
+
 def test_availability_passes_when_lots_cover_the_request():
     lots = [FakeLot(Decimal("3"), Decimal("95.00"))]
     ok, problem = check_availability(lots=lots, stock_actual=Decimal("3"), requested=Decimal("2"))

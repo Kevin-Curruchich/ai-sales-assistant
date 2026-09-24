@@ -77,7 +77,7 @@ def check_availability(
     """
     total = sum((lot.remaining_quantity for lot in lots), Decimal("0"))
 
-    if not lots and stock_actual > 0:
+    if stock_actual > 0 and total <= 0:
         return False, (
             f"El producto tiene stock ({stock_actual}) pero esta sin lotes. "
             "Crea el lote correspondiente antes de vender; no se puede inventar un costo."
