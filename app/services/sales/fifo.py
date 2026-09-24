@@ -39,6 +39,11 @@ def allocate_fifo(
     responsabilidad del repositorio, no de este calculo.  Devuelve las
     asignaciones y el costo unitario ponderado por las cantidades tomadas.
     """
+    if quantity <= 0:
+        raise ValueError(
+            f"La cantidad a asignar debe ser mayor que cero, recibido={quantity}"
+        )
+
     to_consume = Decimal(str(quantity))
     allocations: list[tuple[Lot, Decimal]] = []
     total_cost = Decimal("0.00")

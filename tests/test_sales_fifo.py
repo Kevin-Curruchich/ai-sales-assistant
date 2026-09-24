@@ -52,6 +52,17 @@ def test_lots_with_nothing_left_are_skipped():
     assert cost_basis == Decimal("35.00")
 
 
+@pytest.mark.parametrize("bad_quantity", [Decimal("0"), Decimal("-2")])
+def test_allocate_fifo_rejects_non_positive_quantity(bad_quantity):
+    """Sin esta guarda, 0 explota con InvalidOperation y un negativo devuelve
+    ([], -0.00) sin excepcion: una asignacion vacia con costo cero que hace ver
+    la venta como margen puro. Este modulo lo llama un agente sin Pydantic
+    por delante, asi que la guarda tiene que vivir aqui."""
+    lots = [FakeLot(Decimal("6"), Decimal("33.50"))]
+    with pytest.raises(ValueError):
+        allocate_fifo(lots, bad_quantity)
+
+
 def test_stock_without_lots_is_reported_not_invented():
     """La skill verificar-lote-disponible lo exige explicitamente."""
     ok, problem = check_availability(lots=[], stock_actual=Decimal("5"), requested=Decimal("1"))
