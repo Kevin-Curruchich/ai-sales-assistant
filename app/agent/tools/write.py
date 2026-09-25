@@ -296,9 +296,10 @@ def registrar_venta(
     "aprobacion_sin_huella" | "ya_registrado". "registrado" trae la venta
     escrita bajo la clave "venta" (no "preview"). "ya_registrado" significa
     que esta misma tarea ya escribio esta venta y el proceso se reanudo
-    despues -- no se escribio de nuevo, no hay nada que corregir. "recalculado" significa que el inventario
-    cambio entre que se mostro el precio y que se aprobo -- nada se
-    escribio, hay que volver a previsualizar. "aprobacion_sin_huella"
+    despues -- no se escribio de nuevo, no hay nada que corregir.
+    "recalculado" significa que el inventario cambio entre que se mostro el
+    precio y que se aprobo -- nada se escribio, hay que volver a
+    previsualizar. "aprobacion_sin_huella"
     significa que la aprobacion no trajo la huella que se le mostro -- un
     problema del panel, no del inventario.
     """
