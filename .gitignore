@@ -62,3 +62,9 @@ revenew-*-firebase-adminsdk-*-*.json
 # herramienta no documenta redaccion de secretos: si alguna vez se corre desde
 # la raiz, lo que haya leido no debe terminar en el repo.
 graphify-out/
+
+# Export de Fleet: los identificadores de la plataforma (tenant, organizacion,
+# proveedor de OAuth) no van al repo.  Las skills y AGENTS.md si se versionan,
+# como referencia de dominio -- ver Revenew/README.md.
+Revenew/config.json
+Revenew/tools.json
