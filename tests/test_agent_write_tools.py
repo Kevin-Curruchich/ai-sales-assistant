@@ -785,18 +785,100 @@ def test_correcting_a_cash_movement_uses_the_new_amount(db_session, seeded_user,
 # ---------------------------------------------------------------------
 
 
-def test_write_tools_source_never_commits_before_interrupt():
-    """Sanity check de texto: `interrupt(` debe aparecer antes de cualquier
-    `service.create(`/`service.confirm(`/`.record(` en cada funcion. No
-    reemplaza los tests de comportamiento de arriba -- es una red adicional
-    contra un futuro refactor que mueva la escritura antes de la pausa."""
+def _first_call_positions(fn) -> dict[str, tuple[int, int]]:
+    """Posicion (linea, columna) de la PRIMERA llamada a `interrupt(...)` y a
+    cada escritura, leidas del AST del cuerpo de `fn` -- con el docstring
+    descartado.
+
+    Buscar el literal `"interrupt("` en el texto fuente NO sirve: los
+    docstrings de `registrar_venta` y `registrar_compra` mencionan
+    `interrupt()` para explicarle al panel el contrato de la huella, asi que
+    `source.index("interrupt(")` caia DENTRO del docstring -- es decir, en la
+    primera linea del cuerpo -- y cualquier escritura, en cualquier parte del
+    cuerpo, quedaba "despues". La version anterior de este test no podia
+    fallar para dos de las tres herramientas: mover `service.create(...)` a
+    la primerisima linea ejecutable seguia pasando. El AST no tiene ese
+    problema: el docstring es un `ast.Expr` que se descarta, y los nombres se
+    leen de nodos `Call` de verdad, no de texto.
+    """
+    import ast
     import inspect
+    import textwrap
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn.func)))
+    func_def = tree.body[0]
+    body = func_def.body
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]  # fuera el docstring: es prosa, no codigo
+
+    def call_name(node: ast.Call) -> str:
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id
+        if isinstance(func, ast.Attribute):
+            return func.attr
+        return ""
+
+    first: dict[str, tuple[int, int]] = {}
+    for statement in body:
+        for node in ast.walk(statement):
+            if isinstance(node, ast.Call):
+                name = call_name(node)
+                position = (node.lineno, node.col_offset)
+                if name not in first or position < first[name]:
+                    first[name] = position
+    return first
+
+
+def test_write_tools_never_write_before_interrupt_in_their_source():
+    """Cada herramienta llama a `interrupt(...)` antes de cualquier
+    `create(`/`confirm(`/`record(` de su cuerpo. No reemplaza los tests de
+    comportamiento de arriba -- es una red adicional contra un futuro
+    refactor que mueva la escritura antes de la pausa."""
+    write_calls = ("create", "create_enriched", "confirm", "record")
 
     for fn in (registrar_venta, registrar_compra, registrar_movimiento_caja):
-        source = inspect.getsource(fn.func)
-        interrupt_pos = source.index("interrupt(")
-        for write_call in ("service.create(", "service.confirm(", ".record("):
-            if write_call in source:
-                assert source.index(write_call) > interrupt_pos, (
-                    f"{fn.name}: {write_call!r} aparece antes de interrupt()"
-                )
+        first = _first_call_positions(fn)
+        assert "interrupt" in first, f"{fn.name}: no llama a interrupt() en su cuerpo"
+        interrupt_pos = first["interrupt"]
+        seen = [name for name in write_calls if name in first]
+        assert seen, f"{fn.name}: el test no encontro ninguna escritura que vigilar"
+        for name in seen:
+            assert first[name] > interrupt_pos, (
+                f"{fn.name}: {name}(...) aparece antes de interrupt()"
+            )
+
+
+def test_the_interrupt_guard_test_can_actually_fail():
+    """El test de arriba se rompio una vez justamente por no poder fallar.
+
+    Esta es su contraprueba: una funcion con un docstring que menciona
+    `interrupt()` -- igual que los docstrings reales -- y que escribe ANTES
+    de pausar. El chequeo tiene que marcarla. Con la version de texto plano
+    anterior, esta funcion pasaba."""
+    import ast
+    import textwrap
+
+    source = textwrap.dedent(
+        '''
+        def mala(config):
+            """Se detiene con interrupt() antes de escribir."""
+            service.create(data)
+            decision = interrupt({"tipo": "x"})
+            return decision
+        '''
+    )
+    tree = ast.parse(source)
+    body = tree.body[0].body[1:]  # sin el docstring
+    positions = {
+        node.func.attr if isinstance(node.func, ast.Attribute) else node.func.id: (node.lineno, node.col_offset)
+        for statement in body
+        for node in ast.walk(statement)
+        if isinstance(node, ast.Call)
+    }
+    assert positions["create"] < positions["interrupt"]
