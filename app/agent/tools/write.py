@@ -1,29 +1,67 @@
 """Herramientas de escritura.  Las tres se detienen antes de tocar la base.
 
-`interrupt()` congela el grafo, guarda el estado en el checkpointer y devuelve
-el payload al panel.  Al reanudar, la ejecucion sigue DESDE ACA (la funcion
-se vuelve a correr desde el principio hasta el `interrupt()` con el mismo
-indice, que ya no vuelve a pausar), no desde el principio de la conversacion.
+`interrupt()` NO congela un frame de Python vivo.  Al reanudar con
+`Command(resume=...)`, LangGraph vuelve a correr la funcion ENTERA desde el
+principio -- el valor de resume se empareja por indice de llamada a
+`interrupt()`, no por continuar la ejecucion donde quedo.  Verificado en este
+venv con un `InMemorySaver` real: un nodo que hace `x = state["x"] + n` antes
+de un `interrupt()` calcula `x` DE NUEVO, con datos frescos, en la reanudacion
+-- no reutiliza el valor que le mostro a la persona.
 
-La propiedad central de este archivo: cada escritura se arma, se muestra
-completa via `interrupt()`, y solo al aprobar se RECALCULA el mismo calculo
-dentro de la sesion que va a escribir, comparando contra lo que se aprobo.
-Si difiere, no se escribe -- se avisa.  `preview_sale` no toma locks de fila
-(`lock_for_update=False`); entre el momento en que el panel le muestra el
-precio a una persona y el momento en que esa persona aprieta "aprobar" puede
-pasar cualquier cantidad de tiempo, y otra venta puede haberse llevado el
-mismo lote.  Escribir con el costo viejo seria registrar algo que no paso.
+Esto tiene una consecuencia que la primera version de este archivo no
+resolvia bien: una linea como
 
-Sobre `corregir` (ver el brief de la Task 8): la version original proponia que
-la propia herramienta se reinvocara a si misma via `.invoke()` para rearmar la
-operacion.  Eso no se uso aca -- ver la nota debajo de `registrar_venta` con
-el razonamiento.
+    preview = service.preview_sale(data)   # antes del interrupt()
+    decision = interrupt(...)
+    recalculado = service.preview_sale(data)   # despues
+
+en una reanudacion REAL, calcula `preview` Y `recalculado` los dos DESPUES de
+la pausa, microsegundos aparte, sobre el mismo estado de la base -- nunca
+sobre lo que la persona efectivamente vio antes de aprobar.  Comparar uno
+contra otro no prueba nada; la comparacion es estructuralmente siempre
+verdadera.  (Un stand-in de `interrupt()` de una sola pasada, como el que usan
+los tests con monkeypatch, no expone esto: ese stand-in SI modela una
+ejecucion que atraviesa la pausa, la real no.)
+
+Lo unico que cruza la pausa intacto es el valor que trae el resume.  Por eso
+cada escritura arma una HUELLA (`cost_basis_unit`/`subtotal`/lotes/warnings
+para una venta; subtotal/estado de producto/total para una compra) y la mete
+DENTRO del payload de `interrupt()`: viaja al panel, se congela en el
+checkpoint, y el panel la devuelve tal cual dentro de la aprobacion
+(`{"accion": "aprobar", "huella": ...}`).  Solo esa huella devuelta -- nunca
+un recalculo local hecho en esta misma ejecucion -- se compara contra un
+recalculo fresco hecho DESPUES de la reanudacion, con `db.expire_all()` de
+por medio para que la comparacion no pueda pasar por objetos cacheados en el
+identity map de SQLAlchemy en vez de datos releidos.  Si difiere, no se
+escribe -- se avisa.  Esto cambia el contrato del panel (tiene que guardar y
+devolver `huella` sin tocarla); Task 10 lo documenta.
+
+Sobre `corregir`: usa un `while` en vez de que la herramienta se reinvoque a
+si misma via `.invoke()`.  La razon original que se dio para esto (que
+`.invoke({...})` sin `config=` explicito pierde el `user_id`) resulto ser
+FALSA -- verificado en este venv: un `.invoke()` hecho desde DENTRO de la
+ejecucion de otro tool SI hereda el `RunnableConfig` del padre via el
+contextvar que LangChain propaga (`context.run(...)` en `BaseTool.run`).  La
+razon real para preferir el loop es otra: es el patron que la documentacion
+de LangGraph muestra para "pedir de nuevo" dentro de una sola ejecucion en
+linea recta, no crece el stack por cada correccion, y no puede girar sin
+control porque cada vuelta bloquea en una decision humana real.
+
+Limite conocido, fuera del alcance de este archivo (Task 9): `ToolNode`
+corre todas las tool calls de un mismo mensaje del modelo como UNA sola
+tarea.  Si una escritura ya se completo y una HERMANA en el mismo paso
+todavia esta en un `interrupt()`, reanudar ese paso vuelve a correr TODO el
+paso desde el principio -- incluida la escritura que ya se habia completado
+y comiteado.  Nada en este archivo puede distinguir esa repeticion de una
+solicitud nueva con los mismos valores sin una clave de idempotencia que
+viaje por fuera de estas funciones (por ejemplo en `config`); esa pieza le
+toca al grafo, no a la herramienta.
 """
 
 import uuid
 from datetime import date as date_type
 from datetime import datetime
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -41,6 +79,18 @@ from app.services.purchase_service import PurchaseService
 from app.services.sales import SaleService
 
 MONEY = Decimal("0.01")
+
+
+def _money(value) -> Decimal:
+    """Mismo redondeo que `SaleService._money`/`PurchaseService._money`:
+    ROUND_HALF_UP, no el ROUND_HALF_EVEN que trae `Decimal.quantize()` por
+    default.  En cantidades fraccionarias los dos criterios desacuerdan por
+    un centavo -- exactamente el desacuerdo entre preview y create() que
+    esta task existe para prevenir (Finding I2 de la revision: sin esto,
+    `_purchase_preview` podia mostrar Q3.12 mientras la base escribia Q3.13,
+    y la huella los veria "iguales" porque los dos lados de la comparacion
+    usaban el redondeo equivocado)."""
+    return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
 
 
 # ---------------------------------------------------------------------
@@ -62,7 +112,11 @@ def _build_sale_create(
             SaleItemCreate(
                 productId=i["producto_id"],
                 quantity=Decimal(str(i["cantidad"])),
-                unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") else None,
+                # `is not None`, no una verdad booleana: un precio de "0" (un
+                # regalo) es falsy y con `i.get(...)` a secas se leeria como
+                # "no vino precio", usando el sugerido a precio completo en
+                # vez del cero que se pidio (Minor de la revision).
+                unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") is not None else None,
             )
             for i in items
         ],
@@ -86,16 +140,48 @@ def _sale_preview_dict(preview: SalePreviewResponse) -> dict:
     return result
 
 
-def _same_costs(a: SalePreviewResponse, b: SalePreviewResponse) -> bool:
-    """Compara solo lo que la tarjeta de confirmacion mostro: costo unitario
-    y subtotal por item.  Si algun otro campo cambia (advertencias, precio
-    sugerido) pero estos dos coinciden, lo aprobado sigue siendo verdad."""
-    if len(a.items) != len(b.items):
-        return False
-    return all(
-        ia.cost_basis_unit == ib.cost_basis_unit and ia.subtotal == ib.subtotal
-        for ia, ib in zip(a.items, b.items)
-    )
+def _sale_written_dict(sale_response) -> dict:
+    """A diferencia de `_sale_preview_dict`, esto parte de lo que
+    EFECTIVAMENTE quedo escrito (`SaleService.create_enriched()`, que relee
+    la venta despues de guardarla) y no de una prediccion: `create()`
+    resuelve la asignacion FIFO con `lock_for_update=True`, que en teoria
+    puede diferir de lo que un preview sin lock calculo un instante antes.
+    Devolver la lectura real, no la prediccion, es lo unico honesto que se
+    puede reportar como "esto es lo que se registro" (Finding I7)."""
+    result = sale_response.model_dump(mode="json")
+    for item in result["items"]:
+        item["lotes"] = item.pop("allocations")
+    return result
+
+
+def _sale_cost_huella(preview: SalePreviewResponse) -> list[dict]:
+    """La huella que cruza la pausa: lo unico que se compara al aprobar.
+
+    No alcanza con `cost_basis_unit`/`subtotal`: si otra venta se lleva PARTE
+    de un lote (no todo), el costo unitario del lote no cambia -- sigue
+    siendo el mismo `unit_cost` de siempre -- y `subtotal` se calcula sobre
+    la cantidad PEDIDA, no la disponible, asi que tampoco cambia. Lo que SI
+    cambia es cuanto cubre cada lote (`lotes`) y si aparece una advertencia
+    de insuficiencia (`warnings`). Sin esos dos campos, una venta con un lote
+    parcialmente consumido pasaba esta guardia y `create()` (que si bloquea
+    la fila y ve la cantidad real) la rechazaba con una `HTTPException` sin
+    manejar, filtrando un error de FastAPI hacia afuera del proceso del
+    agente (Finding I1)."""
+    return [
+        {
+            "cost_basis_unit": str(item.cost_basis_unit),
+            "subtotal": str(item.subtotal),
+            "lotes": [
+                {
+                    "purchase_item_id": str(a.purchase_item_id),
+                    "quantity_taken": str(a.quantity_taken),
+                }
+                for a in item.allocations
+            ],
+            "warnings": list(item.warnings),
+        }
+        for item in preview.items
+    ]
 
 
 @tool
@@ -113,6 +199,11 @@ def registrar_venta(
     -- esta herramienta vuelve a calcular lo mismo y lo va a mostrar de nuevo
     al pedir la aprobacion final. `items` es una lista de {"producto_id":
     str, "cantidad": str, "precio_unitario": str opcional}.
+
+    El panel DEBE devolver la aprobacion como {"accion": "aprobar", "huella":
+    <la huella que vino en el payload de interrupt()>} -- sin tocarla. Esta
+    herramienta la usa para confirmar que el inventario no cambio entre que
+    se mostro el precio y que se aprobo.
 
     El resultado trae "estado": "registrado" | "cancelado" | "recalculado".
     "recalculado" significa que el inventario cambio entre que se mostro el
@@ -132,45 +223,16 @@ def registrar_venta(
     with agent_session() as db:
         service = SaleService(db)
 
-        # Un `while` en vez de que la herramienta se reinvoque a si misma
-        # (`registrar_venta.invoke(...)`) para el caso "corregir".
-        #
-        # La version del brief hacia justamente eso -- y traia dos problemas
-        # que no quise enviar sin resolver:
-        #
-        # 1. Ese `.invoke({**decision["valores"]})` no reenvia `config`. Un
-        #    `@tool` con un parametro `RunnableConfig` lo excluye del schema
-        #    e inyecta lo que le llegue por el argumento `config=` de
-        #    `.invoke()`; sin ese argumento, LangChain arma un config vacio
-        #    (`ensure_config()`), asi que la rama "corregir" perderia el
-        #    user_id que la rama normal si tiene. Verificado en este venv
-        #    (langchain-core 1.6.5): `tool.invoke({...})` sin `config=` le
-        #    llega a la funcion con `configurable={}`.
-        #
-        # 2. Mas de fondo: no hay garantia documentada de que un segundo
-        #    `interrupt()` disparado por una llamada de Python normal (no una
-        #    arista nueva del grafo) anidada dentro de la ejecucion que ya
-        #    esta siendo REANUDADA se intercale bien con la cola de valores
-        #    de resume. `interrupt()` identifica cada pausa por el orden en
-        #    que se ejecuta dentro de la MISMA tarea; encadenar llamadas
-        #    dentro de una sola ejecucion en linea recta (este `while`) es
-        #    exactamente el patron que la documentacion de LangGraph muestra
-        #    para "pedir de nuevo" -- ir mas alla de eso, hasta el punto de
-        #    apilar invocaciones separadas de la misma herramienta, es
-        #    territorio no verificado y no queria enviarlo sin probarlo
-        #    contra un checkpointer real, que esta task no monta.
-        #
-        # Con el loop, "corregir" es simplemente: rearmar los valores y volver
-        # a previsualizar y a interrumpir, dentro de la misma invocacion de
-        # Python, con el mismo `config` de siempre.
         while True:
             data = _build_sale_create(**valores)
             preview = service.preview_sale(data)
+            huella = _sale_cost_huella(preview)
 
             decision = interrupt(
                 {
                     "tipo": "confirmar_venta",
                     "preview": _sale_preview_dict(preview),
+                    "huella": huella,
                 }
             )
             accion = decision.get("accion")
@@ -191,24 +253,34 @@ def registrar_venta(
                     "mensaje": f"Accion no reconocida: {accion!r}. No se escribio nada.",
                 }
 
-            # Recalcular DENTRO de la sesion que va a escribir: entre el
-            # preview de arriba y esta linea pudo entrar otra venta que
-            # consuma los mismos lotes (o el usuario pudo tardarse minutos en
-            # aprobar). Misma sesion de base, sin commit de por medio.
+            # `preview`/`huella` de ARRIBA son de esta ejecucion del nodo. En
+            # una reanudacion real, LangGraph corrio esta funcion entera de
+            # nuevo desde el principio -- esas dos lineas se calcularon DESPUES
+            # de la pausa, con datos frescos, no son "lo que la persona vio".
+            # Lo unico que si lo es: `decision["huella"]`, que viajo dentro del
+            # payload de interrupt(), quedo congelada en el checkpoint, y el
+            # panel la devolvio tal cual al aprobar.
+            #
+            # `db.expire_all()` antes de recalcular: sin esto, la frescura del
+            # recalculo depende de que los objetos de la lectura de arriba ya
+            # se hayan expulsado del identity map de SQLAlchemy por su cuenta
+            # -- un accidente de timing, no una garantia (Finding I4).
+            db.expire_all()
             recalculado = service.preview_sale(data)
-            if not _same_costs(preview, recalculado):
+            huella_aprobada = decision.get("huella")
+            if huella_aprobada != _sale_cost_huella(recalculado):
                 return {
                     "estado": "recalculado",
                     "mensaje": "El inventario cambio y el costo difiere de lo que aprobaste.",
-                    "anterior": _sale_preview_dict(preview),
+                    "aprobado": huella_aprobada,
                     "actual": _sale_preview_dict(recalculado),
                 }
 
-            sale = service.create(data, user_id=user_id_from_config(config))
+            enriched = service.create_enriched(data, user_id=user_id_from_config(config))
             return {
                 "estado": "registrado",
-                "venta_id": str(sale.id),
-                "preview": _sale_preview_dict(recalculado),
+                "venta_id": str(enriched.id),
+                "preview": _sale_written_dict(enriched),
             }
 
 
@@ -247,16 +319,17 @@ def _purchase_preview(db, data: PurchaseCreate) -> dict:
 
     A diferencia de una venta, el costo de una compra no depende de lotes
     FIFO -- lo dice quien compra. Lo unico que puede cambiar entre el preview
-    y la aprobacion es el estado del producto (si se desactivo mientras
-    tanto) o el costo/cantidad si se corrigio -- ambos se recalculan igual.
+    y la aprobacion es el estado del producto (si se desactivo o se borro
+    mientras tanto) o el costo/cantidad si se corrigio -- ambos se recalculan
+    igual.
     """
     product_repo = ProductRepository(db)
     items_preview = []
     total = Decimal("0.00")
     for item in data.items:
         product = product_repo.get_by_id(item.productId)
-        subtotal = (item.unitCost * item.quantity).quantize(MONEY)
-        total = (total + subtotal).quantize(MONEY)
+        subtotal = _money(item.unitCost * item.quantity)
+        total = _money(total + subtotal)
         items_preview.append(
             {
                 "producto_id": str(item.productId),
@@ -280,19 +353,23 @@ def _purchase_preview(db, data: PurchaseCreate) -> dict:
     }
 
 
-def _same_purchase_totals(a: dict, b: dict) -> bool:
-    """Compara solo las cifras y el estado de producto que la tarjeta mostro:
-    subtotal por item, si el producto sigue activo/existente, y el total."""
-    if len(a["items"]) != len(b["items"]):
-        return False
-    if a["total"] != b["total"]:
-        return False
-    return all(
-        ia["subtotal"] == ib["subtotal"]
-        and ia["producto_activo"] == ib["producto_activo"]
-        and ia["producto_existe"] == ib["producto_existe"]
-        for ia, ib in zip(a["items"], b["items"])
-    )
+def _purchase_huella(preview: dict) -> dict:
+    """Lo unico que se compara al aprobar una compra: subtotal por item,
+    si el producto sigue activo/existente, y el total. Igual que en la venta,
+    esto viaja DENTRO del payload de interrupt() y el panel lo devuelve tal
+    cual al aprobar -- no se recalcula localmente para comparar contra si
+    mismo (Finding C1)."""
+    return {
+        "total": preview["total"],
+        "items": [
+            {
+                "subtotal": i["subtotal"],
+                "producto_activo": i["producto_activo"],
+                "producto_existe": i["producto_existe"],
+            }
+            for i in preview["items"]
+        ],
+    }
 
 
 @tool
@@ -309,6 +386,9 @@ def registrar_compra(
 
     Se detiene a pedir confirmacion antes de escribir. `items` es una lista
     de {"producto_id": str, "cantidad": str, "costo_unitario": str}.
+
+    El panel DEBE devolver la aprobacion como {"accion": "aprobar", "huella":
+    <la huella que vino en el payload de interrupt()>} -- sin tocarla.
 
     Confirma de inmediato -- no deja un borrador colgado: un borrador sin
     confirmar no libera lotes FIFO ni mueve caja, asi que dejarlo a medias
@@ -332,11 +412,13 @@ def registrar_compra(
         while True:
             data = _build_purchase_create(**valores)
             preview = _purchase_preview(db, data)
+            huella = _purchase_huella(preview)
 
             decision = interrupt(
                 {
                     "tipo": "confirmar_compra",
                     "preview": preview,
+                    "huella": huella,
                 }
             )
             accion = decision.get("accion")
@@ -354,12 +436,14 @@ def registrar_compra(
                     "mensaje": f"Accion no reconocida: {accion!r}. No se escribio nada.",
                 }
 
+            db.expire_all()  # ver la nota identica en registrar_venta (Finding I4)
             recalculado = _purchase_preview(db, data)
-            if not _same_purchase_totals(preview, recalculado):
+            huella_aprobada = decision.get("huella")
+            if huella_aprobada != _purchase_huella(recalculado):
                 return {
                     "estado": "recalculado",
                     "mensaje": "Los datos de la compra cambiaron y difieren de lo que aprobaste.",
-                    "anterior": preview,
+                    "aprobado": huella_aprobada,
                     "actual": recalculado,
                 }
 
@@ -369,14 +453,36 @@ def registrar_compra(
                 confirmed = service.confirm(purchase.id)
             except Exception:
                 # Un borrador que el agente deja colgado es peor que no
-                # haberlo creado -- si confirmar falla, no queda nada.
-                service.delete(purchase.id)
+                # haberlo creado -- pero sin el rollback de aca, borrarlo es
+                # peor todavia (Finding C2):
+                #
+                # 1. Si confirm() fallo A MITAD del loop de items, con el
+                #    stock de un item anterior ya incrementado EN LA SESION
+                #    (sin commitear): PurchaseRepository.delete() hace
+                #    `db.commit()` al borrar el borrador, y ESE commit se
+                #    lleva puesto el incremento de stock a medias -- stock
+                #    fantasma, sin lote ni compra que lo explique.
+                # 2. Si confirm() fallo DESPUES de poner
+                #    `purchase.status = "confirmed"` en la sesion (tambien
+                #    sin commitear): delete() lee ese estado sin commitear,
+                #    ve "confirmed" y rechaza con 409 -- el borrador queda
+                #    colgado Y el error real queda tapado por el 409.
+                #
+                # `db.rollback()` deja la sesion exactamente como esta
+                # commiteada de verdad (solo el draft, sin tocar stock) antes
+                # de borrar. El error de limpieza nunca reemplaza al
+                # original: se traga aparte y se relanza el de confirm().
+                db.rollback()
+                try:
+                    service.delete(purchase.id)
+                except Exception:
+                    pass
                 raise
 
             return {
                 "estado": "registrado",
                 "compra_id": str(confirmed.id),
-                "preview": recalculado,
+                "preview": confirmed.model_dump(mode="json"),
             }
 
 
@@ -459,6 +565,14 @@ def registrar_movimiento_caja(
         # este movimiento no deriva de inventario ni de lotes -- es un hecho
         # que la persona afirma ("el socio puso Q500"), no un calculo que
         # pueda desactualizarse entre el preview y la aprobacion.
+        #
+        # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
+        # para asociar el movimiento a nadie, sino para AUTENTICAR: sin ella,
+        # un hilo sin autenticar podia escribir un aporte_socio de Q500 sin
+        # que nada lo impidiera y sin dejar ningun rastro de quien lo pidio
+        # (Finding I3).
+        user_id_from_config(config)
+
         with agent_session() as db:
             service = CashService(db)
             movement = service.record(
