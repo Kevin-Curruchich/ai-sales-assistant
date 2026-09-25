@@ -596,7 +596,21 @@ class SaleService:
         )
         sale = self.sale_repo.create(sale)
 
-        if not data.isPaymentPending:
+        if not data.isPaymentPending and total > 0:
+            # `total > 0`: una venta de Q0.00 es legitima -- un regalo, una
+            # muestra: `SaleItemCreate` acepta `unitPrice = 0` a proposito y
+            # `registrar_venta` lo honra -- pero NO es un movimiento de caja.
+            # El libro registra "dinero que realmente se movio" y cero
+            # quetzales no se movieron; la fila no cambiaria ningun saldo.
+            # `CashService.record` sigue rechazando `amount <= 0` (es lo que
+            # atrapa un monto negativo como error de programacion en
+            # cualquier otro llamador): la regla vive aca, en quien deriva el
+            # monto de un total, no debilitando esa guardia. Sin esto, una
+            # venta pagada de cero era un `ValueError` pelado saliendo del
+            # service -- un 500 en `POST /api/v1/sales`, que antes de esta
+            # rama la aceptaba. Misma regla en
+            # `_record_sale_cash_entry` y en `PurchaseService.confirm`.
+            #
             # commit=False: la entrada de caja y la venta son una sola
             # transaccion. Si una falla, ninguna queda escrita.
             self.cash_service.record(
@@ -703,7 +717,16 @@ class SaleService:
             sale.payment_date = None
 
     def _record_sale_cash_entry(self, sale: Sale) -> None:
-        """La ENTRADA que deja un cobro, fechada en `payment_date`."""
+        """La ENTRADA que deja un cobro, fechada en `payment_date`.
+
+        `sale.total > 0`: misma regla del total cero que en
+        `SaleService.create` -- el documento vale, el movimiento no existe.
+        Sin esto, marcar como pagada una venta de Q0.00 (por cualquiera de
+        las dos rutas que llegan aca) reventaba con el `ValueError` de
+        `CashService.record`.
+        """
+        if sale.total <= 0:
+            return
         self.cash_service.record(
             occurred_at=business_midnight(sale.payment_date),
             type=CashMovementType.ENTRADA,

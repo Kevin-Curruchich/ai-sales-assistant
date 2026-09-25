@@ -274,15 +274,25 @@ class PurchaseService:
         # commit=False: la salida de caja y la confirmacion son una sola
         # transaccion (mismo patron que SaleService.create, Task 4). Un
         # borrador no gasto nada -- el movimiento existe solo a partir de aqui.
-        self.cash_service.record(
-            occurred_at=business_midnight(purchase.date),
-            type=CashMovementType.SALIDA,
-            amount=purchase.total,
-            payment_method=purchase.payment_method,
-            purchase_id=purchase.id,
-            note=None,
-            commit=False,
-        )
+        #
+        # `total > 0`: una compra de Q0.00 es legitima -- un lote donado, una
+        # muestra que el proveedor regalo: `PurchaseItemCreate` acepta
+        # `unitCost = 0` a proposito -- pero no movio caja, y una fila de
+        # Q0.00 no cambia ningun saldo. Misma regla que en
+        # `SaleService.create` y `SaleService._record_sale_cash_entry`; la
+        # guardia de `CashService.record` contra `amount <= 0` se conserva
+        # intacta. Los lotes entran al inventario igual (arriba): la compra
+        # ocurrio, solo no costo nada.
+        if purchase.total > 0:
+            self.cash_service.record(
+                occurred_at=business_midnight(purchase.date),
+                type=CashMovementType.SALIDA,
+                amount=purchase.total,
+                payment_method=purchase.payment_method,
+                purchase_id=purchase.id,
+                note=None,
+                commit=False,
+            )
 
         self.db.commit()
         self.sale_service.recalculate_sale_snapshots_for_products(
