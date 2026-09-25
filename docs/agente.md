@@ -419,6 +419,57 @@ no deriva de inventario ni de lotes, es un hecho que la persona afirma
 preview y la aprobacion. Sus resumes son solo `aprobar` (sin `huella`),
 `cancelar` y `corregir`.
 
+## Idempotencia: una escritura por tarea, y lo que queda afuera
+
+Las tres herramientas de escritura comitean a Postgres **fuera** de la
+transaccion de LangGraph. Entre ese commit y el momento en que LangGraph
+anota en el checkpoint que la tarea termino hay una ventana: si el proceso
+muere ahi, el checkpoint no sabe que la escritura ocurrio, y reanudar el
+hilo vuelve a correr el cuerpo entero de la herramienta -- incluida la
+escritura ya comiteada.
+
+Eso lo cierra `app/agent/idempotency.py`. Cada tool call se identifica con
+el id de su tarea de Pregel (via `checkpoint_ns`), que es **estable a traves
+de la reanudacion** y **distinto por tool_call hermana** del mismo mensaje
+del modelo -- las dos propiedades verificadas contra un grafo y un
+checkpointer reales, no supuestas. La marca se anota en `agent.tool_writes`,
+en el mismo schema `agent` que ya aloja las tablas del checkpointer (y por
+la misma razon: una tabla sin modelo en `app/models` dentro del schema del
+negocio la leeria el autogenerate de Alembic como deriva y emitiria un
+`drop_table` en cada migracion). La fila se inserta en la **misma
+transaccion** que la escritura del negocio: o quedan las dos o no queda
+ninguna, asi que un intento que reviente no deja la tarea marcada como "ya
+escribio".
+
+Cuando la marca ya esta, la herramienta contesta
+`{"estado": "ya_registrado", "<x>_id": ..., "mensaje": ...}` **antes** de
+volver a pausar -- no tiene sentido pedirle a una persona que apruebe algo
+que ya esta en la base. El panel deberia tratar ese estado como un exito, no
+como un error: nada se escribio de mas y no hay nada que corregir.
+
+### Lo que NO cierra, con precision
+
+- **`registrar_compra` escribe en dos transacciones.** `create()` comitea el
+  borrador (con la marca) y `confirm()` comitea el stock y la salida de caja
+  aparte. Un proceso que muera **entre las dos** deja un borrador sin
+  confirmar que la reanudacion ya no vuelve a tocar, porque la marca ya
+  esta. No hay compra duplicada ni caja duplicada -- el resultado es una
+  compra a medias que alguien tiene que confirmar o borrar a mano desde el
+  panel. Cerrarlo de verdad pide que `create()` y `confirm()` compartan
+  transaccion, que es un cambio en `PurchaseService`, no en el agente.
+- **La tabla se crea sola, la primera vez que una herramienta escribe.** No
+  hay migracion de Alembic (a proposito: el schema `agent` esta fuera de su
+  radar), asi que el usuario de la base necesita permiso de `CREATE` --
+  el mismo que ya necesita para que `_postgres_checkpointer` cree el schema
+  `agent` y las tablas del checkpointer al construir el grafo.
+- **Una invocacion directa de la herramienta, fuera de un grafo, no se
+  desduplica.** No hay id de tarea, no hay reanudacion posible, y dos
+  llamadas son dos hechos distintos. La guardia se desactiva sola en vez de
+  inventarse una equivalencia.
+- **`entity_id` (que fila quedo escrita) se anota despues del commit, en su
+  propia transaccion, y es best-effort.** Si se pierde, la repeticion se
+  sigue evitando; lo unico que se pierde es poder decir *cual* fila fue.
+
 ## Checklist de despliegue: el enganche de caja
 
 Toda venta pagada -- registrada por el agente o por el panel, es el mismo

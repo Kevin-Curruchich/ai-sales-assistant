@@ -90,8 +90,21 @@ herramienta (no un riesgo abstracto):
 
 Nada en este archivo puede distinguir esa repeticion de una solicitud nueva
 con los mismos valores sin una clave de idempotencia que viaje por fuera de
-estas funciones (por ejemplo en `config`); esa pieza le toca al grafo, no a
-la herramienta.
+estas funciones. Esa clave ahora existe: `app/agent/idempotency.py` la saca
+del `config` (el id de la tarea de Pregel, estable a traves de la
+reanudacion y distinto por tool_call hermana) y la anota en
+`agent.tool_writes` DENTRO de la misma transaccion que la escritura del
+negocio. Las tres herramientas la consultan antes de pausar y devuelven
+`"estado": "ya_registrado"` si esta tarea ya escribio.
+
+Eso cubre la ventana que este docstring describe Y la otra, mas grave: un
+proceso que muere DESPUES del commit y ANTES de que LangGraph anote el
+resultado de la tarea en el checkpoint. Lo que NO cubre, porque necesita
+mas que una marca: `registrar_compra` escribe en dos transacciones
+(`create()` y despues `confirm()`) y la marca viaja con la primera, asi que
+una muerte ENTRE las dos deja un borrador sin confirmar que la reanudacion
+ya no vuelve a tocar. Esta anotado en `docs/agente.md`, seccion
+"Idempotencia".
 """
 
 import uuid
@@ -103,6 +116,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.types import interrupt
 
+from app.agent import idempotency
 from app.agent.session import agent_session, user_id_from_config
 from app.core.datetime_utils import business_midnight, business_tz
 from app.models.cash_movement import CashMovementType
@@ -136,6 +150,31 @@ def _huella_ausente(huella) -> bool:
     de inventario, y merece un estado propio en vez de "recalculado" con un
     mensaje que sugiere que algo cambio en la base (ronda 2 de revision)."""
     return not huella
+
+
+
+def _ya_escrito(db, clave: str | None, herramienta: str, id_key: str) -> dict | None:
+    """El resultado a devolver si esta tarea YA escribio, o None.
+
+    `clave is None` significa que no hay grafo detras (invocacion directa):
+    no hay reanudacion posible y no hay nada que desduplicar.
+    """
+    if clave is None:
+        return None
+    idempotency.ensure_table(db)
+    previo = idempotency.find(db, clave)
+    if previo is None:
+        return None
+    return {
+        "estado": "ya_registrado",
+        id_key: previo["entity_id"],
+        "mensaje": (
+            f"Esta misma tarea ya ejecuto {herramienta} y la escritura quedo "
+            "comiteada. No se volvio a escribir: el proceso se reanudo despues "
+            "de que la escritura entrara a la base pero antes de que LangGraph "
+            "anotara que la tarea habia terminado."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------
@@ -254,8 +293,10 @@ def registrar_venta(
     se mostro el precio y que se aprobo.
 
     El resultado trae "estado": "registrado" | "cancelado" | "recalculado" |
-    "aprobacion_sin_huella". "registrado" trae la venta escrita bajo la
-    clave "venta" (no "preview"). "recalculado" significa que el inventario
+    "aprobacion_sin_huella" | "ya_registrado". "registrado" trae la venta
+    escrita bajo la clave "venta" (no "preview"). "ya_registrado" significa
+    que esta misma tarea ya escribio esta venta y el proceso se reanudo
+    despues -- no se escribio de nuevo, no hay nada que corregir. "recalculado" significa que el inventario
     cambio entre que se mostro el precio y que se aprobo -- nada se
     escribio, hay que volver a previsualizar. "aprobacion_sin_huella"
     significa que la aprobacion no trajo la huella que se le mostro -- un
@@ -270,6 +311,7 @@ def registrar_venta(
     # no deja mandar al llamador); `config` lo inyecta LangGraph, el modelo
     # no lo ve ni lo puede inventar.
     usuario_id = user_id_from_config(config)
+    clave_escritura = idempotency.write_key(config)
 
     valores = {
         "cliente_id": cliente_id,
@@ -280,6 +322,18 @@ def registrar_venta(
     }
 
     with agent_session() as db:
+        # ANTES de interrumpir: si esta tarea ya escribio (ver
+        # `app/agent/idempotency.py`), no tiene sentido volver a pausar a una
+        # persona para que apruebe algo que ya esta en la base. Chequear
+        # despues del interrupt tampoco alcanzaria: la venta anterior ya
+        # consumio el lote, asi que el recalculo daria distinto de la huella
+        # aprobada y la herramienta contestaria "recalculado" ("el inventario
+        # cambio") -- cierto pero engañoso, porque quien lo cambio fue esta
+        # misma tarea al escribir.
+        ya = _ya_escrito(db, clave_escritura, "registrar_venta", "venta_id")
+        if ya is not None:
+            return ya
+
         service = SaleService(db)
 
         while True:
@@ -347,7 +401,15 @@ def registrar_venta(
                     "preview_actual": _sale_preview_dict(recalculado),
                 }
 
+            # Idempotencia: la marca entra en la MISMA transaccion que la
+            # venta (misma sesion, sin commit propio), asi que o quedan las
+            # dos o no queda ninguna. Ver `app/agent/idempotency.py`.
+            if clave_escritura is not None:
+                idempotency.claim(db, clave_escritura, "registrar_venta")
+
             enriched = service.create_enriched(data, user_id=usuario_id)
+            if clave_escritura is not None:
+                idempotency.record_entity(db, clave_escritura, str(enriched.id))
             return {
                 "estado": "registrado",
                 "venta_id": str(enriched.id),
@@ -469,12 +531,15 @@ def registrar_compra(
     -- esta herramienta nunca lo hace por su cuenta.
 
     El resultado trae "estado": "registrado" | "cancelado" | "recalculado" |
-    "aprobacion_sin_huella". "registrado" trae la compra confirmada bajo la
-    clave "compra" (no "preview").
+    "aprobacion_sin_huella" | "ya_registrado". "registrado" trae la compra
+    confirmada bajo la clave "compra" (no "preview"). "ya_registrado"
+    significa que esta misma tarea ya la escribio y el proceso se reanudo
+    despues -- no se escribio de nuevo.
     """
     # Autenticar ANTES de interrumpir -- ver la nota identica en
     # registrar_venta (ronda 2 de revision).
     usuario_id = user_id_from_config(config)
+    clave_escritura = idempotency.write_key(config)
 
     valores = {
         "items": items,
@@ -486,6 +551,11 @@ def registrar_compra(
     }
 
     with agent_session() as db:
+        # Ver la nota identica en registrar_venta.
+        ya = _ya_escrito(db, clave_escritura, "registrar_compra", "compra_id")
+        if ya is not None:
+            return ya
+
         while True:
             data = _build_purchase_create(**valores)
             preview = _purchase_preview(db, data)
@@ -536,6 +606,9 @@ def registrar_compra(
                     "preview_actual": recalculado,
                 }
 
+            if clave_escritura is not None:
+                idempotency.claim(db, clave_escritura, "registrar_compra")
+
             service = PurchaseService(db)
             purchase = service.create(data, user_id=usuario_id)
             try:
@@ -568,6 +641,8 @@ def registrar_compra(
                     pass
                 raise
 
+            if clave_escritura is not None:
+                idempotency.record_entity(db, clave_escritura, str(confirmed.id))
             return {
                 "estado": "registrado",
                 "compra_id": str(confirmed.id),
@@ -616,7 +691,9 @@ def registrar_movimiento_caja(
     usuario si el socio puso el dinero -- nunca antes ni sin preguntar.
 
     Se detiene a pedir confirmacion antes de escribir. El resultado trae
-    "estado": "registrado" | "cancelado".
+    "estado": "registrado" | "cancelado" | "ya_registrado" (esta misma tarea
+    ya lo escribio y el proceso se reanudo despues; no se escribio de
+    nuevo).
     """
     # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
     # para asociar el movimiento a nadie, sino para comprobar que el
@@ -627,6 +704,17 @@ def registrar_movimiento_caja(
     # poder escribir es el orden equivocado (ronda 2 de revision; antes
     # esta llamada estaba al final, justo antes de escribir).
     user_id_from_config(config)
+    clave_escritura = idempotency.write_key(config)
+
+    if clave_escritura is not None:
+        # Sesion propia y corta: a diferencia de las otras dos herramientas,
+        # esta no mantiene una sesion abierta a lo largo del loop (no tiene
+        # nada que recalcular). Ver la nota de registrar_venta sobre por que
+        # el chequeo va ANTES de interrumpir.
+        with agent_session() as db:
+            ya = _ya_escrito(db, clave_escritura, "registrar_movimiento_caja", "movimiento_id")
+        if ya is not None:
+            return ya
 
     valores = {
         "tipo": tipo,
@@ -665,6 +753,9 @@ def registrar_movimiento_caja(
         # que la persona afirma ("el socio puso Q500"), no un calculo que
         # pueda desactualizarse entre el preview y la aprobacion.
         with agent_session() as db:
+            if clave_escritura is not None:
+                idempotency.claim(db, clave_escritura, "registrar_movimiento_caja")
+
             service = CashService(db)
             movement = service.record(
                 occurred_at=_occurred_at(valores["fecha"]),
@@ -676,6 +767,8 @@ def registrar_movimiento_caja(
                 note=valores["nota"],
                 commit=True,
             )
+            if clave_escritura is not None:
+                idempotency.record_entity(db, clave_escritura, str(movement.id))
             return {
                 "estado": "registrado",
                 "movimiento_id": str(movement.id),

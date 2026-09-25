@@ -26,6 +26,17 @@ ejecutar la tarea que ya termino: LangGraph reusa su resultado cacheado.
 lo prueba de punta a punta contra un checkpointer real, con las DOS
 herramientas de escritura reales (`registrar_movimiento_caja` y
 `registrar_venta`) en el mismo mensaje del modelo.
+
+Eso vale SOLO para el camino de batching -- para la hermana pausada. No
+cubre la otra forma de repeticion, que es peor porque no depende de que
+haya dos herramientas en el mismo mensaje: las herramientas comitean a
+Postgres FUERA de la transaccion de LangGraph, y entre ese commit y el
+momento en que LangGraph anota el resultado de la tarea en el checkpoint
+hay una ventana. Un proceso que muera ahi deja un checkpoint que no sabe
+que la tarea termino, y reanudar el hilo vuelve a correr el cuerpo entero.
+Eso lo cierra `app/agent/idempotency.py` -- no este grafo -- marcando cada
+escritura con el id de la tarea de Pregel, dentro de la misma transaccion
+que la escritura. Su docstring explica la clave y lo que queda afuera.
 """
 
 from langchain_anthropic import ChatAnthropic
