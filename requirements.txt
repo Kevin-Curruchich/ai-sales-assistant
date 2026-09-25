@@ -74,12 +74,16 @@ zstandard==0.25.0
 # --- Revenew API dependencies ---
 SQLAlchemy==2.0.41
 psycopg2-binary==2.9.10
-# psycopg (v3) + su build binaria: langgraph-checkpoint-postgres lo requiere
-# para el checkpointer de produccion (app/agent/graph.py). Sin la variante
-# "binary", psycopg intenta cargar libpq via ctypes y falla con "no pq
-# wrapper available" en macOS/Homebrew, donde libpq no esta en un path que
-# ctypes.util.find_library() resuelve.
+# psycopg (v3) + su pool + su build binaria: langgraph-checkpoint-postgres
+# los requiere para el checkpointer de produccion (app/agent/graph.py).
+# Estaban instalados transitivamente pero sin pin propio -- el resto de este
+# archivo pin ea todo, incluidas las dependencias transitivas. Sin la
+# variante "binary", psycopg intenta cargar libpq via ctypes y falla con "no
+# pq wrapper available" en macOS/Homebrew, donde libpq no esta en un path
+# que ctypes.util.find_library() resuelve.
+psycopg==3.2.13
 psycopg-binary==3.2.13
+psycopg-pool==3.2.8
 pydantic-settings==2.9.1
 firebase-admin==6.7.0
 email-validator==2.3.0

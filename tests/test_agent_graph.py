@@ -16,15 +16,19 @@ interrumpida, y la asercion de que el cuerpo de la que ya comiteo corre
 exactamente una vez a lo largo de dos rondas de reanudacion.
 """
 
+import uuid
+
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
+from sqlalchemy import text
 
-from app.agent.graph import build_graph, checkpointer_schema
+from app.agent.graph import _postgres_checkpointer, build_graph, checkpointer_schema
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
+from tests.conftest import TEST_DATABASE_URL
 
 
 class FakeToolCallingModel(BaseChatModel):
@@ -170,3 +174,42 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
     # La asercion central: la caja sigue en UNO despues de que la venta,
     # hermana suya en el mismo mensaje del modelo, termino de reanudarse.
     assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
+
+
+def test_postgres_checkpointer_creates_its_schema_before_setup(test_engine):
+    """`PostgresSaver.setup()` corre DDL sin calificar -- no crea el schema.
+
+    Contra un schema que no existe todavia (una base fresca: un `db_local`
+    nuevo, produccion, CI), fijar `search_path` a ese nombre y despues
+    llamar `setup()` directamente revienta con `InvalidSchemaName: no
+    schema has been selected to create in` -- Postgres no falla en el `SET
+    search_path` (un schema inexistente en el path simplemente se salta),
+    sino recien en el primer `CREATE TABLE` de `setup()`. Este test arranca
+    de un schema garantizado inexistente (se borra primero, por si quedo de
+    una corrida anterior) para reproducir exactamente esa condicion, y
+    prueba que `_postgres_checkpointer` -- que crea el schema explicito
+    antes de fijar `search_path` y de llamar `setup()`, igual que
+    `alembic/env.py` hace para el schema del negocio -- no la pisa."""
+    schema = f"agent_test_{uuid.uuid4().hex[:8]}"
+    with test_engine.begin() as conn:
+        conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+    try:
+        checkpointer = _postgres_checkpointer(TEST_DATABASE_URL, schema)
+        try:
+            with test_engine.begin() as conn:
+                tables = (
+                    conn.execute(
+                        text("SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"),
+                        {"schema": schema},
+                    )
+                    .scalars()
+                    .all()
+                )
+            assert "checkpoints" in tables
+            assert "checkpoint_writes" in tables
+        finally:
+            checkpointer.conn.close()
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

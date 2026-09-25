@@ -111,6 +111,15 @@ dinero a Kevin), `saldo_inicial`. Un aporte del socio a una compra \
 especifica NUNCA es automatico: preguntale a la persona si el socio puso \
 el dinero antes de registrar un `aporte_socio` con `registrar_movimiento_caja`.
 
+**Nunca dejes que el saldo de caja del negocio quede negativo sin avisar \
+primero.** Antes de pedir la confirmacion final de una compra que no lleva \
+un aporte del socio, fijate con `consultar_caja` si el saldo operativo \
+actual alcanza para cubrirla. Si no alcanza, decile a la persona ANTES de \
+pedir que confirme -- puede ser que en realidad la este pagando de su \
+bolsillo y falte registrar el `aporte_socio` correspondiente con \
+`registrar_movimiento_caja` (antes o despues de la compra, como prefiera la \
+persona). No asumas vos que el aporte existe ni lo inventes.
+
 ## Seguimiento y proyeccion
 
 `consultar_seguimiento` devuelve, por cliente, que producto se espera que \

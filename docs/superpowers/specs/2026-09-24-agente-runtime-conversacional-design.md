@@ -67,8 +67,16 @@ LangGraph persiste hilos y estado en tablas propias (`checkpoints`,
 `autogenerate` de Alembic las lee como deriva y emite `drop_table` en cada
 migración — el mismo problema que costó una task entera en la pieza de Alembic.
 
-Van al schema `agent`, que Alembic no mira. LangGraph lo crea y lo versiona con
-su propio `setup()`.
+Van al schema `agent`, que Alembic no mira. Ese schema NO se crea solo:
+`PostgresSaver.setup()` versiona y crea las tablas del checkpointer, pero corre
+DDL sin calificar (`CREATE TABLE checkpoints`, no `CREATE TABLE agent.checkpoints`)
+que aterriza donde apunte el `search_path` de la conexión — no hay ningún
+`CREATE SCHEMA` en el paquete. Contra una base fresca (un `db_local` nuevo,
+producción, CI) sin el schema `agent` todavía creado, `setup()` revienta con
+`InvalidSchemaName: no schema has been selected to create in`. `app/agent/graph.py`
+(`_postgres_checkpointer`) crea el schema explícito con `CREATE SCHEMA IF NOT
+EXISTS` — la misma técnica que `alembic/env.py` ya usa para el schema del
+negocio — antes de fijar `search_path` y de llamar `setup()`.
 
 ### Modelo
 
