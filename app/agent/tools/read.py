@@ -25,16 +25,23 @@ from app.services.sales import SaleService
 def buscar_cliente(nombre: str) -> dict:
     """Busca clientes por nombre, empresa o correo.
 
-    Devuelve TODOS los que coinciden.  Si hay mas de uno, pregunta cual antes
-    de seguir: nunca elijas por el usuario.
+    Devuelve hasta 10 coincidencias.  Si hay mas de una, pregunta cual antes
+    de seguir: nunca elijas por el usuario.  `total` es cuantas coincidencias
+    existen en total -- si es mayor que la cantidad de `clientes` devueltos,
+    hay mas sin listar (`hay_mas`); nunca lo digas como si "clientes" fuera
+    todo lo que hay.
     """
     with agent_session() as db:
-        found = CustomerService(db).get_all(search=nombre, limit=10)
+        service = CustomerService(db)
+        found = service.get_all(search=nombre, limit=10)
+        total = service.count(search=nombre)
         return {
             "clientes": [
                 {"id": str(c.id), "nombre": c.name, "empresa": c.company, "email": c.email}
                 for c in found
-            ]
+            ],
+            "total": total,
+            "hay_mas": total > len(found),
         }
 
 
@@ -91,6 +98,24 @@ def consultar_seguimiento(filtro: str = "all", limite: int = 10, offset: int = 0
         }
 
 
+def _parse_boundary(value: str, *, inclusive_end: bool) -> datetime:
+    """Convierte "AAAA-MM-DD" (o un timestamp ISO completo) a `datetime`.
+
+    Una fecha sin hora usada como limite SUPERIOR tiene que cubrir el dia
+    entero: `datetime.fromisoformat("2026-09-24")` da medianoche, y el
+    repositorio filtra `occurred_at <= hasta` -- sin este ajuste, "hasta hoy"
+    excluiria todo lo ocurrido hoy mismo despues de las 00:00. El limite
+    INFERIOR no tiene ese problema: medianoche ya es el primer instante del
+    dia, asi que `occurred_at >= desde` incluye el dia completo tal cual.
+    Si `value` ya trae hora, se respeta sin tocarla.
+    """
+    parsed = datetime.fromisoformat(value)
+    is_bare_date = "T" not in value and " " not in value
+    if inclusive_end and is_bare_date:
+        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+    return parsed
+
+
 @tool
 def consultar_caja(desde: str | None = None, hasta: str | None = None, limite: int = 20) -> dict:
     """Consulta el estado de caja: saldo operativo, saldo del socio y el libro de movimientos.
@@ -98,13 +123,14 @@ def consultar_caja(desde: str | None = None, hasta: str | None = None, limite: i
     `saldo` es el efectivo operativo disponible ahora mismo; `saldo_socio` es
     lo que el negocio le debe al socio (aportes menos retiros) -- ambos son
     siempre el acumulado a hoy, sin importar el rango del libro. `desde` y
-    `hasta` ("AAAA-MM-DD", opcionales) acotan que movimientos se listan;
-    `limite` corta cuantos de los mas recientes de ese rango se devuelven.
+    `hasta` ("AAAA-MM-DD", opcionales) acotan que movimientos se listan; una
+    `hasta` sin hora incluye ese dia completo. `limite` corta cuantos de los
+    mas recientes de ese rango se devuelven.
     """
     with agent_session() as db:
         service = CashService(db)
-        start = datetime.fromisoformat(desde) if desde else None
-        end = datetime.fromisoformat(hasta) if hasta else None
+        start = _parse_boundary(desde, inclusive_end=False) if desde else None
+        end = _parse_boundary(hasta, inclusive_end=True) if hasta else None
         entries = list(reversed(service.ledger(start=start, end=end)))
         if limite:
             entries = entries[:limite]
