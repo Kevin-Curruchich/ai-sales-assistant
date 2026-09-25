@@ -12,6 +12,7 @@ import app.services.sales.orchestrator as orchestrator_module
 from app.core.datetime_utils import business_midnight
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.schemas.sale import SaleCreate, SaleItemCreate, SalePaymentStatusUpdate
+from app.services.cash_service import CashService
 from app.services.sales import SaleService
 
 
@@ -168,3 +169,33 @@ def test_the_cash_entry_shares_the_payment_status_transaction(
     assert reloaded.is_payment_pending is True
     assert reloaded.payment_date is None
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 0
+
+
+def test_marking_a_paid_sale_as_pending_does_not_remove_an_aporte_socio_on_the_same_sale(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user
+):
+    """Espejo exacto del filtro de tipo que `PurchaseService.cancel()` ya
+    tiene: retirar el cobro de una venta debe borrar solo la ENTRADA que ese
+    cobro genero, no cualquier movimiento con ese `sale_id`.
+
+    `registrar_movimiento_caja` (Task 8) acepta `venta_id` para los cinco
+    tipos, asi que un `aporte_socio` apuntado a una venta es dinero que un
+    socio puso de verdad -- corregir la venta a pendiente no lo hace
+    desaparecer."""
+    service = SaleService(db_session)
+    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
+
+    contribution = CashService(db_session).record(
+        occurred_at=business_midnight(date(2026, 9, 24)),
+        type=CashMovementType.APORTE_SOCIO,
+        amount=Decimal("60.00"),
+        sale_id=sale.id,
+        note="Aporte del socio ligado a esta venta",
+    )
+
+    service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=True))
+
+    remaining = db_session.query(CashMovement).filter_by(sale_id=sale.id).all()
+    assert len(remaining) == 1
+    assert remaining[0].id == contribution.id
+    assert remaining[0].type == CashMovementType.APORTE_SOCIO

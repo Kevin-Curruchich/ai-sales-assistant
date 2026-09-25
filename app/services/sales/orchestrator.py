@@ -681,7 +681,17 @@ class SaleService:
             # invariante que una venta pendiente no registra nada al
             # crearse. Se retira el/los movimientos de esa venta en vez de
             # dejar una entrada que ya no refleja la realidad.
-            stale_movements = self.db.query(CashMovement).filter_by(sale_id=sale.id).all()
+            # Filtrado por tipo ademas de por `sale_id`, igual que
+            # `PurchaseService.cancel()`: `registrar_movimiento_caja` (Task 8)
+            # acepta `venta_id` para los cinco tipos, asi que un
+            # `aporte_socio` apuntado a esta venta es dinero que un socio
+            # puso de verdad -- un borrado a secas por `sale_id` lo destruia
+            # tambien. Solo se retira la ENTRADA que el cobro genero.
+            stale_movements = (
+                self.db.query(CashMovement)
+                .filter_by(sale_id=sale.id, type=CashMovementType.ENTRADA)
+                .all()
+            )
             for movement in stale_movements:
                 self.db.delete(movement)
             # payment_date sigue el mismo ciclo de vida que el movimiento: los
