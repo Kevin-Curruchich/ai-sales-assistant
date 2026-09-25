@@ -643,44 +643,45 @@ class SaleService:
             )
 
         if "isPaymentPending" in update_data and update_data["isPaymentPending"] is not None:
-            sale.is_payment_pending = update_data["isPaymentPending"]
+            # Segunda ruta viva que cambia el estado de pago (la otra es
+            # `update_payment_status_enriched`, via PATCH
+            # /sales/{id}/payment-status). Antes solo ponia el booleano y
+            # seguia: pagada -> pendiente dejaba la ENTRADA puesta y
+            # pendiente -> pagada no registraba el cobro -- el saldo quedaba
+            # mal en las dos direcciones. Comparten el mismo helper para que
+            # no vuelvan a divergir.
+            self._apply_payment_status_transition(sale, update_data["isPaymentPending"])
 
         result = self.sale_repo.update(sale)
 
         return result
 
-    def update_payment_status_enriched(
-        self,
-        sale_id: uuid.UUID,
-        data: SalePaymentStatusUpdate,
-    ) -> SaleResponse:
-        sale = self.get_by_id(sale_id)
-        was_pending = sale.is_payment_pending
-        sale.is_payment_pending = data.isPaymentPending
+    def _apply_payment_status_transition(self, sale: Sale, is_payment_pending: bool) -> None:
+        """Mueve la caja segun la transicion de `is_payment_pending`.
 
-        if was_pending and not data.isPaymentPending:
+        No comitea: deja la venta y el movimiento en la misma sesion para que
+        quien llame cierre la transaccion con un solo commit (mismo patron
+        que `SaleService.create`). Es un no-op si el estado no cambia.
+        """
+        was_pending = sale.is_payment_pending
+        sale.is_payment_pending = is_payment_pending
+
+        if was_pending and not is_payment_pending:
             # Pendiente -> pagada: se cobro ahora. Fija la fecha de pago si
             # todavia no tenia una y registra la entrada de caja, compuesta
             # con commit=False para que la venta y el movimiento sean una
             # sola transaccion (mismo patron que SaleService.create, Task 4).
             if sale.payment_date is None:
                 sale.payment_date = date.today()
-            self.cash_service.record(
-                occurred_at=business_midnight(sale.payment_date),
-                type=CashMovementType.ENTRADA,
-                amount=sale.total,
-                payment_method=sale.payment_method,
-                sale_id=sale.id,
-                note=None,
-                commit=False,
-            )
-        elif not was_pending and data.isPaymentPending:
+            self._record_sale_cash_entry(sale)
+        elif not was_pending and is_payment_pending:
             # Pagada -> pendiente: se esta corrigiendo que el cobro no era
             # cierto. El libro de caja no debe seguir mostrando un ingreso
             # que, segun el estado actual de la venta, no ocurrio -- mismo
             # invariante que una venta pendiente no registra nada al
             # crearse. Se retira el/los movimientos de esa venta en vez de
             # dejar una entrada que ya no refleja la realidad.
+            #
             # Filtrado por tipo ademas de por `sale_id`, igual que
             # `PurchaseService.cancel()`: `registrar_movimiento_caja` (Task 8)
             # acepta `venta_id` para los cinco tipos, asi que un
@@ -697,9 +698,29 @@ class SaleService:
             # payment_date sigue el mismo ciclo de vida que el movimiento: los
             # dos quedan en None mientras la venta este pendiente. Si no se
             # limpia, un pendiente -> pagada posterior lo encuentra no-None y
-            # no lo reemplaza (linea de abajo), fechando la entrada nueva con
+            # no lo reemplaza (linea de arriba), fechando la entrada nueva con
             # la fecha vieja en vez del cobro real.
             sale.payment_date = None
+
+    def _record_sale_cash_entry(self, sale: Sale) -> None:
+        """La ENTRADA que deja un cobro, fechada en `payment_date`."""
+        self.cash_service.record(
+            occurred_at=business_midnight(sale.payment_date),
+            type=CashMovementType.ENTRADA,
+            amount=sale.total,
+            payment_method=sale.payment_method,
+            sale_id=sale.id,
+            note=None,
+            commit=False,
+        )
+
+    def update_payment_status_enriched(
+        self,
+        sale_id: uuid.UUID,
+        data: SalePaymentStatusUpdate,
+    ) -> SaleResponse:
+        sale = self.get_by_id(sale_id)
+        self._apply_payment_status_transition(sale, data.isPaymentPending)
 
         self.sale_repo.update(sale)
         return self._to_sale_response(self.get_by_id(sale_id))
