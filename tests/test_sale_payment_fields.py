@@ -1,11 +1,8 @@
 """Las columnas de pago existen desde la pieza 1 y nada las escribia."""
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date
 from decimal import Decimal
-from types import SimpleNamespace
-
-import pytest
 
 from app.models.payment_method import PaymentMethod
 from app.schemas.sale import SaleCreate, SaleItemCreate

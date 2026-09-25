@@ -3,6 +3,8 @@
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from app.agent.tools.read import (
     buscar_cliente,
     consultar_caja,
@@ -68,6 +70,45 @@ def test_previsualizar_venta_returns_lots_and_cost(db_session, seeded_customer, 
     assert item["cost_basis_unit"] is not None
     assert item["lotes"]
     assert "is_habitual_price" in item
+
+
+@pytest.mark.parametrize("precio_cero", [0, 0.0, "0", "0.00"])
+def test_previsualizar_venta_honours_a_price_of_zero(
+    db_session, seeded_customer, seeded_product_with_lot, precio_cero
+):
+    """Un precio de cero es un regalo, no "no vino precio".
+
+    `write.py` ya se habia corregido a `is not None`; esta herramienta
+    seguia con una verdad booleana. Con un cero NUMERICO -- que es lo que un
+    modelo emite cuando el JSON de la tool call trae `0` en vez de `"0"` --
+    eso se leia como "no vino precio", y el preview mostraba el precio
+    SUGERIDO a precio completo mientras `registrar_venta`, con la misma
+    entrada, registraba cero. Dos cifras distintas para la misma venta, y la
+    que el usuario ve antes de aprobar es la equivocada.
+
+    Los cuatro casos van juntos a proposito: la divergencia solo se ve en
+    los dos primeros (`"0"` es una cadena no vacia y por lo tanto truthy),
+    asi que un test escrito solo con la forma de cadena -- la que el
+    docstring de la herramienta documenta -- pasaria con el bug puesto."""
+    result = previsualizar_venta.invoke({
+        "cliente_id": str(seeded_customer.id),
+        "items": [
+            {
+                "producto_id": str(seeded_product_with_lot.id),
+                "cantidad": "1",
+                "precio_unitario": precio_cero,
+            }
+        ],
+        "fecha": "2026-09-24",
+    })
+    item = result["items"][0]
+
+    assert Decimal(str(item["final_unit_price"])) == Decimal("0")
+    assert Decimal(str(item["subtotal"])) == Decimal("0")
+    assert Decimal(str(result["totals"]["total_revenue"])) == Decimal("0")
+    # El sugerido sigue viajando en el preview -- lo que estaba mal era que
+    # se usara como precio final.
+    assert Decimal(str(item["suggested_unit_price"])) > 0
 
 
 def test_previsualizar_venta_writes_nothing(db_session, seeded_customer, seeded_product_with_lot):

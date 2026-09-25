@@ -3,8 +3,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
 
-import pytest
-
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.payment_method import PaymentMethod
 from app.services.cash_service import CashService

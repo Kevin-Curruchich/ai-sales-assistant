@@ -1,7 +1,9 @@
 """Prompt de sistema del agente conversacional.
 
-`Revenew/AGENTS.md` y las nueve skills en `Revenew/skills/` (untracked en
-git -- no se mueven ni se commitean) son el documento de origen: ahi vive la
+`Revenew/AGENTS.md` y las nueve skills en `Revenew/skills/` (versionadas a
+proposito, como referencia HISTORICA del dominio -- no como fuente de verdad
+activa; ver `Revenew/README.md` y la seccion homonima de `docs/agente.md`)
+son el documento de origen: ahi vive la
 logica FIFO, el vocabulario de margenes y de caja, y la heuristica de precio
 habitual por cliente. Pero ese documento describe un runtime DISTINTO --uno
 que corre en Slack, escribe en Google Sheets y crea eventos en Google

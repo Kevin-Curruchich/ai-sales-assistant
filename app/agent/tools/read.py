@@ -66,7 +66,14 @@ def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
                 SaleItemCreate(
                     productId=i["producto_id"],
                     quantity=Decimal(str(i["cantidad"])),
-                    unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") else None,
+                    # `is not None`, no una verdad booleana -- la misma
+                    # correccion que `_build_sale_create` en write.py: un
+                    # precio de "0" (un regalo) es falsy, y con `i.get(...)`
+                    # a secas el preview mostraba el precio sugerido a precio
+                    # completo mientras la escritura registraba cero. Dos
+                    # cifras distintas para la misma venta, y la que el
+                    # usuario ve antes de aprobar es la equivocada.
+                    unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") is not None else None,
                 )
                 for i in items
             ],

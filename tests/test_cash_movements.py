@@ -128,13 +128,24 @@ def test_cash_movement_type_check_rejects_anything_else(test_engine, migrated_sc
             )
 
 
-def test_cash_movement_type_is_not_nullable(test_engine, migrated_schema):
-    with test_engine.connect() as conn:
-        nullable = conn.execute(
-            text(
-                "SELECT is_nullable FROM information_schema.columns "
-                "WHERE table_schema = :s AND table_name = 'cash_movements' AND column_name = 'type'"
-            ),
-            {"s": migrated_schema},
-        ).scalar()
-    assert nullable == "NO"
+def test_cash_movement_type_survived_the_varchar_conversion_as_not_nullable(test_engine, migrated_schema):
+    """Un movimiento sin tipo no entra.
+
+    El NOT NULL no lo introdujo esta rama -- venia de la columna enum
+    original. Lo que esta rama SI hizo es reescribir esa columna a
+    VARCHAR + CHECK, y una reescritura es exactamente el momento en que una
+    restriccion se puede perder por descuido. Por eso el test se queda, pero
+    ejercitando la restriccion (un INSERT que tiene que fallar) en vez de
+    leer `information_schema` y afirmar que dice lo que la migracion acaba
+    de escribir ahi: lo que importa es que la base lo RECHACE, y eso es lo
+    unico que un catalogo bien escrito y una restriccion rota no pueden
+    fingir a la vez."""
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO cash_movements (occurred_at, type, amount) "
+                    "VALUES ('2026-09-23T09:00:00Z', NULL, 10)"
+                )
+            )
