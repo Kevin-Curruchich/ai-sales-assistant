@@ -30,11 +30,33 @@ DENTRO del payload de `interrupt()`: viaja al panel, se congela en el
 checkpoint, y el panel la devuelve tal cual dentro de la aprobacion
 (`{"accion": "aprobar", "huella": ...}`).  Solo esa huella devuelta -- nunca
 un recalculo local hecho en esta misma ejecucion -- se compara contra un
-recalculo fresco hecho DESPUES de la reanudacion, con `db.expire_all()` de
-por medio para que la comparacion no pueda pasar por objetos cacheados en el
-identity map de SQLAlchemy en vez de datos releidos.  Si difiere, no se
-escribe -- se avisa.  Esto cambia el contrato del panel (tiene que guardar y
-devolver `huella` sin tocarla); Task 10 lo documenta.
+recalculo fresco hecho DESPUES de la reanudacion.  Si difiere, no se escribe
+-- se avisa con `"estado": "recalculado"`.  Si la aprobacion no trae una
+huella utilizable (ausente, `None`, o vacia -- por ejemplo un panel armado
+contra el contrato de la ronda 0, que no mandaba huella), se avisa distinto,
+con `"estado": "aprobacion_sin_huella"`: sin esta distincion, ese panel viejo
+recibiria "recalculado" ("el inventario cambio") para SIEMPRE, en cada
+aprobacion, sin ninguna pista de que el problema es el contrato y no el
+inventario. Esto cambia el contrato del panel (tiene que guardar y devolver
+`huella` sin tocarla); Task 10 lo documenta. La huella es un valor sin firmar
+que el cliente retiene entre la pausa y el resume: un panel que la
+RECALCULA en vez de echoarla derrota la guardia en silencio (siempre
+"coincide" con lo que el mismo panel acaba de calcular) -- esta herramienta
+no puede distinguir eso de un echo honesto cuando nada cambio en el medio;
+solo puede decir lo que SI puede distinguir, que es la ausencia total de
+huella.
+
+`db.expire_all()` antes de cada recalculo NO es lo que hace funcionar esta
+guardia bajo una reanudacion real -- `agent_session()` abre una sesion NUEVA
+en cada reanudacion (ver mas abajo), asi que el identity map de SQLAlchemy
+arranca VACIO cuando el recalculo corre, y expirarlo ahi no cambia nada en
+ese caso. Lo que SI protege: un escritor genuinamente CONCURRENTE -- otra
+conexion, otra sesion -- que comitea ENTRE el preview descartable de esta
+ejecucion y el recalculo, los dos dentro de la MISMA sesion de esta misma
+ejecucion. Sin expirar, esa segunda lectura podria devolver los mismos
+objetos Python que la primera ya cargo, ignorando el commit ajeno. Se
+mantiene la llamada por eso -- no porque sea lo que hace que la comparacion
+contra la huella funcione; eso lo hace la huella misma.
 
 Sobre `corregir`: usa un `while` en vez de que la herramienta se reinvoque a
 si misma via `.invoke()`.  La razon original que se dio para esto (que
@@ -47,15 +69,29 @@ de LangGraph muestra para "pedir de nuevo" dentro de una sola ejecucion en
 linea recta, no crece el stack por cada correccion, y no puede girar sin
 control porque cada vuelta bloquea en una decision humana real.
 
-Limite conocido, fuera del alcance de este archivo (Task 9): `ToolNode`
-corre todas las tool calls de un mismo mensaje del modelo como UNA sola
-tarea.  Si una escritura ya se completo y una HERMANA en el mismo paso
-todavia esta en un `interrupt()`, reanudar ese paso vuelve a correr TODO el
-paso desde el principio -- incluida la escritura que ya se habia completado
-y comiteado.  Nada en este archivo puede distinguir esa repeticion de una
-solicitud nueva con los mismos valores sin una clave de idempotencia que
-viaje por fuera de estas funciones (por ejemplo en `config`); esa pieza le
-toca al grafo, no a la herramienta.
+Limite conocido, FUERA del alcance de este archivo -- Task 9 lo hereda como
+condicion de aceptacion BLOQUEANTE: `ToolNode` corre todas las tool calls de
+un mismo mensaje del modelo como UNA sola tarea. Si una escritura de este
+archivo ya se completo y comiteo, y una HERMANA en el mismo paso todavia
+esta en un `interrupt()`, reanudar ese paso vuelve a correr TODO el paso
+desde el principio -- incluida la escritura que ya se habia completado.
+Confirmado contra langgraph 1.0.3, con consecuencias CONCRETAS por
+herramienta (no un riesgo abstracto):
+
+  - `registrar_compra` duplica la compra, el incremento de stock Y la
+    salida de caja -- las tres comiteadas de nuevo.
+  - `registrar_movimiento_caja` duplica SIEMPRE: no tiene ninguna guardia
+    que pueda distinguir una repeticion de una solicitud nueva.
+  - `registrar_venta` escapa solo por ACCIDENTE: si el lote tiene unidades
+    de sobra al mismo costo unitario, la huella recalculada en la segunda
+    pasada es identica a la primera y la guardia la deja pasar sin
+    protestar -- solo corta la repeticion cuando el lote es chico y la
+    primera escritura ya lo dejo insuficiente para la segunda.
+
+Nada en este archivo puede distinguir esa repeticion de una solicitud nueva
+con los mismos valores sin una clave de idempotencia que viaje por fuera de
+estas funciones (por ejemplo en `config`); esa pieza le toca al grafo, no a
+la herramienta.
 """
 
 import uuid
@@ -91,6 +127,15 @@ def _money(value) -> Decimal:
     y la huella los veria "iguales" porque los dos lados de la comparacion
     usaban el redondeo equivocado)."""
     return Decimal(str(value)).quantize(MONEY, rounding=ROUND_HALF_UP)
+
+
+def _huella_ausente(huella) -> bool:
+    """True si `huella` no sirve para comparar: ausente, `None`, o vacia
+    (`[]`/`{}`).  Distingue "el panel no mando huella" de "la huella no
+    coincide con el recalculo" -- lo primero es un problema de contrato, no
+    de inventario, y merece un estado propio en vez de "recalculado" con un
+    mensaje que sugiere que algo cambio en la base (ronda 2 de revision)."""
+    return not huella
 
 
 # ---------------------------------------------------------------------
@@ -147,7 +192,10 @@ def _sale_written_dict(sale_response) -> dict:
     resuelve la asignacion FIFO con `lock_for_update=True`, que en teoria
     puede diferir de lo que un preview sin lock calculo un instante antes.
     Devolver la lectura real, no la prediccion, es lo unico honesto que se
-    puede reportar como "esto es lo que se registro" (Finding I7)."""
+    puede reportar como "esto es lo que se registro" (Finding I7).  Va bajo
+    la clave "venta" en la respuesta final, no "preview": son dos schemas
+    distintos (una lectura real contra una prediccion) y compartir el
+    nombre invitaba a tratarlos como si fueran lo mismo."""
     result = sale_response.model_dump(mode="json")
     for item in result["items"]:
         item["lotes"] = item.pop("allocations")
@@ -205,13 +253,22 @@ def registrar_venta(
     herramienta la usa para confirmar que el inventario no cambio entre que
     se mostro el precio y que se aprobo.
 
-    El resultado trae "estado": "registrado" | "cancelado" | "recalculado".
-    "recalculado" significa que el inventario cambio entre que se mostro el
-    precio y que se aprobo -- nada se escribio, hay que volver a previsualizar.
+    El resultado trae "estado": "registrado" | "cancelado" | "recalculado" |
+    "aprobacion_sin_huella". "registrado" trae la venta escrita bajo la
+    clave "venta" (no "preview"). "recalculado" significa que el inventario
+    cambio entre que se mostro el precio y que se aprobo -- nada se
+    escribio, hay que volver a previsualizar. "aprobacion_sin_huella"
+    significa que la aprobacion no trajo la huella que se le mostro -- un
+    problema del panel, no del inventario.
     """
-    # `config` lo inyecta LangGraph: el modelo no lo ve ni lo puede inventar.
-    # El user_id lo puso el grafo al arrancar la corrida, resolviendo el token
-    # de Firebase que mando el panel (Task 6).  La fila la firma esa persona.
+    # Autenticar ANTES de interrumpir: pedirle a una persona que apruebe algo
+    # que nunca se iba a poder escribir es el orden equivocado, aunque nada
+    # se escriba (no era un bug de correccion, era un orden raro -- ronda 2
+    # de revision). El user_id lo puso el grafo al arrancar la corrida,
+    # resolviendo el token de Firebase que mando el panel (Task 6); `config`
+    # lo inyecta LangGraph, el modelo no lo ve ni lo puede inventar.
+    usuario_id = user_id_from_config(config)
+
     valores = {
         "cliente_id": cliente_id,
         "items": items,
@@ -253,34 +310,46 @@ def registrar_venta(
                     "mensaje": f"Accion no reconocida: {accion!r}. No se escribio nada.",
                 }
 
+            huella_aprobada = decision.get("huella")
+            if _huella_ausente(huella_aprobada):
+                return {
+                    "estado": "aprobacion_sin_huella",
+                    "mensaje": (
+                        "La aprobacion no trajo la huella que se le mostro en el "
+                        "payload de interrupt() -- el panel debe devolverla tal "
+                        "cual, sin recalcularla ni omitirla. No se escribio nada; "
+                        "hay que volver a previsualizar y aprobar de nuevo."
+                    ),
+                }
+
             # `preview`/`huella` de ARRIBA son de esta ejecucion del nodo. En
             # una reanudacion real, LangGraph corrio esta funcion entera de
             # nuevo desde el principio -- esas dos lineas se calcularon DESPUES
             # de la pausa, con datos frescos, no son "lo que la persona vio".
-            # Lo unico que si lo es: `decision["huella"]`, que viajo dentro del
+            # Lo unico que si lo es: `huella_aprobada`, que viajo dentro del
             # payload de interrupt(), quedo congelada en el checkpoint, y el
             # panel la devolvio tal cual al aprobar.
             #
-            # `db.expire_all()` antes de recalcular: sin esto, la frescura del
-            # recalculo depende de que los objetos de la lectura de arriba ya
-            # se hayan expulsado del identity map de SQLAlchemy por su cuenta
-            # -- un accidente de timing, no una garantia (Finding I4).
+            # `db.expire_all()`: protege contra un escritor CONCURRENTE que
+            # comitee entre esta linea y la de abajo, dentro de la MISMA
+            # sesion -- no es lo que hace que la comparacion contra la huella
+            # funcione bajo una reanudacion real (ver el docstring del modulo).
             db.expire_all()
             recalculado = service.preview_sale(data)
-            huella_aprobada = decision.get("huella")
             if huella_aprobada != _sale_cost_huella(recalculado):
                 return {
                     "estado": "recalculado",
                     "mensaje": "El inventario cambio y el costo difiere de lo que aprobaste.",
-                    "aprobado": huella_aprobada,
-                    "actual": _sale_preview_dict(recalculado),
+                    "huella_aprobada": huella_aprobada,
+                    "huella_actual": _sale_cost_huella(recalculado),
+                    "preview_actual": _sale_preview_dict(recalculado),
                 }
 
-            enriched = service.create_enriched(data, user_id=user_id_from_config(config))
+            enriched = service.create_enriched(data, user_id=usuario_id)
             return {
                 "estado": "registrado",
                 "venta_id": str(enriched.id),
-                "preview": _sale_written_dict(enriched),
+                "venta": _sale_written_dict(enriched),
             }
 
 
@@ -397,8 +466,14 @@ def registrar_compra(
     registrar_movimiento_caja (tipo="aporte_socio", compra_id=<esta compra>)
     -- esta herramienta nunca lo hace por su cuenta.
 
-    El resultado trae "estado": "registrado" | "cancelado" | "recalculado".
+    El resultado trae "estado": "registrado" | "cancelado" | "recalculado" |
+    "aprobacion_sin_huella". "registrado" trae la compra confirmada bajo la
+    clave "compra" (no "preview").
     """
+    # Autenticar ANTES de interrumpir -- ver la nota identica en
+    # registrar_venta (ronda 2 de revision).
+    usuario_id = user_id_from_config(config)
+
     valores = {
         "items": items,
         "fecha": fecha,
@@ -436,19 +511,31 @@ def registrar_compra(
                     "mensaje": f"Accion no reconocida: {accion!r}. No se escribio nada.",
                 }
 
+            huella_aprobada = decision.get("huella")
+            if _huella_ausente(huella_aprobada):
+                return {
+                    "estado": "aprobacion_sin_huella",
+                    "mensaje": (
+                        "La aprobacion no trajo la huella que se le mostro en el "
+                        "payload de interrupt() -- el panel debe devolverla tal "
+                        "cual, sin recalcularla ni omitirla. No se escribio nada; "
+                        "hay que volver a previsualizar y aprobar de nuevo."
+                    ),
+                }
+
             db.expire_all()  # ver la nota identica en registrar_venta (Finding I4)
             recalculado = _purchase_preview(db, data)
-            huella_aprobada = decision.get("huella")
             if huella_aprobada != _purchase_huella(recalculado):
                 return {
                     "estado": "recalculado",
                     "mensaje": "Los datos de la compra cambiaron y difieren de lo que aprobaste.",
-                    "aprobado": huella_aprobada,
-                    "actual": recalculado,
+                    "huella_aprobada": huella_aprobada,
+                    "huella_actual": _purchase_huella(recalculado),
+                    "preview_actual": recalculado,
                 }
 
             service = PurchaseService(db)
-            purchase = service.create(data, user_id=user_id_from_config(config))
+            purchase = service.create(data, user_id=usuario_id)
             try:
                 confirmed = service.confirm(purchase.id)
             except Exception:
@@ -482,7 +569,7 @@ def registrar_compra(
             return {
                 "estado": "registrado",
                 "compra_id": str(confirmed.id),
-                "preview": confirmed.model_dump(mode="json"),
+                "compra": confirmed.model_dump(mode="json"),
             }
 
 
@@ -529,6 +616,15 @@ def registrar_movimiento_caja(
     Se detiene a pedir confirmacion antes de escribir. El resultado trae
     "estado": "registrado" | "cancelado".
     """
+    # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
+    # para asociar el movimiento a nadie, sino para AUTENTICAR, y se hace
+    # ANTES de interrumpir: sin ella, un hilo sin autenticar podia
+    # interrumpir a una persona, juntar una aprobacion, y recien ahi
+    # reventar -- pedirle a alguien que apruebe algo que nunca se iba a
+    # poder escribir es el orden equivocado (ronda 2 de revision; antes
+    # esta llamada estaba al final, justo antes de escribir).
+    user_id_from_config(config)
+
     valores = {
         "tipo": tipo,
         "monto": monto,
@@ -565,14 +661,6 @@ def registrar_movimiento_caja(
         # este movimiento no deriva de inventario ni de lotes -- es un hecho
         # que la persona afirma ("el socio puso Q500"), no un calculo que
         # pueda desactualizarse entre el preview y la aprobacion.
-        #
-        # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
-        # para asociar el movimiento a nadie, sino para AUTENTICAR: sin ella,
-        # un hilo sin autenticar podia escribir un aporte_socio de Q500 sin
-        # que nada lo impidiera y sin dejar ningun rastro de quien lo pidio
-        # (Finding I3).
-        user_id_from_config(config)
-
         with agent_session() as db:
             service = CashService(db)
             movement = service.record(

@@ -38,6 +38,7 @@ from app.models.product import Product
 from app.models.purchase import Purchase, PurchaseItem
 from app.models.sale import Sale
 from app.repositories.product_repository import ProductRepository
+from app.repositories.purchase_repository import PurchaseRepository
 from app.services.cash_service import CashService
 from app.services.purchase_service import PurchaseService
 
@@ -116,9 +117,12 @@ def test_a_sale_whose_lots_were_consumed_asks_again_instead_of_writing(
     assert db_session.query(Sale).count() == 0
     assert "difiere" in result["mensaje"].lower()
     # Lo aprobado (la huella congelada, Q10.00) y lo actual (sin lote) deben
-    # venir los dos, para que el agente pueda explicar que cambio.
-    assert result["aprobado"][0]["cost_basis_unit"] == "10.00"
-    assert result["actual"]["items"][0]["cost_basis_unit"] != "10.00"
+    # venir los dos, con la MISMA forma (huella contra huella), para que el
+    # agente pueda explicar que cambio sin tener que diferenciar dos schemas
+    # distintos (ronda 2 de revision).
+    assert result["huella_aprobada"][0]["cost_basis_unit"] == "10.00"
+    assert result["huella_actual"][0]["cost_basis_unit"] != "10.00"
+    assert result["preview_actual"]["items"][0]["cost_basis_unit"] != "10.00"
 
 
 def test_a_sale_whose_lot_was_partially_consumed_asks_again_instead_of_leaking_an_exception(
@@ -151,6 +155,81 @@ def test_a_sale_whose_lot_was_partially_consumed_asks_again_instead_of_leaking_a
     assert db_session.query(Sale).count() == 0
 
 
+def test_expire_all_prevents_a_stale_identity_map_read_from_passing_the_guard(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """El test de arriba (consumo parcial) prueba que la huella detecta la
+    insuficiencia -- pero por si solo no prueba que `db.expire_all()` haga
+    falta: si nada retiene los objetos ORM que la primera lectura cargo, el
+    garbage collector de Python podria sacarlos del identity map de
+    SQLAlchemy por su cuenta, y el recalculo terminaria releyendo de la base
+    de todos modos aunque `expire_all()` no hiciera nada.
+
+    Este test cierra ese hueco: retiene una referencia FUERTE a cada
+    `Product`/`PurchaseItem` que las consultas cargan (monkeypatchando
+    `ProductRepository.get_by_id` y
+    `PurchaseRepository.get_fifo_available_lots` para que acumulen sus
+    resultados), de modo que el GC no pueda sacarlos del medio. Sin
+    `db.expire_all()`, el recalculo reutilizaria esos mismos objetos Python
+    -- con la cantidad de ANTES del consumo parcial -- y la guardia dejaria
+    pasar una venta que ya no es cierta (Finding I4, ronda 2 de revision)."""
+    kept_alive = []
+
+    original_get_by_id = ProductRepository.get_by_id
+
+    def capturing_get_by_id(self, product_id):
+        result = original_get_by_id(self, product_id)
+        kept_alive.append(result)
+        return result
+
+    monkeypatch.setattr(ProductRepository, "get_by_id", capturing_get_by_id)
+
+    original_get_fifo = PurchaseRepository.get_fifo_available_lots
+
+    def capturing_get_fifo(self, *args, **kwargs):
+        result = original_get_fifo(self, *args, **kwargs)
+        kept_alive.extend(result)
+        return result
+
+    monkeypatch.setattr(PurchaseRepository, "get_fifo_available_lots", capturing_get_fifo)
+
+    payload = _sale_payload(
+        seeded_customer,
+        seeded_product_with_lot,
+        items=[{"producto_id": str(seeded_product_with_lot.id), "cantidad": "6"}],
+    )
+
+    def consume_one_unit_then_approve(p):
+        _consume_part_of_the_lot(db_session, seeded_product_with_lot, Decimal("1"))
+        return _approve(p)
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", consume_one_unit_then_approve)
+
+    result = registrar_venta.invoke(payload, config=_config(seeded_user))
+
+    assert result["estado"] == "recalculado"
+    assert db_session.query(Sale).count() == 0
+    assert len(kept_alive) > 0  # confirma que el monkeypatch se uso de verdad
+
+
+def test_an_approval_without_a_huella_is_reported_distinctly_from_a_real_change(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """Un panel armado contra el contrato de la ronda 0 (que no mandaba
+    huella) aprobaria con {"accion": "aprobar"} a secas. Sin esta
+    distincion, recibiria "recalculado" ("el inventario cambio") en TODAS
+    las aprobaciones, para siempre, sin ninguna pista de que el problema es
+    el contrato del panel y no el inventario (ronda 2 de revision)."""
+    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+
+    result = registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot), config=_config(seeded_user)
+    )
+
+    assert result["estado"] == "aprobacion_sin_huella"
+    assert db_session.query(Sale).count() == 0
+
+
 def test_an_approved_sale_writes_exactly_what_was_shown(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
 ):
@@ -164,10 +243,12 @@ def test_an_approved_sale_writes_exactly_what_was_shown(
     assert result["estado"] == "registrado"
     assert result["venta_id"] == str(sale.id)
     assert sale.user_id == seeded_user.id
-    assert sale.items[0].cost_basis_unit == Decimal(result["preview"]["items"][0]["cost_basis_unit"])
+    # La venta escrita viene bajo "venta", no "preview" -- distinto schema
+    # (una lectura real, no una prediccion) con nombre distinto (ronda 2).
+    assert sale.items[0].cost_basis_unit == Decimal(result["venta"]["items"][0]["cost_basis_unit"])
     # La forma es la misma que previsualizar_venta: "lotes", no "allocations".
-    assert "lotes" in result["preview"]["items"][0]
-    assert "allocations" not in result["preview"]["items"][0]
+    assert "lotes" in result["venta"]["items"][0]
+    assert "allocations" not in result["venta"]["items"][0]
     # La venta quedo pagada (cash hook de Tasks 4/5) -- esta herramienta no
     # duplica ese movimiento.
     movements = db_session.query(CashMovement).filter_by(sale_id=sale.id).all()
@@ -260,18 +341,28 @@ def test_correcting_re_previews_with_the_new_values_before_writing(
     assert sale.items[0].quantity == Decimal("3")
 
 
-def test_registrar_venta_writes_nothing_without_reaching_an_approval(
+def test_registrar_venta_authenticates_before_asking_for_approval(
     db_session, seeded_customer, seeded_product_with_lot, monkeypatch
 ):
-    """Sin user_id en el config, la rama de aprobar reventaria en
-    user_id_from_config -- pero eso solo pasa DESPUES de recalcular y
-    encontrar que coincide. Este test fija que, si el que aprueba no esta
-    autenticado, la excepcion sale sin haber escrito la venta."""
-    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve)
+    """Autenticar es lo PRIMERO que hace la herramienta, antes de
+    interrumpir para pedir aprobacion -- no algo que revienta recien al
+    escribir. Pedirle a una persona que apruebe algo que nunca se iba a
+    poder escribir es el orden equivocado, aunque nada se escriba de todas
+    formas (ronda 2 de revision: antes, `user_id_from_config` se llamaba
+    justo antes de crear, despues de mostrar el preview y juntar la
+    aprobacion)."""
+    calls = {"n": 0}
+
+    def spy_interrupt(payload):
+        calls["n"] += 1
+        return _approve(payload)
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", spy_interrupt)
 
     with pytest.raises(AgentAuthError):
         registrar_venta.invoke(_sale_payload(seeded_customer, seeded_product_with_lot))
 
+    assert calls["n"] == 0  # nunca se llego a interrumpir
     assert db_session.query(Sale).count() == 0
 
 
@@ -452,8 +543,9 @@ def test_a_purchase_whose_product_was_deactivated_asks_again_instead_of_writing(
 
     assert result["estado"] == "recalculado"
     assert db_session.query(Purchase).count() == 0
-    assert result["aprobado"]["items"][0]["producto_activo"] is True
-    assert result["actual"]["items"][0]["producto_activo"] is False
+    assert result["huella_aprobada"]["items"][0]["producto_activo"] is True
+    assert result["huella_actual"]["items"][0]["producto_activo"] is False
+    assert result["preview_actual"]["items"][0]["producto_activo"] is False
 
 
 def test_correcting_a_purchase_re_previews_before_writing(db_session, draft_product, seeded_user, monkeypatch):
@@ -475,6 +567,36 @@ def test_correcting_a_purchase_re_previews_before_writing(db_session, draft_prod
     assert result["estado"] == "registrado"
     purchase = db_session.query(Purchase).one()
     assert purchase.total == Decimal("100.00")  # 5 * 20.00, no 5 * 12.50
+
+
+def test_a_purchase_approval_without_a_huella_is_reported_distinctly(
+    db_session, draft_product, seeded_user, monkeypatch
+):
+    """Mismo caso que en la venta, del lado de la compra (ronda 2 de
+    revision)."""
+    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+
+    result = registrar_compra.invoke(_purchase_payload(draft_product), config=_config(seeded_user))
+
+    assert result["estado"] == "aprobacion_sin_huella"
+    assert db_session.query(Purchase).count() == 0
+
+
+def test_registrar_compra_authenticates_before_asking_for_approval(db_session, draft_product, monkeypatch):
+    """Ver la nota identica en registrar_venta (ronda 2 de revision)."""
+    calls = {"n": 0}
+
+    def spy_interrupt(payload):
+        calls["n"] += 1
+        return _approve(payload)
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", spy_interrupt)
+
+    with pytest.raises(AgentAuthError):
+        registrar_compra.invoke(_purchase_payload(draft_product))
+
+    assert calls["n"] == 0
+    assert db_session.query(Purchase).count() == 0
 
 
 def test_confirm_failure_with_partial_stock_already_applied_rolls_back_before_deleting_the_draft(
@@ -585,16 +707,24 @@ def test_an_approved_cash_movement_is_recorded(db_session, seeded_user, monkeypa
     assert movement.note == "Aporte del socio"
 
 
-def test_registrar_movimiento_caja_requires_an_authenticated_user(db_session, monkeypatch):
+def test_registrar_movimiento_caja_authenticates_before_asking_for_approval(db_session, monkeypatch):
     """CashMovement no tiene columna user_id -- la unica forma de dejar un
     rastro (y de impedir que un hilo sin autenticar escriba un aporte_socio
     de Q500) es rechazar la escritura si el config no trae un user_id
-    valido (Finding I3)."""
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    valido (Finding I3). Y se autentica ANTES de interrumpir, no recien al
+    escribir -- ver la nota identica en registrar_venta (ronda 2)."""
+    calls = {"n": 0}
+
+    def spy_interrupt(payload):
+        calls["n"] += 1
+        return {"accion": "aprobar"}
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", spy_interrupt)
 
     with pytest.raises(AgentAuthError):
         registrar_movimiento_caja.invoke({"tipo": "aporte_socio", "monto": "500.00", "fecha": "2026-09-24"})
 
+    assert calls["n"] == 0
     assert db_session.query(CashMovement).count() == 0
 
 
