@@ -9,10 +9,18 @@ from app.agent.tools.read import (
     consultar_seguimiento,
     previsualizar_venta,
 )
+from app.core.datetime_utils import business_tz
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.customer import Customer
 from app.models.customer_product_cycle import CustomerProductCycle
 from app.models.sale import Sale
+
+# Los movimientos de caja se siembran con la misma zona con la que produccion
+# los escribe (business_midnight()/SaleCreate.occurredAt son siempre
+# tz-aware, nunca naive) -- si la siembra fuera naive junto con un boundary
+# tambien naive, ambos comparten el mismo supuesto equivocado y el desfase de
+# husario queda invisible para el test.
+GT = business_tz()
 
 
 def test_buscar_cliente_returns_every_match_without_choosing(db_session, two_similar_customers):
@@ -155,25 +163,25 @@ def test_consultar_caja_returns_plain_decimals_as_strings(db_session):
 def test_consultar_caja_reports_real_balance_ordering_and_field_mapping(db_session):
     entrada = _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 1, 9, 0),
+        occurred_at=datetime(2026, 9, 1, 9, 0, tzinfo=GT),
         type_=CashMovementType.ENTRADA,
         amount=Decimal("500.00"),
     )
     salida = _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 10, 15, 30),
+        occurred_at=datetime(2026, 9, 10, 15, 30, tzinfo=GT),
         type_=CashMovementType.SALIDA,
         amount=Decimal("120.00"),
     )
     aporte = _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 15, 8, 0),
+        occurred_at=datetime(2026, 9, 15, 8, 0, tzinfo=GT),
         type_=CashMovementType.APORTE_SOCIO,
         amount=Decimal("200.00"),
     )
     retiro = _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 20, 12, 0),
+        occurred_at=datetime(2026, 9, 20, 12, 0, tzinfo=GT),
         type_=CashMovementType.RETIRO_SOCIO,
         amount=Decimal("50.00"),
     )
@@ -212,7 +220,7 @@ def test_consultar_caja_limite_caps_to_the_most_recent(db_session):
     ]):
         _seed_movement(
             db_session,
-            occurred_at=datetime(2026, 9, 1 + i, 12, 0),
+            occurred_at=datetime(2026, 9, 1 + i, 12, 0, tzinfo=GT),
             type_=type_,
             amount=amount,
         )
@@ -225,24 +233,26 @@ def test_consultar_caja_limite_caps_to_the_most_recent(db_session):
 
 
 def test_consultar_caja_hasta_a_bare_date_includes_that_whole_day(db_session):
-    # La salida ocurre a las 15:30 del mismo dia que pedimos como "hasta"
-    # (solo fecha, sin hora). Sin el ajuste a fin de dia, `occurred_at <=
-    # medianoche` la excluiria -- justo lo que la revision marco como bug.
+    # La salida ocurre a las 23:30 hora de Guatemala, el mismo dia calendario
+    # que pedimos como "hasta" (solo fecha, sin hora) -- deliberadamente tarde
+    # en el dia local. Con un boundary naive (leido como UTC por Postgres,
+    # que corre en UTC) "hasta el 10" caia a las 17:59 hora local y esta
+    # salida quedaba afuera; el fix la tiene que incluir.
     entrada = _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 1, 9, 0),
+        occurred_at=datetime(2026, 9, 1, 9, 0, tzinfo=GT),
         type_=CashMovementType.ENTRADA,
         amount=Decimal("500.00"),
     )
     salida = _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 10, 15, 30),
+        occurred_at=datetime(2026, 9, 10, 23, 30, tzinfo=GT),
         type_=CashMovementType.SALIDA,
         amount=Decimal("120.00"),
     )
     _seed_movement(
         db_session,
-        occurred_at=datetime(2026, 9, 15, 8, 0),
+        occurred_at=datetime(2026, 9, 15, 8, 0, tzinfo=GT),
         type_=CashMovementType.APORTE_SOCIO,
         amount=Decimal("200.00"),
     )
@@ -253,6 +263,44 @@ def test_consultar_caja_hasta_a_bare_date_includes_that_whole_day(db_session):
     ids = [m["id"] for m in result["movimientos"]]
     assert ids == [str(salida.id), str(entrada.id)]
     assert result["movimientos"][0]["saldo_acumulado"] == "380.00"
+
+
+def test_consultar_caja_desde_hasta_use_the_local_calendar_day_not_utc(db_session):
+    # Tres movimientos a caballo del dia pedido, todos en hora de Guatemala:
+    # - la noche anterior (23:30 del 9) tiene que quedar AFUERA de `desde`;
+    # - la noche del dia pedido (23:30 del 10) tiene que quedar ADENTRO;
+    # - la madrugada del dia siguiente (00:15 del 11) tiene que quedar AFUERA
+    #   de `hasta`.
+    # Bajo el bug original (boundary naive, leido como UTC): `desde
+    # "2026-09-10"` caia a las 18:00 local del 9 -- incluyendo de mas esa
+    # noche anterior -- y `hasta "2026-09-10"` caia a las 17:59 local del 10
+    # -- excluyendo la noche del propio dia pedido.
+    noche_anterior = _seed_movement(
+        db_session,
+        occurred_at=datetime(2026, 9, 9, 23, 30, tzinfo=GT),
+        type_=CashMovementType.ENTRADA,
+        amount=Decimal("10.00"),
+    )
+    dentro_del_dia = _seed_movement(
+        db_session,
+        occurred_at=datetime(2026, 9, 10, 23, 30, tzinfo=GT),
+        type_=CashMovementType.ENTRADA,
+        amount=Decimal("20.00"),
+    )
+    madrugada_siguiente = _seed_movement(
+        db_session,
+        occurred_at=datetime(2026, 9, 11, 0, 15, tzinfo=GT),
+        type_=CashMovementType.ENTRADA,
+        amount=Decimal("30.00"),
+    )
+    db_session.commit()
+
+    result = consultar_caja.invoke({"desde": "2026-09-10", "hasta": "2026-09-10"})
+
+    ids = {m["id"] for m in result["movimientos"]}
+    assert ids == {str(dentro_del_dia.id)}
+    assert str(noche_anterior.id) not in ids
+    assert str(madrugada_siguiente.id) not in ids
 
 
 def test_consultar_caja_writes_nothing(db_session):

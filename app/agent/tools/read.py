@@ -15,6 +15,7 @@ from decimal import Decimal
 from langchain_core.tools import tool
 
 from app.agent.session import agent_session
+from app.core.datetime_utils import business_end_of_day, business_midnight, business_tz
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.services.cash_service import CashService
 from app.services.customer_service import CustomerService
@@ -99,21 +100,38 @@ def consultar_seguimiento(filtro: str = "all", limite: int = 10, offset: int = 0
 
 
 def _parse_boundary(value: str, *, inclusive_end: bool) -> datetime:
-    """Convierte "AAAA-MM-DD" (o un timestamp ISO completo) a `datetime`.
+    """Convierte "AAAA-MM-DD" (o un timestamp ISO completo) a un `datetime`
+    con zona -- `occurred_at` es `timestamptz`, no un reloj sin husario.
 
-    Una fecha sin hora usada como limite SUPERIOR tiene que cubrir el dia
-    entero: `datetime.fromisoformat("2026-09-24")` da medianoche, y el
-    repositorio filtra `occurred_at <= hasta` -- sin este ajuste, "hasta hoy"
-    excluiria todo lo ocurrido hoy mismo despues de las 00:00. El limite
-    INFERIOR no tiene ese problema: medianoche ya es el primer instante del
-    dia, asi que `occurred_at >= desde` incluye el dia completo tal cual.
-    Si `value` ya trae hora, se respeta sin tocarla.
+    Una fecha sin hora se interpreta en la zona del negocio (Guatemala), no
+    UTC ni naive: quien pregunta "desde/hasta el 24" habla del dia calendario
+    local, no de un instante que empiece o termine a medianoche UTC. Una
+    version anterior de esta funcion devolvia un `datetime` naive, que
+    Postgres lee como UTC al compararlo contra `timestamptz` -- el mismo
+    desfase de 6 horas que documenta `to_business_tz()`, solo que aca en la
+    entrada en vez de la salida:
+
+      - un `hasta` de solo fecha caia a las 17:59:59 hora local (medianoche
+        UTC), descartando toda la tarde/noche de ese dia;
+      - un `desde` de solo fecha caia a las 18:00 hora local del dia ANTERIOR
+        (medianoche UTC), incluyendo de mas esa noche previa.
+
+    `business_midnight()`/`business_end_of_day()` (app/core/datetime_utils)
+    construyen el limite correcto para cada lado. Si `value` ya trae una hora
+    Y una zona, se usa tal cual -- eso es lo que el llamador pidio. Si trae
+    hora pero SIN zona, se asume la zona del negocio en vez de naive/UTC, por
+    la misma razon que el caso de solo fecha.
     """
     parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is not None:
+        return parsed
+
     is_bare_date = "T" not in value and " " not in value
-    if inclusive_end and is_bare_date:
-        parsed = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
-    return parsed
+    if is_bare_date:
+        day = date_type.fromisoformat(value)
+        return business_end_of_day(day) if inclusive_end else business_midnight(day)
+
+    return parsed.replace(tzinfo=business_tz())
 
 
 @tool
@@ -123,9 +141,11 @@ def consultar_caja(desde: str | None = None, hasta: str | None = None, limite: i
     `saldo` es el efectivo operativo disponible ahora mismo; `saldo_socio` es
     lo que el negocio le debe al socio (aportes menos retiros) -- ambos son
     siempre el acumulado a hoy, sin importar el rango del libro. `desde` y
-    `hasta` ("AAAA-MM-DD", opcionales) acotan que movimientos se listan; una
-    `hasta` sin hora incluye ese dia completo. `limite` corta cuantos de los
-    mas recientes de ese rango se devuelven.
+    `hasta` ("AAAA-MM-DD", opcionales) acotan que movimientos se listan, como
+    dias calendario en la zona del negocio (Guatemala): una `hasta` de solo
+    fecha incluye ese dia completo hasta medianoche local, no hasta
+    medianoche UTC. `limite` corta cuantos de los mas recientes de ese rango
+    se devuelven.
     """
     with agent_session() as db:
         service = CashService(db)
