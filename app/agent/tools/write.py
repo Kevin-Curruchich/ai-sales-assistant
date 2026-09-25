@@ -200,10 +200,14 @@ def _build_sale_create(
             SaleItemCreate(
                 productId=i["producto_id"],
                 quantity=Decimal(str(i["cantidad"])),
-                # `is not None`, no una verdad booleana: un precio de "0" (un
-                # regalo) es falsy y con `i.get(...)` a secas se leeria como
-                # "no vino precio", usando el sugerido a precio completo en
-                # vez del cero que se pidio (Minor de la revision).
+                # `is not None`, no una verdad booleana: un precio de cero
+                # (un regalo) es falsy cuando llega como NUMERO -- `0` /
+                # `0.0`, que es lo que el modelo emite cuando el JSON de la
+                # tool call no lo manda entre comillas (la cadena `"0"` no es
+                # falsy, y por ahi el bug no se veia). Con `i.get(...)` a
+                # secas ese cero se leeria como "no vino precio", usando el
+                # sugerido a precio completo en vez del cero que se pidio
+                # (Minor de la revision).
                 unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") is not None else None,
             )
             for i in items

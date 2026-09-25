@@ -24,9 +24,10 @@ def agent_session():
 #: Lo que el servidor LangGraph pone en el `configurable` de cada corrida a
 #: partir del handler de `app/agent/auth_hook.py`: `user.identity` en texto
 #: (`langgraph_api/models/run.py`) y el objeto normalizado. Las dos estan en
-#: `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS`, asi que el
-#: validador del servidor RECHAZA un request que intente mandarlas: son
-#: afirmadas por el servidor, no por quien llama.
+#: `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS`, asi que el servidor
+#: las DESCARTA del request entrante (`sanitize_reserved_keys` las borra y
+#: loguea un warning -- no rechaza el request) y despues escribe las suyas
+#: encima: son afirmadas por el servidor, no por quien llama.
 AUTH_USER_ID_KEY = "langgraph_auth_user_id"
 AUTH_USER_KEY = "langgraph_auth_user"
 
@@ -59,8 +60,9 @@ def user_id_from_config(config: dict) -> uuid.UUID:
     identidad que el LLAMADOR afirmaba: `user_id` no esta en las claves
     reservadas del servidor, asi que cualquiera que alcanzara el puerto
     podia mandar el `user_id` que quisiera y escribir como quien quisiera.
-    La clave de arriba si esta reservada -- un request que la traiga se
-    rechaza -- y por eso es la unica que se acepta aca.
+    La clave de arriba si esta reservada -- si el llamador la manda, el
+    servidor la descarta antes de mirar el request, y despues escribe la
+    suya encima -- y por eso es la unica que se acepta aca.
     """
     try:
         configurable = config["configurable"]

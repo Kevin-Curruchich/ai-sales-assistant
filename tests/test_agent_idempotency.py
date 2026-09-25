@@ -14,7 +14,6 @@ escritura, y dos tareas distintas siguen escribiendo las dos).
 """
 
 import uuid
-from datetime import date
 from decimal import Decimal
 
 import pytest

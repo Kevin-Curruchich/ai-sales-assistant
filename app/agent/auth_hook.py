@@ -36,10 +36,19 @@ suponer la semantica de una libreria (`interrupt()` y
    corrida: `langgraph_auth_user` (el objeto normalizado) y
    `langgraph_auth_user_id` (`user.identity`).
 5. `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS` incluye esas dos
-   claves, y el validador de OpenAPI del servidor RECHAZA un request que
-   intente mandarlas. Eso es lo que las hace afirmadas por el SERVIDOR y no
-   por el llamador -- la diferencia exacta que le faltaba a un `user_id`
-   suelto en `config.configurable`, que cualquiera podia poner.
+   claves, y el servidor las SACA del request antes de mirarlo:
+   `sanitize_reserved_keys` (`validation.py:164-170`) las borra del
+   `config.configurable` entrante y loguea un warning -- no rechaza el
+   request. Su docstring lo dice textual ("Instead of rejecting the request
+   with a 422, silently remove the keys and log a warning"); el patron que
+   SI rechazaria, `RESERVED_OR_NULL_OR_ESCAPED_PATTERN`
+   (`validation.py:42`), esta definido y no se usa en ningun lado. El
+   efecto para nosotros es el mismo y por partida doble: lo que el llamador
+   mande se descarta a la entrada, y despues `models/run.py:277-281`
+   escribe el valor real encima. Eso es lo que las hace afirmadas por el
+   SERVIDOR y no por el llamador -- la diferencia exacta que le faltaba a
+   un `user_id` suelto en `config.configurable`, que ni se descarta ni se
+   pisa.
 
 Las claves tambien son transitorias: `_checkpointer/_adapter.py` las lista
 en `_TRANSIENT_CONFIGURABLE_KEYS`, asi que no se persisten en el
@@ -64,8 +73,9 @@ from app.agent.session import agent_session
 from app.core.security import initialize_firebase
 
 #: La clave que el servidor pone en `config["configurable"]` con
-#: `user.identity`. Reservada: el validador del servidor rechaza un request
-#: que intente mandarla. `app/agent/session.py` la lee por este nombre.
+#: `user.identity`. Reservada: el servidor la descarta si el llamador la
+#: manda, y despues escribe la suya encima.
+#: `app/agent/session.py` la lee por este nombre.
 AUTH_USER_ID_KEY = "langgraph_auth_user_id"
 
 BEARER_PREFIX = "bearer "

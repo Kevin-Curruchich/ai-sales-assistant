@@ -23,9 +23,14 @@ leyendo el fuente de los paquetes que lo implementan, no infiriendolo:
   corrida como `langgraph_auth_user` (el objeto) y `langgraph_auth_user_id`
   (`user.identity`).
 - `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS` incluye esas dos
-  claves: el schema de OpenAPI del servidor RECHAZA un request que intente
-  ponerlas el mismo. Por eso son server-asserted y `user_id` a secas no lo
-  era -- esa era exactamente la diferencia que faltaba.
+  claves, y `sanitize_reserved_keys` (`validation.py:164-170`) las BORRA del
+  `config.configurable` entrante y loguea un warning -- no rechaza el
+  request; su docstring lo dice textual, y el patron que si rechazaria
+  (`RESERVED_OR_NULL_OR_ESCAPED_PATTERN`, linea 42) esta definido y nunca se
+  usa. El efecto es el mismo por partida doble: lo que el llamador mande se
+  descarta a la entrada y `models/run.py:277-281` escribe el valor real
+  encima. Por eso son server-asserted y `user_id` a secas no lo era -- ni se
+  descarta ni se pisa.
 """
 
 import json

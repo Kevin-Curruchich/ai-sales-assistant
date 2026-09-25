@@ -285,12 +285,16 @@ herramientas de escritura saben quien firma una venta o una compra.
 
 **Esa clave es afirmada por el servidor, no por el panel.**
 `langgraph_auth_user_id` (y `langgraph_auth_user`) estan en las claves
-reservadas del validador del servidor: un request que intente mandarlas en su
-propio `config` se rechaza. Es la diferencia que importa: un `user_id` suelto
+reservadas del servidor. Si un request las manda en su propio `config`, el
+servidor **las borra en silencio y loguea un warning** -- no rechaza el
+request (`sanitize_reserved_keys`, `validation.py:164-170`; el patron que si
+rechazaria esta definido y no se usa). Y aunque no las borrara, las
+sobreescribe: al crear la corrida escribe encima el valor que salio del
+handler de autenticacion. Es la diferencia que importa: un `user_id` suelto
 en `config.configurable` -- que es lo que esta rama leia antes de esta
-correccion -- es un dato que el llamador afirma y nadie valida, y cualquiera
-que alcanzara el puerto podia escribir como quien quisiera.
-`user_id_from_config` ya **no** lo acepta.
+correccion -- ni se descarta ni se pisa, asi que es un dato que el llamador
+afirma y nadie valida, y cualquiera que alcanzara el puerto podia escribir
+como quien quisiera. `user_id_from_config` ya **no** lo acepta.
 
 La identidad se reinyecta en cada corrida y no se persiste en el checkpoint.
 Eso incluye la corrida que reanuda una pausa de `interrupt()`: una aprobacion
@@ -330,7 +334,8 @@ venv), `langgraph-cli` 0.4.32 y `langgraph-api` 0.15.1: la forma de la
 entrada `auth` en `langgraph.json`, que un handler sincrono esta soportado
 (el servidor lo envuelve en `run_in_threadpool`), que `authorization` es un
 parametro que el servidor sabe inyectar, que el resultado aterriza en
-`configurable` como `langgraph_auth_user_id`, y que esa clave es reservada.
+`configurable` como `langgraph_auth_user_id`, y que esa clave es reservada
+(se descarta del request entrante y se sobreescribe al crear la corrida).
 `app/agent/auth_hook.py` cita el archivo y la linea de cada uno de esos
 puntos.
 
@@ -498,9 +503,14 @@ como un error: nada se escribio de mas y no hay nada que corregir.
 
 ## Checklist de despliegue: el enganche de caja
 
-Toda venta pagada -- registrada por el agente o por el panel, es el mismo
-codigo -- escribe tambien un movimiento de caja (`entrada`,
-`CashMovementType.ENTRADA`) ademas de la venta misma. Esto vive en
+Toda venta pagada **cuyo total sea mayor que cero** -- registrada por el
+agente o por el panel, es el mismo codigo -- escribe tambien un movimiento de
+caja (`entrada`, `CashMovementType.ENTRADA`) ademas de la venta misma. Una
+venta pagada de Q0.00 (un regalo, una muestra: los schemas aceptan
+`unitPrice = 0` a proposito) se registra igual pero **no** escribe
+movimiento: el libro registra dinero que realmente se movio, y cero
+quetzales no se movieron. Misma regla en `PurchaseService.confirm()` para una
+compra de total cero. Esto vive en
 `SaleService.create()`, en `app/services/sales/orchestrator.py`: la venta y
 el movimiento de caja se escriben en la misma transaccion (el movimiento se
 crea con `commit=False`, y `create()` comitea las dos escrituras juntas al

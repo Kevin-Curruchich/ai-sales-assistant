@@ -67,12 +67,17 @@ def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
                     productId=i["producto_id"],
                     quantity=Decimal(str(i["cantidad"])),
                     # `is not None`, no una verdad booleana -- la misma
-                    # correccion que `_build_sale_create` en write.py: un
-                    # precio de "0" (un regalo) es falsy, y con `i.get(...)`
-                    # a secas el preview mostraba el precio sugerido a precio
-                    # completo mientras la escritura registraba cero. Dos
-                    # cifras distintas para la misma venta, y la que el
-                    # usuario ve antes de aprobar es la equivocada.
+                    # correccion que `_build_sale_create` en write.py. Un
+                    # precio de cero (un regalo) es falsy cuando llega como
+                    # NUMERO -- `0` / `0.0`, que es lo que el modelo emite
+                    # cuando el JSON de la tool call no lo manda entre
+                    # comillas; la cadena `"0"` no es falsy y por ahi el bug
+                    # no se veia. Con `i.get(...)` a secas ese cero numerico
+                    # se leia como "no vino precio" y el preview mostraba el
+                    # sugerido a precio completo mientras la escritura, con
+                    # la misma entrada, registraba cero. Dos cifras distintas
+                    # para la misma venta, y la que el usuario ve antes de
+                    # aprobar es la equivocada.
                     unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") is not None else None,
                 )
                 for i in items
