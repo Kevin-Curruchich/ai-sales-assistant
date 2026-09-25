@@ -102,15 +102,62 @@ aca, actualizar este documento.
 
 ## Desplegarlo
 
-Segundo servicio de Railway, mismo repositorio, mismo `Dockerfile`, mismo
-`.env` de produccion (misma base de datos) -- distinto comando de arranque.
-El servicio de la API sigue usando `entrypoint.sh` (`alembic upgrade head`
-seguido de `hypercorn app.main:app`). El servicio del agente arranca el
-servidor de LangGraph en su lugar, contra el mismo `langgraph.json`.
+La forma general esta clara: segundo servicio de Railway, mismo
+repositorio, mismo `.env` de produccion (misma base de datos), proceso
+separado del de la API. **El comando de arranque exacto -- y si de verdad
+puede ser "el mismo `Dockerfile`, otro `CMD`" o necesita algo distinto --
+todavia no esta determinado.** Esta seccion lo dice plano en vez de inventar
+un comando prolijo: es el mismo tipo de hueco que la advertencia sobre
+`langgraph dev` de arriba, pero un nivel mas grave, porque ahi no hay ni
+siquiera un `langgraph dev` corrido una vez para apoyarse -- es el otro
+lugar de todo este documento donde la confianza se habia adelantado a la
+verificacion, y quedo corregido aca por la misma razon que aquella
+advertencia existe: mejor decir "no se sabe" que afirmar un mecanismo que
+nadie corrio.
 
-Puntos a confirmar al armar ese segundo servicio (no verificados en esta
-rama, ver la advertencia arriba sobre `langgraph dev`):
+Lo que si se puede afirmar, verificado contra este repo:
 
+- **Ninguna dependencia de servidor de LangGraph esta en
+  `requirements.txt`.** No hay `langgraph-cli` ni `langgraph-api` (el paquete
+  que de verdad implementa el servidor -- `langgraph dev`/`langgraph up` lo
+  usan por debajo). Sin uno de los dos instalado en la imagen de produccion,
+  no hay nada que escuche el protocolo de streaming que `useStream` necesita.
+- `langgraph-cli` (visto en PyPI, no instalado aca) expone `langgraph dev`
+  (desarrollo, recarga en caliente, pensado para localhost) y, para
+  produccion, `langgraph up`/`langgraph build`: los dos arman una imagen de
+  Docker PROPIA a partir de `langgraph.json` (con su propio `Dockerfile`
+  generado, no el de este repo) y, en el flujo documentado por LangChain,
+  esperan a la vez Postgres (para el checkpointer, que ya tenemos) y
+  colas/infra adicional de la plataforma LangGraph -- no simplemente "otro
+  comando sobre la misma imagen".
+- Instalar `langgraph-api` directo (el paquete que de verdad sirve el
+  protocolo) es la otra via, mas cercana a "un proceso mas en el mismo
+  `Dockerfile`" -- pero no esta probado aca, y sus dependencias (visto en su
+  metadata de PyPI) incluyen piezas pensadas para el runtime en memoria de
+  desarrollo (`langgraph-runtime-inmem`); un runtime de Postgres para
+  produccion parece vivir en un paquete separado, no publico en PyPI al
+  momento de escribir esto -- posiblemente detras de la licencia de
+  LangGraph Platform. No se confirmo si eso aplica al uso que este proyecto
+  le da (un solo grafo propio, sin multiinquilino).
+
+Puntos a confirmar antes de poder desplegar el segundo servicio -- ninguno
+verificado en esta rama:
+
+- **Que paquete sirve el servidor y como se instala.** `langgraph-cli[inmem]`
+  no esta pensado para produccion (su extra `inmem` lo dice: es el runtime
+  de desarrollo). Hay que decidir entre `langgraph-api` instalado directo
+  (si su runtime de Postgres esta disponible sin licencia adicional) o
+  adoptar el flujo `langgraph build`/`langgraph up` de LangGraph Platform
+  (que trae su propia imagen y, probablemente, sus propios requisitos de
+  infraestructura mas alla de este Postgres).
+- **El comando de arranque exacto**, una vez resuelto el punto anterior --
+  no hay ninguno verificado hoy, ni en este documento ni en el repo
+  (`entrypoint.sh` es especifico del servicio de la API).
+- **Si el segundo servicio puede reusar el `Dockerfile` de este repo tal
+  cual** (con un `CMD`/comando de arranque distinto en la configuracion de
+  Railway) o si necesita su propia imagen -- generada por `langgraph build`
+  o armada a mano -- porque el runtime de produccion trae dependencias que
+  `requirements.txt` no tiene hoy.
 - Las cuatro variables de entorno de la seccion anterior, cargadas en
   Railway igual que las demas (`ANTHROPIC_API_KEY` es la unica realmente
   obligatoria para que el grafo arranque; las tres de LangSmith son
@@ -121,13 +168,18 @@ rama, ver la advertencia arriba sobre `langgraph dev`):
   mismos modelos y el mismo `POSTGRES_SCHEMA` que la API.
 - **Solo un servicio debe correr `alembic upgrade head`.** El proceso del
   agente no deberia repetir esa migracion al arrancar -- ya la corre
-  `entrypoint.sh` del lado de la API. Si el arranque del agente en
-  produccion tambien la dispara (por ejemplo si reusa `entrypoint.sh` tal
-  cual), confirmar que correrla dos veces en paralelo, en dos deploys que
-  arrancan casi al mismo tiempo, no genere una condicion de carrera contra
-  `alembic_version`.
+  `entrypoint.sh` del lado de la API. Si el arranque que se elija para el
+  agente en produccion tambien la dispara (por ejemplo si termina
+  reusando `entrypoint.sh` tal cual), confirmar que correrla dos veces en
+  paralelo, en dos deploys que arrancan casi al mismo tiempo, no genere una
+  condicion de carrera contra `alembic_version`. Si el arranque del agente
+  es un proceso propio (no `entrypoint.sh`), la solucion mas simple es que
+  ese proceso directamente no corra `alembic upgrade head` -- que lo siga
+  corriendo solo el servicio de la API, y que el del agente dependa de que
+  ese deploy ya haya migrado el schema del negocio.
 - El schema `agent` se crea solo, en el primer arranque del grafo (ver
-  abajo) -- no hace falta nada manual para eso.
+  abajo) -- no hace falta nada manual para eso, sea cual sea el mecanismo de
+  arranque que se termine eligiendo.
 
 ## El schema `agent`
 
@@ -283,12 +335,23 @@ preview y la aprobacion. Sus resumes son solo `aprobar` (sin `huella`),
 
 ## Checklist de despliegue: el enganche de caja
 
-Desde Task 9 (commit `491a816` en adelante), toda venta pagada registrada a
-traves del agente escribe tambien un movimiento de caja (`entrada`,
-`CashMovementType.ENTRADA`) ademas de la venta misma -- ver
-`app/services/sales/orchestrator.py`. Esto cambia el comportamiento de un
+Toda venta pagada -- registrada por el agente o por el panel, es el mismo
+codigo -- escribe tambien un movimiento de caja (`entrada`,
+`CashMovementType.ENTRADA`) ademas de la venta misma. Esto vive en
+`SaleService.create()`, en `app/services/sales/orchestrator.py`: la venta y
+el movimiento de caja se escriben en la misma transaccion (el movimiento se
+crea con `commit=False`, y `create()` comitea las dos escrituras juntas al
+final -- si una falla, ninguna queda). Esto cambia el comportamiento de un
 endpoint que ya esta vivo: **desde el momento en que esto se despliega,
 cada venta pagada registrada por el panel suma a la caja.**
+
+No cito el commit que introdujo esto a proposito: es trabajo de rama
+anterior a este plan (no una de sus diez tasks numeradas), y citar un hash
+resulto fragil en un borrador anterior de este documento -- un
+`git rebase`/reescritura de la rama le cambia la identidad a todo el rango.
+Lo que importa para quien lea esto es el comportamiento y donde vive el
+codigo, no que commit lo escribio; `git log -- app/services/sales/orchestrator.py`
+lo encuentra si hace falta el historial exacto.
 
 `CashService.running_balance()` (`app/services/cash_service.py`) no
 almacena un saldo -- lo calcula sumando todos los movimientos de caja hasta
@@ -320,7 +383,7 @@ sumaron en el medio con la base equivocada (quedarian todos corridos por el
 efectivo real que faltaba contar). El orden de los tres pasos de arriba no
 es una formalidad.
 
-## Pregunta abierta: que hacer con `Revenew/`
+## `Revenew/`: resuelto, con un riesgo residual que vale nombrar
 
 `Revenew/` (`AGENTS.md` y nueve skills) es el prompt del runtime anterior de
 este proyecto -- uno que corria en Slack, escribia en Google Sheets y creaba
@@ -332,71 +395,25 @@ escrita a mano de esas mismas reglas de negocio (FIFO, margenes, vocabulario
 de caja, deteccion de precio habitual) a las siete herramientas reales de
 este grafo -- ver el docstring de modulo de `prompt.py`.
 
-**Nota sobre el estado real de `Revenew/` al escribir esto (2026-09-25):**
-el brief de esta task, y la spec, daban por sentado que `Revenew/` no esta
-versionado. Eso fue cierto hasta el commit `5d2be30` de esta misma rama
-(`docs: Fix four defects the pre-flight scan found in the plan`,
-2026-09-24), que lo agrego a git junto con un cambio de la spec -- casi
-seguro sin intencion, de paso en un `git add` mas amplio, no como una
-decision deliberada de versionarlo. `git ls-files Revenew/` y
-`git log -- Revenew/` lo confirman: los once archivos estan comiteados, sin
-ninguna nota que diga que describen un runtime retirado. Esta task no lo
-tocó -- no se agrego, modifico ni removio ningun archivo de `Revenew/` aca
-(instruccion explicita: no commitearlo desde esta task, y no se hizo) --
-pero vale dejar constancia de que la premisa "no esta en git" con la que
-arranca esta seccion ya no describe el estado del repositorio, y que quien
-decida que hacer con esto deberia primero confirmar con el resto del equipo
-si ese commit fue intencional.
+`AGENTS.md` y las nueve skills estan versionados a proposito, como
+referencia historica del dominio -- no como fuente de verdad activa.
+`Revenew/README.md` lo dice explicito: el runtime que esos archivos
+describen ya no existe, la fuente viva es `SYSTEM_PROMPT`, y nombra las
+diferencias conocidas entre los dos (el modelo de un paso de
+`monto_aporte_propio` en la skill de compra contra las dos llamadas reales
+del codigo; el quinto tipo de movimiento de caja, `saldo_inicial`, que el
+codigo tiene y la skill no). `config.json` y `tools.json` quedaron fuera del
+repo (gitignorados) porque no describen el dominio -- solo identificadores
+de la plataforma anterior (tenant/organizacion de LangSmith, proveedor
+OAuth de Slack) -- y no hay que sacarlos de ahi.
 
-Independientemente de como llego a estar versionado, el problema de fondo
-que esta pregunta busca resolver sigue igual: las reglas de negocio de
-Revenew viven en DOS lugares -- `Revenew/AGENTS.md` (ahora si en git, pero
-sin ninguna nota de que describe un runtime que ya no existe) y
-`SYSTEM_PROMPT` (lo que el agente real usa). Nada mantiene esos dos textos
-sincronizados -- si maniana cambia el margen objetivo de un producto, o la
-regla de cuando avisar de un lote cruzado, no hay ningun mecanismo que
-fuerce actualizar los dos. Van a divergir con el tiempo, calladamente, y
-quien lea `Revenew/AGENTS.md` primero (es mas largo y mas legible como
-documento de negocio que el prompt) se va a llevar una regla vieja sin
-saber que lo es.
-
-Recomendacion: **dejarlo versionado (ya que asi quedo) pero marcarlo
-explicitamente como referencia historica, no como fuente de verdad
-activa.** Concretamente:
-
-- Agregar una nota al principio de `Revenew/AGENTS.md` (o un
-  `Revenew/README.md` nuevo, si se prefiere no tocar los archivos de skill)
-  que diga, en una linea, que este documento describe el runtime
-  Slack/Sheets/Calendar anterior, ya retirado, y que la fuente de verdad
-  operativa es `app/agent/prompt.py::SYSTEM_PROMPT`.
-- No borrarlo ni moverlo: perder el documento de origen hace mas dificil
-  auditar si la traduccion a `SYSTEM_PROMPT` capturo todo lo que importaba,
-  y sirve como referencia si alguna vez hay que reconstruir por que una
-  regla de negocio es como es. Revertir el commit que lo agrego tampoco
-  resuelve nada -- solo vuelve a la situacion anterior, donde el documento
-  de origen podia perderse sin dejar rastro.
-
-Alternativas consideradas y por que no:
-
-- **Retirarlo del todo** (borrarlo de git y del disco): pierde el historial
-  de decisiones de negocio sin ganar nada -- el riesgo de que alguien lo lea
-  como vigente se resuelve marcandolo como historico, no borrandolo.
-- **Dejarlo tal cual esta ahora** (versionado, sin ninguna nota): es peor
-  que marcarlo -- cualquiera que lo encuentre, sobre todo alguien nuevo en
-  el proyecto que no sepa de esta migracion, puede leerlo como si fuera la
-  especificacion vigente, y es un documento mas legible y mas largo que
-  `SYSTEM_PROMPT`, asi que es el que probablemente lea primero.
-- **Fusionarlo de verdad con `SYSTEM_PROMPT`** (generar el prompt a partir
-  de estos archivos en vez de una traduccion a mano): resuelve la deriva de
-  raiz, pero es un cambio de arquitectura mayor -- el prompt dejaria de ser
-  un texto curado y pasaria a ser generado, con todo el trabajo de
-  filtrar las partes que hablan de Sheets/Calendar/Slack en tiempo de
-  build. Fuera de alcance de esta task; vale la pena evaluarlo aparte si la
-  deriva entre los dos documentos se vuelve un problema real.
-
-Esta decision no se aplico en este task -- no se agrego ninguna nota a
-`Revenew/AGENTS.md` ni se creo un `Revenew/README.md`; los archivos quedan
-exactamente como estaban, tal como indica la instruccion de no moverlos ni
-borrarlos. Queda como recomendacion para quien decida sobre el
-repositorio -- junto con la pregunta previa de si el commit `5d2be30` que
-lo versiono fue intencional.
+Lo que ese README no resuelve, porque ningun README puede: nada fuerza que
+`Revenew/AGENTS.md` y `SYSTEM_PROMPT` se mantengan sincronizados. Si mañana
+cambia el margen objetivo de un producto, o la regla de cuando avisar de un
+lote cruzado, no hay ningun mecanismo automatico que actualice los dos --
+depende de que quien cambie la regla de negocio se acuerde de que existe un
+documento historico y lo revise. Eso es aceptable para un documento marcado
+como historico (es el punto de marcarlo asi: nadie deberia leerlo esperando
+que este al dia), pero vale que quien mantenga `SYSTEM_PROMPT` sepa que el
+README no es una garantia de sincronia, solo una advertencia de que no la
+hay.
