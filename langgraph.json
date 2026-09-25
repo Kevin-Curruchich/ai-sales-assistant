@@ -1,0 +1,5 @@
+{
+  "dependencies": ["."],
+  "graphs": {"revenew": "./app/agent/graph.py:graph"},
+  "env": ".env"
+}
