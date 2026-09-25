@@ -265,3 +265,47 @@ def test_the_postgres_checkpointer_closes_its_connection_when_setup_fails(test_e
                 conn.close()
         with test_engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+
+def test_the_graph_factory_builds_once_and_is_reused_across_runs(monkeypatch):
+    """`langgraph-api` llama a esta fabrica UNA VEZ POR CORRIDA, sin cache.
+
+    Verificado en el fuente de langgraph-api 0.15.1: `graph.py:404` hace
+    `value = invoke_factory(value, graph_id, config, factory_runtime)` dentro
+    de `get_graph`, que es un `@asynccontextmanager` que `stream.py:182-194`
+    entra con `stack.enter_async_context(...)` en cada corrida. `GRAPHS[...]`
+    guarda la FABRICA, no el grafo, y no hay ningun cache en el medio.
+
+    Sin este cache, cada corrida abria una `psycopg.Connection` nueva, corria
+    un `CREATE SCHEMA` y un `PostgresSaver.setup()` completo, y la conexion
+    no se cerraba nunca -- una conexion de Postgres filtrada por corrida,
+    hasta que el `max_connections` de Railway termina el servicio. (Y encima
+    el servidor la descarta: `graph.py:416-422` hace
+    `graph_obj.copy(update={"checkpointer": ...})` con el suyo.)
+
+    M6, en esta misma tanda, cerro la fuga del camino de ERROR de esa misma
+    funcion. Esta es la del camino de EXITO, que corre siempre."""
+    import app.agent.graph as graph_module
+
+    construidos = {"modelo": 0, "checkpointer": 0}
+
+    def fake_model():
+        construidos["modelo"] += 1
+        return FakeToolCallingModel()
+
+    def fake_checkpointer():
+        construidos["checkpointer"] += 1
+        return MemorySaver()
+
+    monkeypatch.setattr(graph_module, "_graph_singleton", None)
+    monkeypatch.setattr(graph_module, "_default_model", fake_model)
+    monkeypatch.setattr(graph_module, "_default_checkpointer", fake_checkpointer)
+
+    primero = graph_module.graph({"configurable": {"thread_id": "corrida-1"}})
+    segundo = graph_module.graph({"configurable": {"thread_id": "corrida-2"}})
+
+    assert primero is segundo
+    assert construidos["checkpointer"] == 1, (
+        "la fabrica abrio un checkpointer (y una conexion de Postgres) por corrida"
+    )
+    assert construidos["modelo"] == 1

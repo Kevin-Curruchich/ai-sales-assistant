@@ -228,8 +228,29 @@ checkpointer.setup()
 ```
 
 El mismo patron que `alembic/env.py` usa para el schema del negocio. No hace
-falta ningun paso manual antes de desplegar por esto -- se crea solo, en el
-primer arranque del grafo, contra cualquier base (local, produccion, CI).
+falta ningun paso manual antes de desplegar por esto -- se crea solo, la
+primera vez que se construye el grafo en el proceso, contra cualquier base
+(local, produccion, CI).
+
+### Una salvedad: bajo el servidor completo, el checkpointer es otro
+
+Todo lo de arriba describe el `PostgresSaver` que arma `app/agent/graph.py`.
+Bajo `langgraph-api` (el servidor de verdad), **ese no es el que persiste
+los checkpoints**: `graph.py:416-422` de langgraph-api hace
+`graph_obj.copy(update={"checkpointer": checkpointer, "store": store})` con
+el suyo, apenas la fabrica devuelve el grafo. El nuestro sigue siendo el que
+se usa sin ese reemplazo -- una construccion directa del grafo, los tests --
+y el schema `agent` sigue existiendo porque `agent.tool_writes` (ver
+"Idempotencia") vive ahi. Quien configure el servidor tiene que darle a
+**su** checkpointer una base y un schema, y esa configuracion no sale de
+este archivo: es una de las cosas que la seccion "Desplegarlo" deja
+explicitamente sin determinar.
+
+La fabrica `graph()` cachea lo que construye, por la misma razon: el
+servidor la llama **una vez por corrida**, no una vez por proceso
+(`graph.py:404` dentro de `get_graph`, entrado por corrida en
+`stream.py:182-194`, sin cache en el medio). Sin ese cache, cada corrida
+abria una conexion de Postgres que nadie cierra.
 
 ## El contrato del panel: el token de Firebase
 

@@ -39,6 +39,8 @@ escritura con el id de la tarea de Pregel, dentro de la misma transaccion
 que la escritura. Su docstring explica la clave y lo que queda afuera.
 """
 
+import threading
+
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.prebuilt import create_react_agent
@@ -143,6 +145,10 @@ def _default_checkpointer() -> BaseCheckpointSaver:
     return _postgres_checkpointer(settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema())
 
 
+_graph_singleton = None
+_graph_lock = threading.Lock()
+
+
 def graph(config: dict | None = None):
     """Fabrica del grafo de produccion, expuesta a `langgraph.json`.
 
@@ -150,14 +156,52 @@ def graph(config: dict | None = None):
     a nivel de modulo abriria una conexion a Postgres e instanciaria
     `ChatAnthropic` (que valida que haya una API key) en el momento en que
     CUALQUIER cosa importe `app.agent.graph` -- incluidos los tests, que no
-    tienen ni la base de desarrollo local levantada ni una API key. LangGraph
-    llama a esta fabrica reci en cuando de verdad va a correr el grafo.
+    tienen ni la base de desarrollo local levantada ni una API key.
 
-    `config` se acepta y se IGNORA a proposito: el grafo se construye una vez
-    y lo comparten todas las corridas, asi que nada por corrida -- y menos
-    que nada la identidad de quien escribe -- puede quedar horneado aca. Esa
-    identidad viaja por corrida, en el `configurable` que el hook de
-    `app/agent/auth_hook.py` hace que el servidor inyecte, y la leen las
-    herramientas con `user_id_from_config`.
+    ## Por que se cachea
+
+    `langgraph-api` llama a esta fabrica **una vez por corrida**, no una vez
+    por proceso. Leido del fuente de langgraph-api 0.15.1, no supuesto:
+    `GRAPHS[graph_id]` guarda la FABRICA (no el grafo); `graph.py:404` hace
+    `value = invoke_factory(value, graph_id, config, factory_runtime)` dentro
+    de `get_graph`, que es un `@asynccontextmanager`; y `stream.py:182-194`
+    lo entra con `stack.enter_async_context(...)` en cada corrida. No hay
+    ningun cache en el medio.
+
+    Sin el cache de abajo, entonces, cada corrida construia un
+    `_default_checkpointer()` nuevo: una `psycopg.Connection` nueva, un
+    `CREATE SCHEMA`, un `PostgresSaver.setup()` completo -- y esa conexion
+    no la cierra nadie, porque nada devuelve un asa para cerrarla. Una
+    conexion de Postgres filtrada por corrida, hasta que el `max_connections`
+    de la base termina el servicio. (`_postgres_checkpointer` cierra la
+    conexion si `setup()` revienta; esta era la fuga del camino de EXITO, que
+    corre siempre.)
+
+    ## Lo que el servidor hace con lo que devolvemos
+
+    Le cambia el checkpointer: `graph.py:416-422` hace
+    `graph_obj.copy(update={"checkpointer": checkpointer, "store": store})`
+    con el suyo. Asi que bajo el servidor completo, el `PostgresSaver` que
+    arma `_default_checkpointer()` **no es el que persiste los checkpoints**
+    -- lo hace el del servidor, con su propia configuracion de Postgres. El
+    nuestro sigue siendo el que usan `langgraph dev` sin ese reemplazo, una
+    construccion directa del grafo, y los tests. La seccion "El schema
+    `agent`" de `docs/agente.md` describe el nuestro y lo dice ahi tambien.
+
+    ## `config`
+
+    Se acepta y se IGNORA. El servidor SI lo pasa -- una fabrica de un solo
+    parametro recibe el `config` de la corrida
+    (`_factory_utils.py::_classify_factory`) -- pero como el grafo se
+    construye una sola vez y lo comparten todas las corridas, nada por
+    corrida puede quedar horneado aca, y menos que nada la identidad de quien
+    escribe. Esa identidad viaja por corrida, en el `configurable` que el
+    hook de `app/agent/auth_hook.py` hace que el servidor inyecte, y la leen
+    las herramientas con `user_id_from_config`.
     """
-    return build_graph(_default_model(), _default_checkpointer())
+    global _graph_singleton
+    if _graph_singleton is None:
+        with _graph_lock:
+            if _graph_singleton is None:
+                _graph_singleton = build_graph(_default_model(), _default_checkpointer())
+    return _graph_singleton
