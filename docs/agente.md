@@ -450,12 +450,17 @@ como un error: nada se escribio de mas y no hay nada que corregir.
 ### Lo que NO cierra, con precision
 
 - **`registrar_compra` escribe en dos transacciones.** `create()` comitea el
-  borrador (con la marca) y `confirm()` comitea el stock y la salida de caja
-  aparte. Un proceso que muera **entre las dos** deja un borrador sin
-  confirmar que la reanudacion ya no vuelve a tocar, porque la marca ya
-  esta. No hay compra duplicada ni caja duplicada -- el resultado es una
-  compra a medias que alguien tiene que confirmar o borrar a mano desde el
-  panel. Cerrarlo de verdad pide que `create()` y `confirm()` compartan
+  borrador y `confirm()` comitea el stock y la salida de caja aparte. La
+  marca viaja con la **segunda**, no con la primera: `confirm()` puede
+  reventar por su cuenta (un 409 si el producto se desactivo, un 404 si
+  desaparecio, un error de base) y con la marca en la primera transaccion
+  esa falla dejaba la tarea marcada mientras el manejador borraba el
+  borrador -- nada escrito y un `ya_registrado` mintiendo. Lo que queda: un
+  proceso que muera **entre las dos** deja un borrador **huerfano**, sin
+  confirmar. La reanudacion no lo reusa: crea uno nuevo y lo confirma, asi
+  que la compra sí queda registrada, una sola vez, con su stock y su salida
+  de caja. Lo unico de mas es ese borrador, que hay que borrar a mano desde
+  el panel. Cerrarlo del todo pide que `create()` y `confirm()` compartan
   transaccion, que es un cambio en `PurchaseService`, no en el agente.
 - **La tabla se crea sola, la primera vez que una herramienta escribe.** No
   hay migracion de Alembic (a proposito: el schema `agent` esta fuera de su

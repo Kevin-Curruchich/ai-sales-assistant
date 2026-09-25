@@ -99,11 +99,15 @@ negocio. Las tres herramientas la consultan antes de pausar y devuelven
 
 Eso cubre la ventana que este docstring describe Y la otra, mas grave: un
 proceso que muere DESPUES del commit y ANTES de que LangGraph anote el
-resultado de la tarea en el checkpoint. Lo que NO cubre, porque necesita
-mas que una marca: `registrar_compra` escribe en dos transacciones
-(`create()` y despues `confirm()`) y la marca viaja con la primera, asi que
-una muerte ENTRE las dos deja un borrador sin confirmar que la reanudacion
-ya no vuelve a tocar. Esta anotado en `docs/agente.md`, seccion
+resultado de la tarea en el checkpoint.
+
+`registrar_compra` escribe en DOS transacciones (`create()` comitea el
+borrador, `confirm()` comitea el stock y la salida de caja) y la marca
+viaja con la SEGUNDA -- ver el comentario en su cuerpo. Lo que queda: una
+muerte ENTRE las dos deja un borrador huerfano, sin confirmar, que nadie
+vuelve a mirar; la reanudacion no lo reusa, crea uno nuevo y lo confirma.
+Ni compra duplicada ni caja duplicada -- un borrador de mas que hay que
+borrar desde el panel. Anotado en `docs/agente.md`, seccion
 "Idempotencia".
 """
 
@@ -607,12 +611,26 @@ def registrar_compra(
                     "preview_actual": recalculado,
                 }
 
-            if clave_escritura is not None:
-                idempotency.claim(db, clave_escritura, "registrar_compra")
-
             service = PurchaseService(db)
             purchase = service.create(data, user_id=usuario_id)
             try:
+                # La marca va DESPUES de `create()` y ANTES de `confirm()`, a
+                # proposito: esta herramienta escribe en DOS transacciones y
+                # la marca tiene que viajar con la SEGUNDA.
+                #
+                # `PurchaseRepository.create` comitea. Con la marca anotada
+                # antes de `service.create()`, se comiteaba junto con el
+                # borrador -- y si `confirm()` despues reventaba, el manejador
+                # de abajo hacia rollback y borraba el borrador, pero la marca
+                # ya era durable. No quedaba nada escrito y el reintento
+                # contestaba "ya_registrado", que `docs/agente.md` le dice al
+                # panel que trate como exito: un exito que nunca ocurrio. Y
+                # `confirm()` reventando no es raro -- un 409 por un producto
+                # desactivado, un 404 por uno que desaparecio, un error de
+                # base. Puesta aca, la comitea el `db.commit()` de `confirm()`
+                # y el rollback del manejador se la lleva con todo lo demas.
+                if clave_escritura is not None:
+                    idempotency.claim(db, clave_escritura, "registrar_compra")
                 confirmed = service.confirm(purchase.id)
             except Exception:
                 # Un borrador que el agente deja colgado es peor que no

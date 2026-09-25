@@ -27,7 +27,11 @@ from sqlalchemy import text
 
 from app.agent import idempotency
 from app.agent.session import AUTH_USER_ID_KEY
-from app.agent.tools.write import registrar_movimiento_caja, registrar_venta
+from app.agent.tools.write import (
+    registrar_compra,
+    registrar_movimiento_caja,
+    registrar_venta,
+)
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
 from tests.test_agent_graph import FakeToolCallingModel
@@ -270,3 +274,100 @@ def test_the_mark_lands_in_the_agent_schema_not_the_business_one(db_session, see
 
     current = db_session.execute(text("SELECT current_schema()")).scalar()
     assert current != idempotency.AGENT_SCHEMA
+
+
+# ---------------------------------------------------------------------
+# La compra: la marca tiene que viajar con la transaccion de confirm()
+# ---------------------------------------------------------------------
+
+
+def _purchase_payload(product):
+    return {
+        "items": [{"producto_id": str(product.id), "cantidad": "5", "costo_unitario": "12.50"}],
+        "fecha": "2026-09-24",
+    }
+
+
+@pytest.fixture
+def producto_sin_stock(db_session):
+    from app.models.product import Product
+
+    product = Product(sku=f"SKU-{uuid.uuid4().hex[:10]}", name="Producto para compra", stock=Decimal("0"))
+    db_session.add(product)
+    db_session.commit()
+    db_session.refresh(product)
+    return product
+
+
+def test_a_purchase_whose_confirm_fails_leaves_no_mark_and_can_be_retried(
+    db_session, producto_sin_stock, seeded_user, monkeypatch
+):
+    """`confirm()` que revienta no puede dejar la tarea marcada.
+
+    `PurchaseRepository.create` COMITEA (`purchase_repository.py:73-77`), asi
+    que una marca anotada antes de `service.create()` se comitea CON el
+    borrador. Si `confirm()` despues revienta, el manejador hace rollback y
+    borra el borrador -- pero la marca ya es durable. Resultado: no queda
+    nada escrito y el reintento contesta `ya_registrado`, que
+    `docs/agente.md` le dice al panel que trate como exito. Un exito que
+    nunca ocurrio.
+
+    Y no es un caso raro: `confirm()` revienta con un 409 si un producto se
+    desactivo, con un 404 si desaparecio, o con cualquier error de base --
+    bastante mas probable que la muerte del proceso que cubre el residuo
+    documentado."""
+    from app.services.cash_service import CashService
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve)
+    config = _config(seeded_user, uuid.uuid4())
+
+    fallos = {"restantes": 1}
+    real_record = CashService.record
+
+    def explode_once(self, *args, **kwargs):
+        if fallos["restantes"]:
+            fallos["restantes"] -= 1
+            raise RuntimeError("caja caida")
+        return real_record(self, *args, **kwargs)
+
+    monkeypatch.setattr(CashService, "record", explode_once)
+
+    with pytest.raises(RuntimeError):
+        registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
+
+    from app.models.purchase import Purchase
+
+    assert db_session.query(Purchase).count() == 0
+    clave = idempotency.write_key(config)
+    marcas = db_session.execute(
+        text(f"SELECT count(*) FROM {idempotency.QUALIFIED} WHERE write_key = :k"),
+        {"k": clave},
+    ).scalar()
+    assert marcas == 0, "la marca sobrevivio a una compra que no quedo escrita"
+
+    # El reintento de la MISMA tarea tiene que escribir de verdad, no
+    # contestar "ya_registrado" sobre una compra que no existe.
+    reintento = registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
+    assert reintento["estado"] == "registrado"
+    assert reintento["compra_id"] is not None
+    assert db_session.query(Purchase).count() == 1
+
+
+def test_a_replayed_purchase_task_does_not_write_twice(
+    db_session, producto_sin_stock, seeded_user, monkeypatch
+):
+    """La contraparte: una compra que SI se confirmo no se repite."""
+    from app.models.purchase import Purchase
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve)
+    config = _config(seeded_user, uuid.uuid4())
+
+    primero = registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
+    segundo = registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
+
+    assert primero["estado"] == "registrado"
+    assert segundo["estado"] == "ya_registrado"
+    assert segundo["compra_id"] == primero["compra_id"]
+    assert db_session.query(Purchase).count() == 1
+    db_session.refresh(producto_sin_stock)
+    assert producto_sin_stock.stock == Decimal("5")
