@@ -1,5 +1,12 @@
 {
-  "dependencies": ["."],
-  "graphs": {"revenew": "./app/agent/graph.py:graph"},
-  "env": ".env"
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "revenew": "./app/agent/graph.py:graph"
+  },
+  "env": ".env",
+  "auth": {
+    "path": "./app/agent/auth_hook.py:auth"
+  }
 }

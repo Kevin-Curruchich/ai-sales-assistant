@@ -8,8 +8,9 @@ base de datos y sus modelos (`app/models`, `app/services`).
 
 Este documento cubre como correrlo local, como se despliega, por que el
 checkpointer vive en su propio schema de Postgres, el contrato que el panel
-tiene que cumplir al aprobar una escritura, y el checklist antes de
-desplegar el enganche de caja. Si estas por tocar las herramientas de
+tiene que cumplir -- el token de Firebase en cada request y la huella al
+aprobar una escritura -- y el checklist antes de desplegar el enganche de
+caja. Si estas por tocar las herramientas de
 escritura, lee primero los docstrings de modulo de
 `app/agent/tools/write.py` y `app/agent/graph.py` -- son mas largos que el
 codigo que documentan a proposito, y este archivo asume que los leiste.
@@ -163,9 +164,12 @@ verificado en esta rama:
   obligatoria para que el grafo arranque; las tres de LangSmith son
   opcionales).
 - El resto de las variables de `.env.production` (`POSTGRES_*`/`DATABASE_URL`,
-  credenciales de Firebase) las necesita tambien el agente: autentica con el
-  mismo Firebase (`app/agent/auth.py::resolve_user`) y lee/escribe con los
-  mismos modelos y el mismo `POSTGRES_SCHEMA` que la API.
+  credenciales de Firebase) las necesita tambien el agente: valida el mismo
+  token de Firebase que la API, en el hook de `app/agent/auth_hook.py` (que
+  compone `app/agent/auth.py::resolve_user`), y lee/escribe con los mismos
+  modelos y el mismo `POSTGRES_SCHEMA`. `FIREBASE_CREDENTIALS_PATH` no es
+  opcional para este servicio: sin ella, `initialize_firebase()` falla y
+  **todas** las escrituras del agente se rechazan con 401.
 - **Solo un servicio debe correr `alembic upgrade head`.** El proceso del
   agente no deberia repetir esa migracion al arrancar -- ya la corre
   `entrypoint.sh` del lado de la API. Si el arranque que se elija para el
@@ -226,6 +230,88 @@ checkpointer.setup()
 El mismo patron que `alembic/env.py` usa para el schema del negocio. No hace
 falta ningun paso manual antes de desplegar por esto -- se crea solo, en el
 primer arranque del grafo, contra cualquier base (local, produccion, CI).
+
+## El contrato del panel: el token de Firebase
+
+Antes de la huella viene esto, porque sin esto no hay escritura posible: el
+panel tiene que mandar el token de Firebase del usuario en el header
+`Authorization` de **cada** request al servidor del agente.
+
+```
+Authorization: Bearer <id token de Firebase>
+```
+
+Con `useStream` del SDK de JS eso se configura una vez, en las opciones del
+hook (`defaultHeaders` / `headers`), no request por request. El token es el
+mismo que el panel ya manda al backend de FastAPI -- no hay una credencial
+nueva ni un segundo login.
+
+### Que hace el servidor con el
+
+`langgraph.json` declara el hook:
+
+```json
+"auth": { "path": "./app/agent/auth_hook.py:auth" }
+```
+
+En cada request, el servidor corre el handler `@auth.authenticate` de ese
+archivo. El handler valida el token contra Firebase (el mismo
+`verify_firebase_token` que usa la API), resuelve o crea el `User` local
+(`resolve_user`) y devuelve su `id` como `identity`. El servidor deja ese
+valor en el `configurable` de la corrida bajo `langgraph_auth_user_id`, y ahi
+lo lee `user_id_from_config` -- el unico canal por el que las tres
+herramientas de escritura saben quien firma una venta o una compra.
+
+**Esa clave es afirmada por el servidor, no por el panel.**
+`langgraph_auth_user_id` (y `langgraph_auth_user`) estan en las claves
+reservadas del validador del servidor: un request que intente mandarlas en su
+propio `config` se rechaza. Es la diferencia que importa: un `user_id` suelto
+en `config.configurable` -- que es lo que esta rama leia antes de esta
+correccion -- es un dato que el llamador afirma y nadie valida, y cualquiera
+que alcanzara el puerto podia escribir como quien quisiera.
+`user_id_from_config` ya **no** lo acepta.
+
+La identidad se reinyecta en cada corrida y no se persiste en el checkpoint.
+Eso incluye la corrida que reanuda una pausa de `interrupt()`: una aprobacion
+la firma quien la aprueba, con el token de ESE request, no quien empezo la
+conversacion dias antes.
+
+### Que pasa si el token falta o no sirve
+
+Un token ausente, vacio, vencido o invalido es un **401** del servidor, antes
+de que la conversacion llegue a existir. El handler convierte a 401 tambien
+el caso de que Firebase no se pueda inicializar en el proceso del agente
+(credenciales ausentes en el servicio): el request no esta autenticado, y un
+500 seria una mentira sobre la causa.
+
+### Dos limites conocidos
+
+- **No hay autorizacion, solo autenticacion.** El hook registra
+  `@auth.authenticate` y ningun handler `@auth.on`. Una vez autenticado,
+  cualquier usuario puede listar, leer y reanudar cualquier hilo del
+  servidor -- incluidas las aprobaciones pendientes de otro. Para un negocio
+  de un solo dueño con un puñado de usuarios de confianza es aceptable;
+  aislar hilos por usuario es una pieza aparte, con su propio criterio de
+  producto sobre quien puede ver que conversacion.
+- **LangGraph Studio no pasa por este hook.** Con la autenticacion de Studio
+  activa (el default), un request del Studio se autentica contra LangSmith y
+  la identidad que llega es `"langgraph-studio-user"`, no un UUID de la tabla
+  `users`. Las herramientas de LECTURA funcionan; las tres de escritura
+  fallan con `AgentAuthError` porque esa identidad no es un UUID valido. Para
+  probar escrituras desde el Studio hay que agregar
+  `"disable_studio_auth": true` al bloque `auth` de `langgraph.json` y mandar
+  un token de Firebase real, o probarlas desde el panel.
+
+**Nada de esta seccion se corrio contra un servidor LangGraph de verdad** --
+vale la misma advertencia que la seccion "Levantarlo". Lo que si esta
+verificado, leyendo el fuente de `langgraph-sdk` 0.2.9 (instalado en este
+venv), `langgraph-cli` 0.4.32 y `langgraph-api` 0.15.1: la forma de la
+entrada `auth` en `langgraph.json`, que un handler sincrono esta soportado
+(el servidor lo envuelve en `run_in_threadpool`), que `authorization` es un
+parametro que el servidor sabe inyectar, que el resultado aterriza en
+`configurable` como `langgraph_auth_user_id`, y que esa clave es reservada.
+`app/agent/auth_hook.py` cita el archivo y la linea de cada uno de esos
+puntos.
 
 ## El contrato del panel: la huella
 

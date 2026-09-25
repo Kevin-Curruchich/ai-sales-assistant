@@ -18,6 +18,9 @@ exactamente una vez a lo largo de dos rondas de reanudacion.
 
 import uuid
 
+import pytest
+from psycopg import Connection
+
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -26,6 +29,7 @@ from langgraph.types import Command
 from sqlalchemy import text
 
 from app.agent.graph import _postgres_checkpointer, build_graph, checkpointer_schema
+from app.agent.session import AUTH_USER_ID_KEY
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
 from tests.conftest import TEST_DATABASE_URL
@@ -73,7 +77,7 @@ def test_the_graph_interrupts_before_writing(db_session, seeded_customer, seeded
     """Con un modelo falso que pide registrar una venta, el grafo se detiene."""
     model = FakeToolCallingModel(scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)])
     graph = build_graph(model=model, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "t1", "user_id": str(seeded_user.id)}}
+    config = {"configurable": {"thread_id": "t1", AUTH_USER_ID_KEY: str(seeded_user.id)}}
 
     result = graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
 
@@ -86,7 +90,7 @@ def test_resuming_after_the_interrupt_continues_from_inside_the_tool(
 ):
     model = FakeToolCallingModel(scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)])
     graph = build_graph(model=model, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "t2", "user_id": str(seeded_user.id)}}
+    config = {"configurable": {"thread_id": "t2", AUTH_USER_ID_KEY: str(seeded_user.id)}}
     graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
 
     final = graph.invoke(Command(resume={"accion": "cancelar"}), config)
@@ -95,10 +99,20 @@ def test_resuming_after_the_interrupt_continues_from_inside_the_tool(
     assert db_session.query(Sale).count() == 0
 
 
-def test_the_checkpointer_targets_the_agent_schema():
+def test_the_checkpointer_never_targets_the_business_schema():
     """Las tablas de LangGraph no pueden vivir con las del negocio: Alembic
-    las leeria como deriva y las borraria en cada migracion."""
-    assert checkpointer_schema() == "agent"
+    las leeria como deriva y emitiria `drop_table` para cada una en cada
+    migracion.
+
+    La version anterior de este test afirmaba que `checkpointer_schema()`
+    devuelve la constante que su cuerpo devuelve -- inerte: cambiar la
+    constante cambiaba el test con ella y el invariante real seguia sin
+    vigilancia. El invariante real es la SEPARACION respecto del schema que
+    Alembic recorre, y eso es lo que se afirma aca."""
+    from app.core.config import settings
+
+    assert checkpointer_schema() != settings.POSTGRES_SCHEMA
+    assert checkpointer_schema() not in ("public", "")
 
 
 def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_still_interrupted(
@@ -122,7 +136,7 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
     el `CashMovement` que la caja escribio en la ronda 1 sigue siendo uno
     solo despues de la ronda 2.
     """
-    config = {"configurable": {"thread_id": "batch-1", "user_id": str(seeded_user.id)}}
+    config = {"configurable": {"thread_id": "batch-1", AUTH_USER_ID_KEY: str(seeded_user.id)}}
 
     model = FakeToolCallingModel(
         scripted_tool_calls=[
@@ -211,5 +225,43 @@ def test_postgres_checkpointer_creates_its_schema_before_setup(test_engine):
         finally:
             checkpointer.conn.close()
     finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+
+
+def test_the_postgres_checkpointer_closes_its_connection_when_setup_fails(test_engine, monkeypatch):
+    """Si `setup()` revienta, la conexion no queda abierta y sin dueño.
+
+    Nadie tiene una referencia para cerrarla despues -- el pool del servidor
+    de Postgres se la come hasta que muera el proceso, y un arranque que
+    falla y reintenta las iba acumulando de a una por intento."""
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    schema = f"agent_test_{uuid.uuid4().hex[:8]}"
+    opened = []
+
+    real_connect = Connection.connect
+
+    def spy_connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        opened.append(conn)
+        return conn
+
+    def explode(self):
+        raise RuntimeError("setup() reviento")
+
+    monkeypatch.setattr(Connection, "connect", staticmethod(spy_connect))
+    monkeypatch.setattr(PostgresSaver, "setup", explode)
+
+    try:
+        with pytest.raises(RuntimeError):
+            _postgres_checkpointer(TEST_DATABASE_URL, schema)
+
+        assert len(opened) == 1
+        assert opened[0].closed
+    finally:
+        for conn in opened:
+            if not conn.closed:
+                conn.close()
         with test_engine.begin() as conn:
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))

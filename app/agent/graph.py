@@ -109,10 +109,20 @@ def _postgres_checkpointer(conn_string: str, schema: str) -> BaseCheckpointSaver
         prepare_threshold=0,
         row_factory=dict_row,
     )
-    conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-    conn.execute(f'SET search_path TO "{schema}"')
-    checkpointer = PostgresSaver(conn)
-    checkpointer.setup()
+    # Si algo de aca abajo revienta (el `CREATE SCHEMA` sin permisos, el
+    # `setup()` contra una base a la que le falta una extension), la conexion
+    # quedaba abierta y sin dueño: nadie tiene una referencia para cerrarla y
+    # el pool del servidor de Postgres se la come hasta que muera el proceso.
+    # Un arranque que falla y reintenta las iba acumulando de a una por
+    # intento.
+    try:
+        conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        conn.execute(f'SET search_path TO "{schema}"')
+        checkpointer = PostgresSaver(conn)
+        checkpointer.setup()
+    except BaseException:
+        conn.close()
+        raise
     return checkpointer
 
 
@@ -131,5 +141,12 @@ def graph(config: dict | None = None):
     CUALQUIER cosa importe `app.agent.graph` -- incluidos los tests, que no
     tienen ni la base de desarrollo local levantada ni una API key. LangGraph
     llama a esta fabrica reci en cuando de verdad va a correr el grafo.
+
+    `config` se acepta y se IGNORA a proposito: el grafo se construye una vez
+    y lo comparten todas las corridas, asi que nada por corrida -- y menos
+    que nada la identidad de quien escribe -- puede quedar horneado aca. Esa
+    identidad viaja por corrida, en el `configurable` que el hook de
+    `app/agent/auth_hook.py` hace que el servidor inyecte, y la leen las
+    herramientas con `user_id_from_config`.
     """
     return build_graph(_default_model(), _default_checkpointer())
