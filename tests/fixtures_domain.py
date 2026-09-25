@@ -39,14 +39,37 @@ def _session_for(schema: str):
 
 
 @pytest.fixture
-def db_session(migrated_schema):
-    """Sesion contra un schema migrado desechable."""
+def db_session(migrated_schema, monkeypatch):
+    """Sesion contra un schema migrado desechable.
+
+    Tambien redirige `agent_session()` (Task 7) al mismo engine y schema: las
+    herramientas del agente abren su propia sesion via
+    `app.core.database.SessionLocal`, que por defecto apunta a la base de
+    desarrollo local (.env, puerto 55433) y nunca veria los datos sembrados
+    aca (puerto 55432, schema desechable). El monkeypatch reemplaza esa
+    referencia, no `app/agent/session.py`: el modulo de produccion queda
+    intacto.
+    """
     session, engine = _session_for(migrated_schema)
+    monkeypatch.setattr("app.agent.session.SessionLocal", sessionmaker(bind=engine))
     try:
         yield session
     finally:
         session.close()
         engine.dispose()
+
+
+@pytest.fixture
+def two_similar_customers(db_session):
+    """Dos clientes con nombres parecidos, para probar que `buscar_cliente`
+    devuelve ambos sin elegir por el usuario."""
+    a = Customer(name="Juan Gonzalez")
+    b = Customer(name="Juana Gonzalez")
+    db_session.add_all([a, b])
+    db_session.commit()
+    db_session.refresh(a)
+    db_session.refresh(b)
+    return (a, b)
 
 
 @pytest.fixture
