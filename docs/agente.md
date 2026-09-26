@@ -77,6 +77,26 @@ Usa siempre `venv/bin/python -m pip`, igual que en el resto del repo.)
 
 ### Levantarlo
 
+> **El CLI va en un venv APARTE. No lo instales en `venv/`.**
+>
+> `langgraph-api` exige `starlette>=1.3.1` y FastAPI 0.121.3 exige
+> `starlette<0.51.0`. **No hay version que satisfaga a las dos.** Instalar
+> `langgraph-cli[inmem]` en el venv del proyecto sube starlette a 1.7 y la API
+> deja de arrancar (`TypeError: Router.__init__() got an unexpected keyword
+> argument`), ademas de subir `langgraph` de 1.0.3 a 1.2.12 — y toda la cadena
+> de autenticacion y la propiedad `version="v2"` de la que depende la
+> idempotencia se verificaron contra 1.0.3.
+>
+> ```bash
+> python3 -m venv .venv-agent
+> .venv-agent/bin/python -m pip install -e . "langgraph-cli[inmem]"
+> .venv-agent/bin/langgraph dev
+> ```
+>
+> Si ya lo instalaste en `venv/`, se restaura con:
+> `venv/bin/python -m pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem`
+> seguido de `venv/bin/python -m pip install -r requirements.txt`.
+
 Contra la base de desarrollo local (`db_local`, puerto 55433 --
 `docker-compose.dev.yml`, ver `docs/desarrollo-local.md`):
 

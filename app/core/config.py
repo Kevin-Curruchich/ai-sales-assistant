@@ -64,6 +64,13 @@ class Settings(BaseSettings):
     # y verla como otro dia desde otra zona rompe el vinculo con el hecho real.
     BUSINESS_TIMEZONE: str = "America/Guatemala"
 
-    model_config = SettingsConfigDict(env_file=".env", case_sensitive=True)
+    # extra="ignore": el mismo .env lo comparten dos procesos.  El del agente
+    # necesita ANTHROPIC_API_KEY y las LANGSMITH_*, que lee el runtime de
+    # LangGraph directamente del entorno y que esta clase no tiene por que
+    # conocer.  Sin esto, pydantic-settings prohibe toda clave extra y agregar
+    # una variable del agente al .env impide arrancar la API entera.
+    model_config = SettingsConfigDict(
+        env_file=".env", case_sensitive=True, extra="ignore"
+    )
 
 settings = Settings()
