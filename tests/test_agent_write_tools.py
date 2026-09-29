@@ -889,3 +889,91 @@ def test_the_interrupt_guard_test_can_actually_fail():
         if isinstance(node, ast.Call)
     }
     assert positions["create"] < positions["interrupt"]
+
+
+# --------------------------------------------------------------------------
+# La huella lleva firma: una aprobacion que el servidor no emitio no escribe.
+# Sin esto, un panel que recalcule la huella en vez de guardarla apagaba la
+# comparacion en silencio, y era indetectable del lado del servidor.
+# --------------------------------------------------------------------------
+
+
+def _approve_with(huella):
+    """Aprueba devolviendo la huella que se le pase, no la que vino."""
+    return lambda _p: {"accion": "aprobar", "huella": huella}
+
+
+def test_a_sale_approved_with_a_huella_the_server_did_not_issue_writes_nothing(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """Un panel que ARMA el sobre por su cuenta en vez de devolver el recibido."""
+    inventada = {
+        "datos": [{"cost_basis_unit": "33.33", "subtotal": "18.00", "lotes": [], "warnings": []}],
+        "firma": "0" * 64,
+    }
+    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve_with(inventada))
+
+    result = registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot), config=_config(seeded_user)
+    )
+
+    assert result["estado"] == "huella_no_valida"
+    assert db_session.query(Sale).count() == 0
+
+
+def test_a_sale_approved_with_the_old_unsigned_contract_writes_nothing(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """Antes la huella era la lista pelada.  Un panel viejo no puede escribir."""
+    vieja = [{"cost_basis_unit": "33.33", "subtotal": "18.00", "lotes": [], "warnings": []}]
+    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve_with(vieja))
+
+    result = registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot), config=_config(seeded_user)
+    )
+
+    assert result["estado"] == "huella_no_valida"
+    assert db_session.query(Sale).count() == 0
+
+
+def test_tampering_with_the_figures_inside_a_signed_huella_writes_nothing(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """La firma se emitio bien y despues alguien cambio las cifras."""
+    capturada = {}
+
+    def approve_tampered(payload):
+        capturada.update(payload["huella"])
+        alterada = {
+            "datos": [{**payload["huella"]["datos"][0], "cost_basis_unit": "1.00"}],
+            "firma": payload["huella"]["firma"],
+        }
+        return {"accion": "aprobar", "huella": alterada}
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", approve_tampered)
+
+    result = registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot), config=_config(seeded_user)
+    )
+
+    assert result["estado"] == "huella_no_valida"
+    assert db_session.query(Sale).count() == 0
+
+
+def test_the_huella_the_panel_receives_is_a_signed_envelope(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """Lo que el panel tiene que guardar y devolver tal cual."""
+    visto = {}
+
+    def capture_and_cancel(payload):
+        visto.update(payload)
+        return {"accion": "cancelar"}
+
+    monkeypatch.setattr("app.agent.tools.write.interrupt", capture_and_cancel)
+    registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot), config=_config(seeded_user)
+    )
+
+    assert set(visto["huella"]) == {"datos", "firma"}
+    assert len(visto["huella"]["firma"]) == 64  # hexdigest de sha256
