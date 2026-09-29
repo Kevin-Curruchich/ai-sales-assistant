@@ -122,6 +122,7 @@ from langgraph.types import interrupt
 
 from app.agent import idempotency
 from app.agent.session import agent_session, user_id_from_config
+from app.agent.signing import firmar, verificar
 from app.core.datetime_utils import business_midnight, business_tz
 from app.models.cash_movement import CashMovementType
 from app.models.payment_method import PaymentMethod
@@ -348,7 +349,7 @@ def registrar_venta(
         while True:
             data = _build_sale_create(**valores)
             preview = service.preview_sale(data)
-            huella = _sale_cost_huella(preview)
+            huella = firmar(_sale_cost_huella(preview))
 
             decision = interrupt(
                 {
@@ -399,13 +400,28 @@ def registrar_venta(
             # comitee entre esta linea y la de abajo, dentro de la MISMA
             # sesion -- no es lo que hace que la comparacion contra la huella
             # funcione bajo una reanudacion real (ver el docstring del modulo).
+            # La firma prueba que esta huella la emitio ESTE servidor.  Sin
+            # esto, un panel que la recalcule en vez de guardarla apaga la
+            # comparacion en silencio y nadie se entera.
+            firma_ok, cifras_aprobadas = verificar(huella_aprobada)
+            if not firma_ok:
+                return {
+                    "estado": "huella_no_valida",
+                    "mensaje": (
+                        "La huella de la aprobacion no fue emitida por este "
+                        "servidor. El panel debe devolver TAL CUAL el valor que "
+                        "vino en el payload de interrupt(), sin recalcularlo ni "
+                        "modificarlo. No se escribio nada."
+                    ),
+                }
+
             db.expire_all()
             recalculado = service.preview_sale(data)
-            if huella_aprobada != _sale_cost_huella(recalculado):
+            if cifras_aprobadas != _sale_cost_huella(recalculado):
                 return {
                     "estado": "recalculado",
                     "mensaje": "El inventario cambio y el costo difiere de lo que aprobaste.",
-                    "huella_aprobada": huella_aprobada,
+                    "huella_aprobada": cifras_aprobadas,
                     "huella_actual": _sale_cost_huella(recalculado),
                     "preview_actual": _sale_preview_dict(recalculado),
                 }
@@ -568,7 +584,7 @@ def registrar_compra(
         while True:
             data = _build_purchase_create(**valores)
             preview = _purchase_preview(db, data)
-            huella = _purchase_huella(preview)
+            huella = firmar(_purchase_huella(preview))
 
             decision = interrupt(
                 {
@@ -604,13 +620,25 @@ def registrar_compra(
                     ),
                 }
 
+            firma_ok, cifras_aprobadas = verificar(huella_aprobada)
+            if not firma_ok:
+                return {
+                    "estado": "huella_no_valida",
+                    "mensaje": (
+                        "La huella de la aprobacion no fue emitida por este "
+                        "servidor. El panel debe devolver TAL CUAL el valor que "
+                        "vino en el payload de interrupt(), sin recalcularlo ni "
+                        "modificarlo. No se escribio nada."
+                    ),
+                }
+
             db.expire_all()  # ver la nota identica en registrar_venta (Finding I4)
             recalculado = _purchase_preview(db, data)
-            if huella_aprobada != _purchase_huella(recalculado):
+            if cifras_aprobadas != _purchase_huella(recalculado):
                 return {
                     "estado": "recalculado",
                     "mensaje": "Los datos de la compra cambiaron y difieren de lo que aprobaste.",
-                    "huella_aprobada": huella_aprobada,
+                    "huella_aprobada": cifras_aprobadas,
                     "huella_actual": _purchase_huella(recalculado),
                     "preview_actual": recalculado,
                 }

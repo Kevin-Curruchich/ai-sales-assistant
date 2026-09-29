@@ -19,6 +19,12 @@ TEST_DATABASE_URL = os.environ.get(
 FORBIDDEN_HOST_MARKERS = ("rlwy.net", "railway", "proxy.rlwy")
 
 
+# La huella de aprobacion se firma con un secreto del entorno y `firmar()`
+# levanta si falta -- a proposito: un control que se apaga solo cuando falta su
+# configuracion no es un control.  Los tests traen el suyo.
+os.environ.setdefault("AGENT_HUELLA_SECRET", "secreto-de-prueba-no-usar-en-produccion")
+
+
 def pytest_configure(config):
     if not TEST_DATABASE_URL.strip():
         raise pytest.UsageError(

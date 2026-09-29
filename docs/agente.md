@@ -406,6 +406,25 @@ puntos.
 
 ## El contrato del panel: la huella
 
+> **La huella va firmada.** Desde 2026-09-29 el sobre que el panel recibe es
+> `{"datos": ..., "firma": "<hmac-sha256>"}`. **Para el panel no cambia nada**:
+> lo sigue guardando opaco y lo sigue devolviendo tal cual. Lo que cambia es
+> que el servidor ahora puede verificar que esa huella la emitio el.
+>
+> Antes solo podia comparar el valor recibido contra el estado actual de la
+> base: un panel que RECALCULARA la huella en vez de guardarla apagaba la
+> comparacion **en silencio** y era indetectable. Ahora esa falla devuelve
+> `"estado": "huella_no_valida"` la primera vez.
+>
+> Requiere `AGENT_HUELLA_SECRET` en el entorno del agente. Si falta, el agente
+> **se niega** a emitir o verificar una aprobacion en vez de degradar a sin
+> firma. Rotar el secreto invalida las aprobaciones pendientes en ese momento:
+> hay que volver a aprobarlas.
+>
+> Los cuatro estados de una aprobacion: `registrado`, `recalculado` (el
+> inventario cambio), `aprobacion_sin_huella` (no vino), `huella_no_valida`
+> (vino una que este servidor no emitio).
+
 Esta es la seccion mas importante de este documento. Un panel que la
 ignora no falla ruidosamente -- deja pasar aprobaciones sin ninguna
 garantia, en silencio, y nada del lado del servidor puede detectarlo.
