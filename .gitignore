@@ -68,3 +68,10 @@ graphify-out/
 # como referencia de dominio -- ver Revenew/README.md.
 Revenew/config.json
 Revenew/tools.json
+
+# venv aparte para el CLI de LangGraph (ver docs/agente.md): sus dependencias
+# son incompatibles con las de la API.
+.venv-agent/
+
+# Estado local del servidor de desarrollo de LangGraph.
+.langgraph_api/
