@@ -50,6 +50,11 @@ def _service(lots, product):
     service.sale_repo.get_recent_items_for_customer_product = lambda **kwargs: []
     service.sale_repo.create = lambda sale: sale
     service._update_cycle = lambda *a, **kw: None
+    # Task 4: create() ahora registra una entrada de caja para toda venta no
+    # pendiente. db=None es deliberado en este test (aisla el calculo FIFO),
+    # asi que el colaborador nuevo se stubea igual que los repos de arriba.
+    service.cash_service.record = lambda **kwargs: None
+    service.db = SimpleNamespace(commit=lambda: None, refresh=lambda *_: None)
     return service
 
 

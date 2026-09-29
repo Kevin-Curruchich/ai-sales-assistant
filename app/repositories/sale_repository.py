@@ -96,8 +96,11 @@ class SaleRepository:
         return list(self.db.execute(stmt).scalars().all())
 
     def create(self, sale: Sale) -> Sale:
+        # No commitea: SaleService.create compone esto con CashService.record
+        # en una sola transaccion (ver Task 4). El caller es quien decide
+        # cuando cerrar el commit.
         self.db.add(sale)
-        self.db.commit()
+        self.db.flush()
         self.db.refresh(sale)
         return sale
 

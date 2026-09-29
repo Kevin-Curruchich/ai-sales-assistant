@@ -91,3 +91,14 @@ rm /tmp/db_v2.sql
 
 El volcado lleva nombres y correos de clientes reales a un archivo en tu
 disco. Borralo cuando termines, como hace la ultima linea.
+
+## El agente conversacional
+
+Ademas del backend (`hypercorn app.main:app`), este repo tiene un segundo
+proceso: el grafo de LangGraph en `app/agent/`. Corre aparte, comparte la
+misma base de datos (`db_local` en desarrollo) pero necesita su propia
+variable `ANTHROPIC_API_KEY` (y opcionalmente las tres `LANGSMITH_*`) y una
+herramienta que **no esta instalada en este venv todavia**
+(`langgraph-cli`). Arrancarlo local, el contrato del panel al aprobar una
+escritura, y el checklist antes de desplegarlo estan en
+`docs/agente.md` -- no repetido aca.

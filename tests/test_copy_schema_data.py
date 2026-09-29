@@ -190,7 +190,7 @@ def test_cash_movements_is_exempt_only_while_it_is_empty(
         conn.execute(
             text(
                 "INSERT INTO cash_movements (occurred_at, type, amount) "
-                "VALUES (:d, CAST(:t AS cash_movement_type_enum), :a)"
+                "VALUES (:d, :t, :a)"
             ),
             {"d": datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), "t": "entrada", "a": Decimal("115.00")},
         )

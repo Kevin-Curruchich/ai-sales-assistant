@@ -24,6 +24,7 @@ class CashMovementType(str, PyEnum):
     SALIDA = "salida"
     APORTE_SOCIO = "aporte_socio"
     RETIRO_SOCIO = "retiro_socio"
+    SALDO_INICIAL = "saldo_inicial"
 
 
 # Unica fuente de verdad de que tipos restan del saldo. La repite quien lea el
@@ -52,11 +53,25 @@ class CashMovement(Base):
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
+    # VARCHAR + CHECK, no enum nativo de Postgres, mismo patron que
+    # PAYMENT_METHOD_COLUMN (app/models/payment_method.py): un enum nativo es
+    # schema-scoped (db_v2.cash_movement_type_enum y db_local.cash_movement_type_enum
+    # son tipos distintos, lo que ya complico una copia entre schemas -- ver
+    # docs/superpowers/handoffs/2026-09-23-piezas-2-3-agente.md) y ALTER TYPE ADD
+    # VALUE pelea con el DDL transaccional de Alembic, mientras que quitar un valor
+    # de un enum nativo es casi imposible. Nacio como enum nativo (8df5b1f79497) y
+    # se convirtio aqui, en la misma revision que agrego saldo_inicial, porque la
+    # tabla seguia vacia: la conversion era gratis hoy y deja de serlo en cuanto
+    # Task 8 empiece a escribir filas.
+    # length=20 a proposito: el valor mas largo hoy (aporte_socio, retiro_socio,
+    # saldo_inicial) tiene 13 caracteres; un tipo de movimiento nuevo con nombre
+    # largo no debe obligar a redimensionar la columna ademas de tocar el CHECK.
     type: Mapped[CashMovementType] = mapped_column(
         SQLEnum(
             CashMovementType,
-            name="cash_movement_type_enum",
-            native_enum=True,
+            name="type",
+            native_enum=False,
+            length=20,
             validate_strings=True,
             values_callable=lambda x: [e.value for e in x],
         ),

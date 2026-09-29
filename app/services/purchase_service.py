@@ -4,14 +4,16 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
+from app.services.cash_service import CashService
 from app.services.sales import SaleService
 from app.schemas.purchase import (
     PurchaseCreate, PurchaseUpdate, PurchaseItemResponse, PurchaseResponse,
 )
-from app.core.datetime_utils import format_business_datetime
+from app.core.datetime_utils import business_midnight, format_business_datetime
 
 
 class PurchaseService:
@@ -19,6 +21,7 @@ class PurchaseService:
         self.repo = PurchaseRepository(db)
         self.product_repo = ProductRepository(db)
         self.sale_service = SaleService(db)
+        self.cash_service = CashService(db)
         self.db = db
 
     def _money(self, value: Decimal | float | int | None) -> Decimal:
@@ -68,6 +71,7 @@ class PurchaseService:
             notes=purchase.notes,
             total=self._money(purchase.total),
             status=purchase.status,
+            payment_method=purchase.payment_method,
             items=items,
             created_at=created_at,
             updated_at=updated_at,
@@ -169,6 +173,7 @@ class PurchaseService:
             notes=data.notes,
             total=Decimal("0.00"),
             status="draft",
+            payment_method=data.medioPago,
         )
         self.db.add(purchase)
         self.db.flush()  # get purchase.id before adding items
@@ -265,6 +270,30 @@ class PurchaseService:
             affected_product_ids.add(item.product_id)
 
         purchase.status = "confirmed"
+
+        # commit=False: la salida de caja y la confirmacion son una sola
+        # transaccion (mismo patron que SaleService.create, Task 4). Un
+        # borrador no gasto nada -- el movimiento existe solo a partir de aqui.
+        #
+        # `total > 0`: una compra de Q0.00 es legitima -- un lote donado, una
+        # muestra que el proveedor regalo: `PurchaseItemCreate` acepta
+        # `unitCost = 0` a proposito -- pero no movio caja, y una fila de
+        # Q0.00 no cambia ningun saldo. Misma regla que en
+        # `SaleService.create` y `SaleService._record_sale_cash_entry`; la
+        # guardia de `CashService.record` contra `amount <= 0` se conserva
+        # intacta. Los lotes entran al inventario igual (arriba): la compra
+        # ocurrio, solo no costo nada.
+        if purchase.total > 0:
+            self.cash_service.record(
+                occurred_at=business_midnight(purchase.date),
+                type=CashMovementType.SALIDA,
+                amount=purchase.total,
+                payment_method=purchase.payment_method,
+                purchase_id=purchase.id,
+                note=None,
+                commit=False,
+            )
+
         self.db.commit()
         self.sale_service.recalculate_sale_snapshots_for_products(
             product_ids=affected_product_ids,
@@ -273,7 +302,8 @@ class PurchaseService:
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
     def cancel(self, purchase_id: uuid.UUID) -> PurchaseResponse:
-        """Cancel a purchase. If it was confirmed, reverse the stock adjustments."""
+        """Cancel a purchase. If it was confirmed, reverse the stock adjustments
+        and the cash exit that confirming it created."""
         purchase = self.get_by_id(purchase_id)
         affected_product_ids: set[uuid.UUID] = set()
 
@@ -310,6 +340,22 @@ class PurchaseService:
                 product.stock = new_stock
                 item.remaining_quantity = 0
                 affected_product_ids.add(item.product_id)
+
+            # confirm() rejects this whole method above (consumed_quantity > 0
+            # raises) unless every unit is still unsold, so cancelling here is
+            # a full undo, not a partial refund: nothing downstream depends on
+            # this purchase having happened, so its SALIDA is removed rather
+            # than offset. Filtered by type as well as purchase_id: Task 8
+            # lets an aporte_socio point at the same purchase_id, and that is
+            # money a partner actually put in -- a blanket delete on
+            # purchase_id alone would erase it too.
+            stale_movements = (
+                self.db.query(CashMovement)
+                .filter_by(purchase_id=purchase.id, type=CashMovementType.SALIDA)
+                .all()
+            )
+            for movement in stale_movements:
+                self.db.delete(movement)
 
         purchase.status = "cancelled"
         self.db.commit()

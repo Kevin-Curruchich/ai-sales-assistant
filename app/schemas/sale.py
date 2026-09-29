@@ -2,7 +2,10 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
+
+from app.core.datetime_utils import business_midnight
+from app.models.payment_method import PaymentMethod
 
 
 # --- Request schemas ---
@@ -49,6 +52,25 @@ class SaleCreate(BaseModel):
     date: date
     items: list[SaleItemCreate]
     isPaymentPending: bool = False
+    medioPago: Optional[PaymentMethod] = None
+    fechaPago: Optional[date] = None
+    occurredAt: Optional[datetime] = None
+
+    @model_validator(mode="after")
+    def default_payment_from_the_sale(self):
+        # Regla del negocio: la venta se cobra al momento salvo que se diga lo
+        # contrario.  Una venta pendiente no tiene fecha de pago todavia.
+        if self.isPaymentPending:
+            self.fechaPago = None
+            self.medioPago = None
+        else:
+            if self.medioPago is None:
+                self.medioPago = PaymentMethod.EFECTIVO
+            if self.fechaPago is None:
+                self.fechaPago = self.date
+        if self.occurredAt is None:
+            self.occurredAt = business_midnight(self.date)
+        return self
 
 
 class SaleUpdate(BaseModel):
@@ -152,6 +174,9 @@ class SaleResponse(BaseModel):
     date: date
     total: Decimal
     is_payment_pending: bool
+    payment_date: Optional[date] = None
+    payment_date_formatted: Optional[str] = None
+    payment_method: Optional[PaymentMethod] = None
     items: list[SaleItemResponse] = []
     created_at: datetime
     updated_at: datetime

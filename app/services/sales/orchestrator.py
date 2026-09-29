@@ -7,6 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.models.customer_product_cycle import CustomerProductCycle
+from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import PurchaseItem
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
@@ -16,6 +17,7 @@ from app.repositories.customer_repository import CustomerRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_repository import SaleRepository
+from app.services.cash_service import CashService
 from app.services.sales.fifo import InsufficientLots, allocate_fifo
 from app.services.sales.pricing import (
     base_margin_for,
@@ -24,7 +26,7 @@ from app.services.sales.pricing import (
 )
 from app.services.sales.projection import project
 from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
-from app.core.datetime_utils import format_business_datetime
+from app.core.datetime_utils import business_midnight, format_business_date, format_business_datetime
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -59,6 +61,7 @@ class SaleService:
         self.purchase_repo = PurchaseRepository(db)
         self.customer_repo = CustomerRepository(db)
         self.cycle_repo = CustomerProductCycleRepository(db)
+        self.cash_service = CashService(db)
 
     # ------------------------------------------------------------------
     # Money and pricing helpers
@@ -244,6 +247,9 @@ class SaleService:
             date=sale.date,
             total=self._money(sale.total),
             is_payment_pending=sale.is_payment_pending,
+            payment_date=sale.payment_date,
+            payment_date_formatted=format_business_date(sale.payment_date),
+            payment_method=sale.payment_method,
             items=items,
             created_at=created_at,
             updated_at=updated_at,
@@ -583,12 +589,45 @@ class SaleService:
             date=data.date,
             total=total,
             is_payment_pending=data.isPaymentPending,
+            payment_method=data.medioPago,
+            payment_date=data.fechaPago,
+            occurred_at=data.occurredAt,
             items=sale_items,
         )
         sale = self.sale_repo.create(sale)
 
+        if not data.isPaymentPending and total > 0:
+            # `total > 0`: una venta de Q0.00 es legitima -- un regalo, una
+            # muestra: `SaleItemCreate` acepta `unitPrice = 0` a proposito y
+            # `registrar_venta` lo honra -- pero NO es un movimiento de caja.
+            # El libro registra "dinero que realmente se movio" y cero
+            # quetzales no se movieron; la fila no cambiaria ningun saldo.
+            # `CashService.record` sigue rechazando `amount <= 0` (es lo que
+            # atrapa un monto negativo como error de programacion en
+            # cualquier otro llamador): la regla vive aca, en quien deriva el
+            # monto de un total, no debilitando esa guardia. Sin esto, una
+            # venta pagada de cero era un `ValueError` pelado saliendo del
+            # service -- un 500 en `POST /api/v1/sales`, que antes de esta
+            # rama la aceptaba. Misma regla en
+            # `_record_sale_cash_entry` y en `PurchaseService.confirm`.
+            #
+            # commit=False: la entrada de caja y la venta son una sola
+            # transaccion. Si una falla, ninguna queda escrita.
+            self.cash_service.record(
+                occurred_at=data.occurredAt,
+                type=CashMovementType.ENTRADA,
+                amount=total,
+                payment_method=data.medioPago,
+                sale_id=sale.id,
+                note=None,
+                commit=False,
+            )
+
         for item_data in data.items:
             self._update_cycle(data.customerId, item_data.productId, data.date, item_data.quantity)
+
+        self.db.commit()
+        self.db.refresh(sale)
 
         return sale
 
@@ -618,11 +657,85 @@ class SaleService:
             )
 
         if "isPaymentPending" in update_data and update_data["isPaymentPending"] is not None:
-            sale.is_payment_pending = update_data["isPaymentPending"]
+            # Segunda ruta viva que cambia el estado de pago (la otra es
+            # `update_payment_status_enriched`, via PATCH
+            # /sales/{id}/payment-status). Antes solo ponia el booleano y
+            # seguia: pagada -> pendiente dejaba la ENTRADA puesta y
+            # pendiente -> pagada no registraba el cobro -- el saldo quedaba
+            # mal en las dos direcciones. Comparten el mismo helper para que
+            # no vuelvan a divergir.
+            self._apply_payment_status_transition(sale, update_data["isPaymentPending"])
 
         result = self.sale_repo.update(sale)
 
         return result
+
+    def _apply_payment_status_transition(self, sale: Sale, is_payment_pending: bool) -> None:
+        """Mueve la caja segun la transicion de `is_payment_pending`.
+
+        No comitea: deja la venta y el movimiento en la misma sesion para que
+        quien llame cierre la transaccion con un solo commit (mismo patron
+        que `SaleService.create`). Es un no-op si el estado no cambia.
+        """
+        was_pending = sale.is_payment_pending
+        sale.is_payment_pending = is_payment_pending
+
+        if was_pending and not is_payment_pending:
+            # Pendiente -> pagada: se cobro ahora. Fija la fecha de pago si
+            # todavia no tenia una y registra la entrada de caja, compuesta
+            # con commit=False para que la venta y el movimiento sean una
+            # sola transaccion (mismo patron que SaleService.create, Task 4).
+            if sale.payment_date is None:
+                sale.payment_date = date.today()
+            self._record_sale_cash_entry(sale)
+        elif not was_pending and is_payment_pending:
+            # Pagada -> pendiente: se esta corrigiendo que el cobro no era
+            # cierto. El libro de caja no debe seguir mostrando un ingreso
+            # que, segun el estado actual de la venta, no ocurrio -- mismo
+            # invariante que una venta pendiente no registra nada al
+            # crearse. Se retira el/los movimientos de esa venta en vez de
+            # dejar una entrada que ya no refleja la realidad.
+            #
+            # Filtrado por tipo ademas de por `sale_id`, igual que
+            # `PurchaseService.cancel()`: `registrar_movimiento_caja` (Task 8)
+            # acepta `venta_id` para los cinco tipos, asi que un
+            # `aporte_socio` apuntado a esta venta es dinero que un socio
+            # puso de verdad -- un borrado a secas por `sale_id` lo destruia
+            # tambien. Solo se retira la ENTRADA que el cobro genero.
+            stale_movements = (
+                self.db.query(CashMovement)
+                .filter_by(sale_id=sale.id, type=CashMovementType.ENTRADA)
+                .all()
+            )
+            for movement in stale_movements:
+                self.db.delete(movement)
+            # payment_date sigue el mismo ciclo de vida que el movimiento: los
+            # dos quedan en None mientras la venta este pendiente. Si no se
+            # limpia, un pendiente -> pagada posterior lo encuentra no-None y
+            # no lo reemplaza (linea de arriba), fechando la entrada nueva con
+            # la fecha vieja en vez del cobro real.
+            sale.payment_date = None
+
+    def _record_sale_cash_entry(self, sale: Sale) -> None:
+        """La ENTRADA que deja un cobro, fechada en `payment_date`.
+
+        `sale.total > 0`: misma regla del total cero que en
+        `SaleService.create` -- el documento vale, el movimiento no existe.
+        Sin esto, marcar como pagada una venta de Q0.00 (por cualquiera de
+        las dos rutas que llegan aca) reventaba con el `ValueError` de
+        `CashService.record`.
+        """
+        if sale.total <= 0:
+            return
+        self.cash_service.record(
+            occurred_at=business_midnight(sale.payment_date),
+            type=CashMovementType.ENTRADA,
+            amount=sale.total,
+            payment_method=sale.payment_method,
+            sale_id=sale.id,
+            note=None,
+            commit=False,
+        )
 
     def update_payment_status_enriched(
         self,
@@ -630,7 +743,8 @@ class SaleService:
         data: SalePaymentStatusUpdate,
     ) -> SaleResponse:
         sale = self.get_by_id(sale_id)
-        sale.is_payment_pending = data.isPaymentPending
+        self._apply_payment_status_transition(sale, data.isPaymentPending)
+
         self.sale_repo.update(sale)
         return self._to_sale_response(self.get_by_id(sale_id))
 

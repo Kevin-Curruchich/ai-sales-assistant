@@ -57,3 +57,21 @@ revenew-*-firebase-adminsdk-*-*.json
 # ni `.env.local`: el patron `*.env` exige que el nombre TERMINE en `.env`.
 .env.*
 !.env.example
+
+# Salida de graphify.  El grafo se construye leyendo la carpeta entera y la
+# herramienta no documenta redaccion de secretos: si alguna vez se corre desde
+# la raiz, lo que haya leido no debe terminar en el repo.
+graphify-out/
+
+# Export de Fleet: los identificadores de la plataforma (tenant, organizacion,
+# proveedor de OAuth) no van al repo.  Las skills y AGENTS.md si se versionan,
+# como referencia de dominio -- ver Revenew/README.md.
+Revenew/config.json
+Revenew/tools.json
+
+# venv aparte para el CLI de LangGraph (ver docs/agente.md): sus dependencias
+# son incompatibles con las de la API.
+.venv-agent/
+
+# Estado local del servidor de desarrollo de LangGraph.
+.langgraph_api/

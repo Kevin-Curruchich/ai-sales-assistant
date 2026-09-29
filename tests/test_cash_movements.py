@@ -1,4 +1,6 @@
+import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from app.core.database import Base
 from app.models import CashMovement, CashMovementType
@@ -11,6 +13,7 @@ def test_cash_movement_type_values():
         "salida",
         "aporte_socio",
         "retiro_socio",
+        "saldo_inicial",
     }
 
 
@@ -60,3 +63,89 @@ def test_running_balance_is_not_stored(test_engine, migrated_schema):
         }
     assert "running_balance" not in cols
     assert "saldo_acumulado" not in cols
+
+
+def test_saldo_inicial_is_accepted_by_the_check_constraint(test_engine, migrated_schema):
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(
+            text(
+                "INSERT INTO cash_movements (id, occurred_at, type, amount) "
+                "VALUES (gen_random_uuid(), now(), 'saldo_inicial', 500.00)"
+            )
+        )
+        count = conn.execute(
+            text("SELECT count(*) FROM cash_movements WHERE type = 'saldo_inicial'")
+        ).scalar()
+    assert count == 1
+
+
+def test_cash_movement_type_column_is_varchar_not_a_native_enum(test_engine, migrated_schema):
+    """Mismo patron que payment_method (tests/test_payment_method.py): un enum
+    nativo es schema-scoped (db_v2.cash_movement_type_enum != db_local...) y
+    ademas pelea con el DDL transaccional de Alembic para agregar valores."""
+    with test_engine.connect() as conn:
+        row = conn.execute(
+            text(
+                "SELECT data_type, character_maximum_length FROM information_schema.columns "
+                "WHERE table_schema = :s AND table_name = 'cash_movements' AND column_name = 'type'"
+            ),
+            {"s": migrated_schema},
+        ).one()
+    assert row[0] == "character varying"
+    assert row[1] == 20
+
+
+def test_cash_movement_type_check_accepts_the_five_values(test_engine, migrated_schema):
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        for value in (
+            "entrada",
+            "salida",
+            "aporte_socio",
+            "retiro_socio",
+            "saldo_inicial",
+        ):
+            conn.execute(
+                text(
+                    "INSERT INTO cash_movements (occurred_at, type, amount) "
+                    f"VALUES ('2026-09-23T09:00:00Z', '{value}', 10)"
+                )
+            )
+        total = conn.execute(text("SELECT count(*) FROM cash_movements")).scalar()
+    assert total == 5
+
+
+def test_cash_movement_type_check_rejects_anything_else(test_engine, migrated_schema):
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO cash_movements (occurred_at, type, amount) "
+                    "VALUES ('2026-09-23T09:00:00Z', 'bogus', 10)"
+                )
+            )
+
+
+def test_cash_movement_type_survived_the_varchar_conversion_as_not_nullable(test_engine, migrated_schema):
+    """Un movimiento sin tipo no entra.
+
+    El NOT NULL no lo introdujo esta rama -- venia de la columna enum
+    original. Lo que esta rama SI hizo es reescribir esa columna a
+    VARCHAR + CHECK, y una reescritura es exactamente el momento en que una
+    restriccion se puede perder por descuido. Por eso el test se queda, pero
+    ejercitando la restriccion (un INSERT que tiene que fallar) en vez de
+    leer `information_schema` y afirmar que dice lo que la migracion acaba
+    de escribir ahi: lo que importa es que la base lo RECHACE, y eso es lo
+    unico que un catalogo bien escrito y una restriccion rota no pueden
+    fingir a la vez."""
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        with pytest.raises(IntegrityError):
+            conn.execute(
+                text(
+                    "INSERT INTO cash_movements (occurred_at, type, amount) "
+                    "VALUES ('2026-09-23T09:00:00Z', NULL, 10)"
+                )
+            )

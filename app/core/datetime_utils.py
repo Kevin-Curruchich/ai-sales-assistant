@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional, Union
 from zoneinfo import ZoneInfo
 
@@ -10,6 +10,23 @@ DATETIME_FORMAT = "%d/%m/%Y %H:%M"
 
 def business_tz() -> ZoneInfo:
     return ZoneInfo(settings.BUSINESS_TIMEZONE)
+
+
+def business_midnight(day: date) -> datetime:
+    """El instante en que empieza `day` en la zona del negocio."""
+    return datetime.combine(day, time.min, tzinfo=ZoneInfo(settings.BUSINESS_TIMEZONE))
+
+
+def business_end_of_day(day: date) -> datetime:
+    """El ultimo instante de `day` en la zona del negocio.
+
+    Contraparte de `business_midnight()`: mismo patron (combine + tzinfo de la
+    zona del negocio), fin del dia en vez de inicio. Necesaria para un limite
+    SUPERIOR inclusivo: `occurred_at <= business_end_of_day(day)` cubre el dia
+    local completo, mientras que combinar con medianoche naive (o asumir UTC)
+    corta el dia entre 6 y 7 horas antes de que termine en hora de Guatemala.
+    """
+    return datetime.combine(day, time.max, tzinfo=ZoneInfo(settings.BUSINESS_TIMEZONE))
 
 
 def to_business_tz(value: datetime) -> datetime:

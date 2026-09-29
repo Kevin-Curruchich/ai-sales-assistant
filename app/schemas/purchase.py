@@ -4,6 +4,8 @@ from decimal import Decimal
 from typing import Optional
 from pydantic import BaseModel, field_validator
 
+from app.models.payment_method import PaymentMethod
+
 
 # --- Request schemas ---
 
@@ -33,6 +35,7 @@ class PurchaseCreate(BaseModel):
     date: date
     notes: Optional[str] = None
     items: list[PurchaseItemCreate]
+    medioPago: Optional[PaymentMethod] = None
 
 
 class PurchaseUpdate(BaseModel):
@@ -71,6 +74,7 @@ class PurchaseResponse(BaseModel):
     notes: Optional[str] = None
     total: Decimal
     status: str
+    payment_method: Optional[PaymentMethod] = None
     items: list[PurchaseItemResponse] = []
     created_at: datetime
     updated_at: datetime

@@ -4,6 +4,12 @@ import uuid
 import pytest
 from sqlalchemy import create_engine, text
 
+# Fixtures de dominio (sesion + datos sembrados) usadas por esta task y por
+# las Tasks 4, 5, 7 y 8: `db_session`, `seeded_user`, `seeded_customer`,
+# `seeded_product_with_lot`, `seeded_product_with_one_lot`,
+# `seeded_purchase_draft`.
+pytest_plugins = ["tests.fixtures_domain"]
+
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql://revenew@localhost:55432/revenew_test",
