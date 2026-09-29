@@ -60,68 +60,113 @@ Ninguna de las cuatro pasa por `app/core/config.py` (`Settings`, pydantic) --
 en `.env` como cualquier otra variable local; `.env.example` las trae
 comentadas.
 
-### Instalar `langgraph-cli`
+### El CLI va en un venv APARTE
 
-**`langgraph-cli` no esta instalado en el venv de este repo.** No esta en
-`requirements.txt` ni en `requirements-dev.txt` -- es una herramienta de
-desarrollo para correr el servidor local, no una dependencia de lo que se
-despliega (en produccion el servidor de LangGraph se levanta distinto, ver
-"Desplegarlo" mas abajo). Instalalo aparte:
+**No lo instales en `venv/`.** No es una preferencia: es un conflicto de
+dependencias sin solucion.
+
+| paquete | exige |
+|---|---|
+| `fastapi` 0.121.3 | `starlette>=0.40.0,<0.51.0` |
+| `langgraph-api` 0.15.1 | `starlette>=1.3.1`, y `langgraph_sdk.runtime` |
+| `langgraph` 1.0.3 (el pineado del repo) | `langgraph-sdk<0.4.4`, donde `runtime` **no existe** |
+
+No hay combinacion que satisfaga a los tres. Instalar `langgraph-cli[inmem]`
+en `venv/` sube starlette a 1.7 y **la API deja de arrancar**
+(`TypeError: Router.__init__() got an unexpected keyword argument`), ademas de
+mover `langgraph` a 1.2.12.
+
+Por eso el CLI vive en su propio entorno:
 
 ```bash
-venv/bin/python -m pip install "langgraph-cli[inmem]"
+python3 -m venv .venv-agent
+.venv-agent/bin/python -m pip install -r requirements.txt
+.venv-agent/bin/python -m pip install "langgraph-cli[inmem]"
 ```
 
-(`venv/bin/pip` esta roto en este venv -- resuelve a un Python 3.14 vacio.
-Usa siempre `venv/bin/python -m pip`, igual que en el resto del repo.)
+Ese segundo `pip install` va a **subir `langgraph` a 1.2.12 y el SDK a 0.4.x**,
+y a imprimir conflictos declarados. Es lo esperado y es necesario: el servidor
+no arranca con 1.0.3, falla con
+`ModuleNotFoundError: No module named 'langgraph_sdk.runtime'`.
+
+> **`pip install -e .` NO funciona:** este repo no tiene `pyproject.toml` ni
+> `setup.py`. Instala `requirements.txt` directamente, como arriba.
+
+**Las dos versiones conviven porque el comportamiento no depende de la
+diferencia.** Los 95 tests del agente pasan igual en 1.0.3 y en 1.2.12 —
+incluidos los de idempotencia, el despacho de un `Send()` por llamada bajo
+`version="v2"`, el replay del `interrupt()` y el hook de autenticacion. La
+suite COMPLETA sigue corriendo en `venv/`, porque `tests/test_startup.py`
+instancia una app FastAPI que starlette 1.7 rompe:
+
+```bash
+venv/bin/python -m pytest -q                      # las 263, en el venv principal
+.venv-agent/bin/python -m pytest -q tests/test_agent_*.py   # las 95 del agente, en 1.2.12
+```
+
+Si ya lo instalaste en `venv/` por error, se restaura con:
+
+```bash
+venv/bin/python -m pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
+venv/bin/python -m pip install -r requirements.txt
+```
 
 ### Levantarlo
 
-> **El CLI va en un venv APARTE. No lo instales en `venv/`.**
->
-> `langgraph-api` exige `starlette>=1.3.1` y FastAPI 0.121.3 exige
-> `starlette<0.51.0`. **No hay version que satisfaga a las dos.** Instalar
-> `langgraph-cli[inmem]` en el venv del proyecto sube starlette a 1.7 y la API
-> deja de arrancar (`TypeError: Router.__init__() got an unexpected keyword
-> argument`), ademas de subir `langgraph` de 1.0.3 a 1.2.12 — y toda la cadena
-> de autenticacion y la propiedad `version="v2"` de la que depende la
-> idempotencia se verificaron contra 1.0.3.
->
-> ```bash
-> python3 -m venv .venv-agent
-> .venv-agent/bin/python -m pip install -e . "langgraph-cli[inmem]"
-> .venv-agent/bin/langgraph dev
-> ```
->
-> Si ya lo instalaste en `venv/`, se restaura con:
-> `venv/bin/python -m pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem`
-> seguido de `venv/bin/python -m pip install -r requirements.txt`.
-
-Contra la base de desarrollo local (`db_local`, puerto 55433 --
-`docker-compose.dev.yml`, ver `docs/desarrollo-local.md`):
-
 ```bash
 docker compose -f docker-compose.dev.yml up -d
-venv/bin/alembic upgrade head   # si todavia no corriste esto
-langgraph dev
+venv/bin/alembic upgrade head        # si todavia no corriste esto
+.venv-agent/bin/langgraph dev
 ```
 
-`langgraph.json` ya apunta a la fabrica del grafo
-(`app/agent/graph.py:graph`) y carga `.env`. `langgraph dev` levanta un
-servidor local con un explorador de hilos (LangGraph Studio) para probar
-conversaciones y ver las pausas de `interrupt()` sin necesidad del panel.
+Verificado el 2026-09-25 contra `db_local`:
 
-**Advertencia:** `langgraph dev` nunca se corrio de verdad en esta rama.
-Todo lo de arriba -- que `langgraph-cli` haga falta, que `langgraph.json`
-este bien armado, que el grafo arranque limpio contra `db_local` -- se
-infiere del codigo y de `langgraph.json`, no de haberlo visto correr. Es la
-UNICA verificacion manual que falta antes de dar esta pieza por terminada;
-quien la corra por primera vez deberia esperarse a tener que ajustar algo
-(un import, una variable de entorno que falta, una version de `langgraph-cli`
-incompatible con `langgraph==1.0.3`) y, si algo sale distinto de lo escrito
-aca, actualizar este documento.
+```
+GET  /ok                 -> 200
+POST /assistants/search  -> 401  {"detail":"Falta el header Authorization con el token de Firebase"}
+```
+
+El grafo `revenew` se importa desde `./app/agent/graph.py`, el servidor queda
+en `http://127.0.0.1:2024`, Studio en
+`https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024` y la
+documentacion de la API en `/docs`.
+
+**Studio SI pasa por el hook de autenticacion.** Necesitas un ID token de
+Firebase desde el primer pedido, no solo para escribir: sin `Authorization` el
+servidor responde 401 con el mensaje de `auth_hook.py`. Eso es la unica parte
+del camino de autenticacion que se vio ejecutar de verdad.
+
+**Lo que todavia NO se probo:** un token valido de punta a punta —
+autenticacion, conversacion, aprobacion, y una fila escrita y firmada con el
+`user_id` que salio del token. Sabemos que la puerta cierra; falta ver que
+abre. Es la ultima verificacion manual pendiente, y conviene hacerla mirando
+el contador de conexiones de Postgres durante las primeras corridas.
+
 
 ## Desplegarlo
+
+> **Respondido el 2026-09-25, con evidencia: el segundo servicio NO puede
+> reusar la imagen de la API.** Esta seccion listaba eso como pregunta
+> abierta; ya no lo es.
+>
+> `langgraph-api` 0.15.1 exige `starlette>=1.3.1` y el modulo
+> `langgraph_sdk.runtime`; `fastapi` 0.121.3 exige `starlette<0.51.0`; y
+> `langgraph` 1.0.3 -- el pineado de `requirements.txt` -- fija el SDK por
+> debajo de 0.4.4, donde `runtime` todavia no existe. **No hay combinacion que
+> satisfaga a los tres.** Instalar el servidor junto a la API rompe la API;
+> bajar el servidor a la version de la API impide que arranque.
+>
+> Consecuencia para el despliegue: **dos imagenes, dos conjuntos de
+> dependencias.** El agente necesita su propio `Dockerfile` con
+> `requirements.txt` mas el paquete del servidor, resolviendo a `langgraph`
+> 1.2.x. Lo que sigue siendo cierto es que comparten repositorio, base de
+> datos y `.env`.
+>
+> Y como corolario: **solo uno de los dos servicios debe correr
+> `alembic upgrade head`.** Hoy lo hace `entrypoint.sh` de la API. El servicio
+> del agente no debe migrar: dos procesos compitiendo por migrar al arrancar
+> es una carrera, y el schema `agent` que si necesita se crea solo, por otra
+> via (ver mas abajo).
 
 La forma general esta clara: segundo servicio de Railway, mismo
 repositorio, mismo `.env` de produccion (misma base de datos), proceso
