@@ -16,6 +16,19 @@ salen los `herramienta` -- y por otro, bajo la clave especial
 `"__interrupt__"`, la pausa de un `interrupt()` -- de ahi sale la
 `confirmacion`.
 
+Cada `confirmacion` lleva, ademas del payload de su `interrupt()`, el
+`interrupt_id` de esa pausa (`interrupcion.id`) -- y eso NO es un dato de
+adorno: es lo que el panel tiene que devolver para decir a CUAL pausa
+responde. Un mensaje del modelo puede pedir dos escrituras a la vez ("el
+aporte del socio y la venta"), y entonces salen dos `confirmacion`. LangGraph
+1.0.3 exige la forma de mapa -- `Command(resume={id: decision})` -- cuando
+hay mas de una pausa pendiente: con un resume escalar levanta
+`RuntimeError("When there are multiple pending interrupts, you must specify
+the interrupt id when resuming.")` (`langgraph/pregel/_loop.py`), que este
+modulo traduciria al evento `error` generico y dejaria el hilo sin ninguna
+entrada posible -- ni aprobar ni cancelar. Descartar el id aca era ese
+agujero.
+
 Esta capa NO FIRMA nada. La `huella` que viaja en el payload de
 `interrupt()` (ver `app/agent/tools/write.py`) ya llega firmada por la
 herramienta de escritura que la construyo, con `firmar()` de
@@ -24,13 +37,22 @@ herramienta de escritura que la construyo, con `firmar()` de
 valido -- exactamente lo que la huella existe para impedir. Por eso este
 modulo no importa `app.agent.signing` en absoluto.
 
-Contrato del generador: siempre termina, y termina en un evento terminal.
-Tres finales posibles -- `fin` con `estado: "completo"` (la corrida llego al
-final sin pausarse), `fin` con `estado: "pausado"` (hubo un `interrupt()` y
-no hay mas nada que traducir despues), o `error` como ultimo evento, sin
-`fin` despues. Un stream que no cierra deja al panel esperando para
-siempre; uno que sigue vivo despues de un terminal manda eventos que ya
-nadie deberia leer.
+Contrato del generador: cuando la corrida llega a su fin por si sola,
+termina en un evento terminal, y en uno solo. Tres finales posibles -- `fin`
+con `estado: "completo"` (la corrida llego al final sin pausarse), `fin` con
+`estado: "pausado"` (hubo un `interrupt()` y no hay mas nada que traducir
+despues), o `error` como ultimo evento, sin `fin` despues. Un stream que no
+cierra deja al panel esperando para siempre; uno que sigue vivo despues de un
+terminal manda eventos que ya nadie deberia leer.
+
+La EXCEPCION es deliberada y es de esta rama: si el cliente se desconecta, la
+`CancelledError` que Starlette propaga mata el generador SIN evento terminal
+-- a proposito (ver el `except Exception` de abajo, y
+`tests/test_agent_streaming.py::test_a_cancelled_run_dies_instead_of_becoming_an_error_event`).
+No hay nadie escuchando a quien mandarle un `fin`, y convertir la
+cancelacion en un evento seria dejar la corrida viva gastando modelo. "Siempre
+termina en un evento terminal" seria mentira justo en el camino que esta rama
+construyo.
 """
 
 from __future__ import annotations
@@ -41,6 +63,22 @@ from collections.abc import AsyncIterator
 from langchain_core.messages import AIMessage
 
 logger = logging.getLogger(__name__)
+
+
+def _payload(valor) -> dict:
+    """El payload de un `interrupt()`, como dict, para poder agregarle el
+    `interrupt_id` al lado de sus claves.
+
+    Las tres herramientas de escritura pasan siempre un dict (`{"tipo": ...,
+    "preview": ..., "huella": ...}`), que es el caso normal y el que el panel
+    tiene documentado. Una herramienta futura que interrumpa con otra cosa
+    (un string, una lista) no puede hacer reventar la traduccion entera --
+    `{**"texto"}` es un `TypeError` que terminaria como el evento `error`
+    generico, escondiendo un problema de contrato detras de "hubo un
+    problema" -- asi que ese valor viaja bajo la clave `valor` y el
+    `interrupt_id` sigue llegando igual: el panel siempre puede responder.
+    """
+    return dict(valor) if isinstance(valor, dict) else {"valor": valor}
 
 
 async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
@@ -77,7 +115,10 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
             if interrupciones:
                 interrumpido = True
                 for interrupcion in interrupciones:
-                    yield {"event": "confirmacion", "data": interrupcion.value}
+                    yield {
+                        "event": "confirmacion",
+                        "data": {**_payload(interrupcion.value), "interrupt_id": interrupcion.id},
+                    }
                 continue
 
             for salida in chunk.values():

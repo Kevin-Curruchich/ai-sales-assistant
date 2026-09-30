@@ -95,13 +95,43 @@ class AgentStreamRequest(BaseModel):
     `stream_agent`). Pydantic los descarta en silencio en vez de fallar --
     es exactamente lo que se quiere: ignorarlos, no rechazar el pedido
     entero por un campo de mas.
+
+    `interrupt_id` acompaña a `decision` y es OBLIGATORIO con ella: es el
+    `interrupt_id` que vino en el evento `confirmacion` que se esta
+    respondiendo (ver `app/agent/streaming.py`). Sin el no hay forma de decir
+    a cual pausa responde la decision, y un mensaje del modelo puede dejar
+    dos pausas abiertas. Campo hermano de `decision`, no una clave adentro:
+    `decision` es el payload que la herramienta de escritura lee tal cual
+    (`decision.get("accion")`, `decision.get("huella")` en
+    `app/agent/tools/write.py`) y meterle una clave de transporte adentro
+    mezclaria el sobre con la carta.
     """
 
     thread_id: uuid.UUID
     mensaje: Optional[str] = None
     decision: Optional[dict] = None
+    interrupt_id: Optional[str] = None
 
     model_config = {"extra": "ignore"}
+
+
+async def _pausas_pendientes(graph, config) -> set[str]:
+    """Los `interrupt_id` que este hilo tiene pendientes de respuesta, ahora.
+
+    `snapshot.interrupts` NO sirve para esto: sigue trayendo las pausas que YA
+    se respondieron mientras el paso no termine (verificado contra langgraph
+    1.0.3 -- despues de reanudar una de dos hermanas, la respondida sigue
+    apareciendo ahi). Lo que distingue una de otra es la tarea: una tarea cuya
+    pausa se respondio ya tiene `result`, la que sigue esperando lo tiene en
+    `None`.
+    """
+    snapshot = await graph.aget_state(config)
+    return {
+        interrupcion.id
+        for tarea in snapshot.tasks
+        if tarea.result is None
+        for interrupcion in tarea.interrupts
+    }
 
 
 def _sse_line(evento: dict) -> str:
@@ -178,36 +208,20 @@ async def stream_agent(
         # ninguna de las dos -- rechazar es honesto, encolar seria construir
         # algo que nadie pidio.
         #
-        # Chequeo y reserva (la linea de `_hilos_en_curso.add` mas abajo) NO
+        # Chequeo y reserva (la linea de `_hilos_en_curso.add` de abajo) NO
         # tienen ningun `await` en el medio -- son dos operaciones puramente
         # en memoria sobre un event loop cooperativo de un solo hilo, asi
         # que dos pedidos concurrentes para el MISMO `thread_id` no pueden
         # entrelazarse entre el chequeo y la reserva. El `await
         # run_in_threadpool(...)` de arriba (para `get_owned`) queda ANTES
-        # de este chequeo a proposito, para no romper esa atomicidad.
+        # de este chequeo a proposito, para no romper esa atomicidad, y la
+        # reserva quedo pegada aca abajo por lo mismo: la validacion de
+        # `interrupt_id` lee el checkpoint (`await`) y meterla en el medio
+        # habria abierto justo esa ventana.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya hay una corrida en curso para este hilo.",
         )
-
-    if data.mensaje is not None:
-        entrada = {"messages": [("user", data.mensaje)]}
-    elif data.decision is not None:
-        entrada = Command(resume=data.decision)
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Mandá 'mensaje' o 'decision'.",
-        )
-
-    # El config lo arma este endpoint, del lado del servidor, exclusivamente
-    # con la identidad del token -- ver el docstring de arriba.
-    config = {
-        "configurable": {
-            "thread_id": thread_key,
-            "user_id": str(current_user.id),
-        }
-    }
 
     _hilos_en_curso.add(thread_key)
     # Liberar el hilo NO puede depender de que el generador de mas abajo
@@ -224,6 +238,59 @@ async def stream_agent(
     tarea_del_pedido = asyncio.current_task()
     if tarea_del_pedido is not None:
         tarea_del_pedido.add_done_callback(lambda _t: _hilos_en_curso.discard(thread_key))
+
+    # El config lo arma este endpoint, del lado del servidor, exclusivamente
+    # con la identidad del token -- ver el docstring de arriba.
+    config = {
+        "configurable": {
+            "thread_id": thread_key,
+            "user_id": str(current_user.id),
+        }
+    }
+
+    if data.mensaje is not None:
+        entrada = {"messages": [("user", data.mensaje)]}
+    elif data.decision is not None:
+        if not data.interrupt_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    "Mandá 'interrupt_id' junto con 'decision': es el id que vino en el "
+                    "evento 'confirmacion' que estás respondiendo."
+                ),
+            )
+        pendientes = await _pausas_pendientes(graph, config)
+        if data.interrupt_id not in pendientes:
+            # Un id que no corresponde a ninguna pausa pendiente -- inventado,
+            # de otro hilo, o de una pausa que ya se respondio (un doble click
+            # en "aprobar", una pestaña vieja). Sin este chequeo, LangGraph no
+            # se queja: guarda el resume bajo un id que ninguna tarea reclama,
+            # la tarea que seguia pausada vuelve a interrumpirse y el panel
+            # recibe OTRA `confirmacion` como si nunca hubiera aprobado nada
+            # -- verificado contra langgraph 1.0.3. Un 409 antes del primer
+            # byte dice la verdad y es accionable: volve a leer las
+            # confirmaciones pendientes de este hilo.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Esa confirmación no está pendiente en este hilo: o ya fue respondida, "
+                    "o el 'interrupt_id' no corresponde. Volvé a pedir el estado del hilo "
+                    "y respondé la confirmación que siga abierta."
+                ),
+            )
+        # SIEMPRE la forma de mapa, tambien con una sola pausa pendiente. Un
+        # resume escalar (`Command(resume=data.decision)`, lo que habia aca)
+        # funciona con una pausa y levanta `RuntimeError` con dos
+        # (`langgraph/pregel/_loop.py`), que `eventos_sse` traduce al evento
+        # `error` generico: el hilo quedaba sin ninguna entrada posible, ni
+        # aprobar ni cancelar. Un unico camino, en vez de uno que funciona y
+        # otro que no.
+        entrada = Command(resume={data.interrupt_id: data.decision})
+    else:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Mandá 'mensaje' o 'decision'.",
+        )
 
     if data.mensaje is not None and thread.title == DEFAULT_TITLE:
         # El titulo sale del primer mensaje, truncado. HEURISTICA, no una

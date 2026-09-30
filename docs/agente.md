@@ -228,30 +228,52 @@ data: {"nombre": "registrar_venta", "estado": "llamando"}
 ### `confirmacion`
 
 Una herramienta de escritura se detuvo en `interrupt()` y necesita
-aprobacion humana. `data` es exactamente el payload que la herramienta le
-paso a `interrupt()` -- incluida la `huella` (ver la seccion siguiente), sin
-que esta capa la toque ni la firme de nuevo. Ejemplo:
+aprobacion humana. `data` es el payload que la herramienta le paso a
+`interrupt()` -- incluida la `huella` (ver la seccion siguiente), sin que
+esta capa la toque ni la firme de nuevo -- **mas un campo `interrupt_id`**,
+que agrega la capa de streaming. Ejemplo:
 
 ```
 event: confirmacion
-data: {"tipo": "confirmar_venta", "huella": {"datos": {...}, "firma": "..."}, "preview": {...}}
+data: {"tipo": "confirmar_venta", "interrupt_id": "c97a81a8bfb3b8f79407b18df241f3d8", "huella": {"datos": {...}, "firma": "..."}, "preview": {...}}
 ```
+
+**`interrupt_id` no es informativo: es obligatorio para responder.** Es el id
+de esa pausa, y el panel tiene que devolverlo -- junto con la `decision` -- en
+el cuerpo de `POST /stream` (ver "Responder una confirmacion" mas abajo). Es
+lo unico que dice a CUAL pausa responde una decision, y un turno puede dejar
+dos pausas abiertas a la vez.
+
+`registrar_movimiento_caja` **no manda `huella`** (no deriva de inventario --
+ver la nota al final de "El contrato del panel: la huella"): su `data` es
+`{"tipo": "confirmar_movimiento_caja", "movimiento": {...}, "interrupt_id":
+"..."}`. Un panel que exija `huella` en toda `confirmacion` se rompe con el
+primer aporte del socio. `interrupt_id`, en cambio, viene siempre.
 
 **Dos herramientas hermanas que interrumpen en el mismo turno producen DOS
 eventos `confirmacion`** -- una por cada `interrupt()`, en el orden en que
 vienen en la lista `__interrupt__` del chunk de `"updates"` -- **y un solo
-`fin`** con `estado: "pausado"` al final, no uno por confirmacion. Esto es
-en parte un hecho probado y en parte uno derivado, y vale distinguirlos:
-`tests/test_agent_graph.py::test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_still_interrupted`
-prueba, contra las dos herramientas de escritura reales en el mismo mensaje
-del modelo, que ese `__interrupt__` trae efectivamente dos entradas
-(`len(interrupts) == 2`) -- pero lo hace invocando `graph.invoke` directo,
-no a traves de `eventos_sse`. Que esa lista de dos se traduzca en dos
-eventos `confirmacion` y un solo `fin` es una lectura del codigo de
-`eventos_sse` (el `for interrupcion in interrupciones: yield ...` esta dentro
-del bucle principal, y el `yield fin` esta una sola vez, al final de toda la
-funcion, fuera de ese bucle) -- **no hay un test que corra dos herramientas
-hermanas a traves de `eventos_sse` y cuente los eventos que salen.**
+`fin`** con `estado: "pausado"` al final, no uno por confirmacion. Cada una
+trae su propio `interrupt_id`, y **cada una se responde con su id, en un
+pedido aparte**: no hay forma de responder las dos en el mismo `POST`.
+
+Al responder una de las dos, la otra vuelve a pausarse y se anuncia de nuevo,
+con una `confirmacion` nueva, en el stream de ESE pedido -- el `interrupt_id`
+que trae es el mismo de antes (los ids son estables a traves de la
+reanudacion, verificado contra langgraph 1.0.3), pero el panel deberia leerlo
+del evento nuevo y no cachearlo. Asi que el ciclo es siempre el mismo: leer
+las `confirmacion` que llegan, responder una, leer las que vuelven.
+
+**Esto ya no es una lectura del codigo: esta carreado de punta a punta.**
+`tests/test_agent_stream_endpoint.py::test_two_pending_confirmations_can_each_be_answered`
+corre las dos herramientas de escritura reales, en el mismo mensaje del
+modelo, a traves del endpoint HTTP y de `eventos_sse`, y responde las dos, una
+por pedido. Antes de esa prueba el estado de dos confirmaciones pendientes
+**no se podia responder en absoluto** -- el endpoint armaba un resume escalar,
+LangGraph 1.0.3 levanta `RuntimeError` con mas de una pausa pendiente, y
+`eventos_sse` lo traducia al evento `error` generico: ni aprobar ni cancelar
+sacaban al hilo de ahi. El contrato de esta seccion describia ese estado sin
+decir que era un callejon sin salida.
 
 **Al reanudar, las llamadas a herramienta que quedaron pendientes NO se
 vuelven a anunciar.** El evento `herramienta` sale del nodo del modelo (el
@@ -302,10 +324,19 @@ data: {"mensaje": "Hubo un problema y no se registro nada. Intenta de nuevo."}
 
 ### Contrato del generador, en una linea
 
-Siempre termina, y termina en un evento terminal: `fin` (completo o
-pausado) o `error`. Nunca los dos. Un stream que no cierra deja al panel
-esperando para siempre; uno que sigue vivo despues de un terminal manda
-eventos que ya nadie deberia leer.
+Cuando la corrida llega a su fin por si sola, termina en un evento terminal,
+y en uno solo: `fin` (completo o pausado) o `error`. Nunca los dos. Un stream
+que no cierra deja al panel esperando para siempre; uno que sigue vivo despues
+de un terminal manda eventos que ya nadie deberia leer.
+
+**La excepcion es deliberada: un cliente que se desconecta no recibe ningun
+evento terminal.** La `CancelledError` que Starlette propaga mata el generador
+donde este suspendido (ver "Un cliente que se desconecta cancela la corrida de
+verdad", mas abajo). No hay nadie escuchando a quien mandarle un `fin`, y
+convertir la cancelacion en un evento seria dejar la corrida viva gastando
+modelo -- que es justamente lo que esta rama arreglo. Un panel que se reconecta
+no debe esperar el `fin` del turno que abandono: tiene que volver a leer el
+estado del hilo.
 
 ### El agente no disponible: `503`
 
@@ -319,26 +350,76 @@ caso de `error` de arriba. `GET /health` en ese momento reporta
 tiene que mirar ahi para confirmar que la causa es que el grafo nunca
 arranco, no un fallo puntual de esa corrida.
 
-### El hilo ocupado: `409`
+### El hilo ocupado, o la confirmacion que ya no esta pendiente: `409`
 
-Un segundo pedido sobre un `thread_id` que ya tiene una corrida en curso
-responde **409**, tambien antes del primer byte -- ver la seccion
-"Desplegarlo" arriba para la restriccion de un solo proceso de la que
-depende esto.
+Dos casos distintos, los dos **409** y los dos antes del primer byte. Se
+distinguen por el `detail`:
 
-### El cuerpo sin `mensaje` ni `decision`: `422`
+- **"Ya hay una corrida en curso para este hilo."** Un segundo pedido sobre un
+  `thread_id` que ya tiene una corrida viva -- ver la seccion "Desplegarlo"
+  arriba para la restriccion de un solo proceso de la que depende esto.
+- **"Esa confirmación no está pendiente en este hilo..."** El `interrupt_id`
+  del cuerpo no corresponde a ninguna pausa pendiente de este hilo: inventado,
+  de otro hilo, o de una pausa que ya se respondio (un doble click en
+  "aprobar", una pestaña vieja). El endpoint lee las pausas pendientes del
+  checkpoint antes de arrancar el stream y rechaza la que no esta. **Nada se
+  escribe dos veces por esto.** Lo accionable para el panel: volver a pedir el
+  estado del hilo y responder la confirmacion que siga abierta. Sin este
+  chequeo LangGraph no se queja -- guarda el resume bajo un id que ninguna
+  tarea reclama, la tarea que seguia pausada vuelve a interrumpirse, y el panel
+  recibe otra `confirmacion` como si nunca hubiera aprobado nada (verificado
+  contra langgraph 1.0.3).
+
+### El cuerpo incompleto: `422`
 
 El cuerpo de `/stream` (`AgentStreamRequest`) trae `thread_id` y, opcionales,
-`mensaje` (arranca o continua la conversacion con texto del usuario) y
-`decision` (resuelve un `interrupt()` pendiente -- ver "El contrato del
-panel: la huella"). Un pedido que no manda ninguno de los dos no tiene nada
-que decirle al grafo: responde **422**, tambien antes del primer byte, con
-`detail: "Mandá 'mensaje' o 'decision'."`. Es el unico de los cuatro codigos
-de esta seccion que un panel en desarrollo va a pisar seguido, mientras
-todavia arma la forma exacta del cuerpo del pedido -- por ejemplo, un envio
-que solo manda `thread_id` porque el campo con el mensaje del usuario
-todavia no se cableo del lado del panel. Cubierto por
-`tests/test_agent_stream_endpoint.py::test_streaming_without_mensaje_or_decision_is_a_422`.
+`mensaje` (arranca o continua la conversacion con texto del usuario) y el par
+`decision` + `interrupt_id` (resuelve una confirmacion pendiente -- ver
+"Responder una confirmacion" mas abajo). Dos formas de pedido incompleto, las
+dos **422**, antes del primer byte:
+
+- **Ni `mensaje` ni `decision`.** No hay nada que decirle al grafo:
+  `detail: "Mandá 'mensaje' o 'decision'."`. Es el que un panel en desarrollo
+  va a pisar seguido, mientras todavia arma la forma exacta del cuerpo -- por
+  ejemplo, un envio que solo manda `thread_id` porque el campo con el mensaje
+  del usuario todavia no se cableo. Cubierto por
+  `tests/test_agent_stream_endpoint.py::test_streaming_without_mensaje_or_decision_is_a_422`.
+- **`decision` sin `interrupt_id`.** La decision sola no dice a que pausa
+  responde: `detail: "Mandá 'interrupt_id' junto con 'decision'..."`. Cubierto
+  por `tests/test_agent_stream_endpoint.py::test_a_decision_without_its_interrupt_id_is_a_422`.
+
+## Responder una confirmacion: el cuerpo de `POST /stream`
+
+```json
+{
+  "thread_id": "<uuid del hilo>",
+  "interrupt_id": "<el interrupt_id que vino en el evento confirmacion>",
+  "decision": {"accion": "aprobar", "huella": "<la huella de ese mismo evento, tal cual>"}
+}
+```
+
+`interrupt_id` y `decision` son campos **hermanos**, no anidados:
+`decision` es el payload que la herramienta de escritura lee tal cual
+(`accion`, `huella`, `valores`) y `interrupt_id` es transporte -- a que pausa
+va. El endpoint construye con los dos, **siempre**, la forma de mapa que
+LangGraph pide: `Command(resume={interrupt_id: decision})`. Tambien cuando hay
+una sola pausa pendiente: un resume escalar funciona con una y revienta con
+dos, y tener dos caminos es exactamente lo que dejo pasar el agujero de las
+dos confirmaciones.
+
+Las tres `accion` posibles (`aprobar`, `cancelar`, `corregir`) y lo que cada
+una hace estan en "El contrato del panel: la huella", mas abajo. `mensaje` y
+el par `decision`/`interrupt_id` son mutuamente excluyentes en la practica: si
+vienen los dos, gana `mensaje`.
+
+**El panel no puede usar `EventSource`.** La API `EventSource` del navegador
+solo hace `GET` y no deja poner cabeceras; `/stream` es `POST` y exige
+`Authorization: Bearer <token>`. No hay forma de encajar las dos cosas: el
+panel tiene que usar `fetch` y leer el cuerpo como stream
+(`response.body.getReader()` + `TextDecoder`), partiendo por `\n\n` y
+parseando las lineas `event:` / `data:` a mano. Es poco codigo, pero no es la
+API que uno buscaria primero, y no hay un polyfill de `EventSource` que
+arregle el `POST` con cabeceras sin cambiar el contrato del servidor.
 
 ### Un cliente que se desconecta cancela la corrida de verdad
 
@@ -413,10 +494,11 @@ evidencia de lo que la persona realmente vio antes de decir que si.
 
 ### Lo que el panel tiene que hacer
 
-Al aprobar, el panel manda:
+Al aprobar, el panel manda esto como `decision`, junto con el `interrupt_id`
+de la confirmacion que responde (ver "Responder una confirmacion" arriba):
 
 ```json
-{"accion": "aprobar", "huella": <exactamente el valor de "huella" que vino en el payload de interrupt()>}
+{"accion": "aprobar", "huella": <exactamente el valor de "huella" que vino en el evento confirmacion>}
 ```
 
 **Guardar la huella de forma opaca y devolverla byte por byte.** El panel no

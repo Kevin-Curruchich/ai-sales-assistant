@@ -33,6 +33,7 @@ empiricamente y documentado en `task-6-report.md`).
 
 import asyncio
 import contextlib
+import json
 import threading
 import uuid
 
@@ -42,33 +43,53 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
+from langgraph.types import Command
 
 import app.main as main
+from app.agent.tools.write import registrar_movimiento_caja, registrar_venta
 from app.api.dependencies import bearer_scheme, get_current_user, get_db
 from app.api.v1.endpoints import agent as agent_endpoints
 from app.models import User
+from app.models.cash_movement import CashMovement
+from app.models.sale import Sale
 from app.services.agent_thread_service import AgentThreadService
 from tests.fixtures_http import _auth, _create_thread_as
-from tests.test_agent_graph import FakeToolCallingModel
+from tests.test_agent_graph import FakeToolCallingModel, _sale_tool_call
 
 _ultimo_config: dict = {"valor": None}
+_ultima_entrada: dict = {"valor": None}
 
 
 def _last_config():
     return _ultimo_config["valor"]
 
 
-def _construir_grafo_de_juguete():
-    """Grafo de juguete, con `MemorySaver` (no Postgres) y sin ninguna tool
-    real -- este archivo prueba el endpoint, no el grafo ni las
-    herramientas, que ya tienen sus propios tests."""
-    model = FakeToolCallingModel(scripted_tool_calls=[])
-    graph = create_react_agent(model, [], checkpointer=MemorySaver(), version="v2")
+def _last_entrada():
+    """Lo que el endpoint le pasa al grafo como primer argumento: un dict con
+    `messages` (un mensaje del usuario) o un `Command` (una decision). Es el
+    otro lado del contrato que el espia de `_last_config()` ya vigilaba, y lo
+    que fija que una decision viaje como `Command(resume={id: decision})` --
+    la forma de mapa -- y no como un resume escalar."""
+    return _ultima_entrada["valor"]
+
+
+def _construir_grafo_de_juguete(scripted_tool_calls=(), tools=()):
+    """Grafo de juguete, con `MemorySaver` (no Postgres).
+
+    Sin argumentos no tiene ninguna tool: este archivo prueba el endpoint, no
+    el grafo ni las herramientas, que ya tienen sus propios tests. Los tests
+    de reanudacion (mas abajo) si le pasan las herramientas de escritura
+    REALES: lo que tienen que demostrar es que una aprobacion que entra por
+    HTTP termina en una fila escrita, y un doble de la herramienta no puede
+    demostrar eso."""
+    model = FakeToolCallingModel(scripted_tool_calls=list(scripted_tool_calls))
+    graph = create_react_agent(model, list(tools), checkpointer=MemorySaver(), version="v2")
 
     original_astream = graph.astream
 
     def _astream_espia(entrada, config, **kwargs):
         _ultimo_config["valor"] = config
+        _ultima_entrada["valor"] = entrada
         return original_astream(entrada, config, **kwargs)
 
     # Monkeypatch de INSTANCIA, no de clase: cada test arma su propio grafo,
@@ -104,6 +125,7 @@ def _grafo_de_juguete(monkeypatch):
     monkeypatch.setattr("app.main.build_graph", _fake_build_graph)
     yield graph
     _ultimo_config["valor"] = None
+    _ultima_entrada["valor"] = None
 
 
 @pytest.fixture(autouse=True)
@@ -126,6 +148,49 @@ def _consume(resp):
 def _marcar_ocupado(thread_id) -> None:
     """Mismo registro que usa el endpoint -- no una copia."""
     agent_endpoints._hilos_en_curso.add(str(thread_id))
+
+
+def _eventos(resp) -> list[dict]:
+    """Parsea las lineas SSE de una respuesta a la misma forma que emite
+    `eventos_sse` (`{"event": str, "data": dict}`).
+
+    Atravesar el formato de cable -- y no leer los dicts del generador -- es
+    el punto: lo que el panel va a recibir es esto, y el `interrupt_id` de
+    una `confirmacion` tiene que sobrevivir el viaje por JSON."""
+    eventos: list[dict] = []
+    tipo = None
+    for linea in resp.iter_lines():
+        if linea.startswith("event: "):
+            tipo = linea[len("event: ") :]
+        elif linea.startswith("data: "):
+            eventos.append({"event": tipo, "data": json.loads(linea[len("data: ") :])})
+    return eventos
+
+
+def _turno(client, user, cuerpo) -> list[dict]:
+    """Un turno completo por HTTP: manda el cuerpo y devuelve los eventos."""
+    with client.stream(
+        "POST", "/api/v1/agent/stream", json=cuerpo, headers=_auth(user)
+    ) as resp:
+        assert resp.status_code == 200, resp.read()
+        return _eventos(resp)
+
+
+def _confirmaciones(eventos) -> list[dict]:
+    return [e["data"] for e in eventos if e["event"] == "confirmacion"]
+
+
+def _instalar_grafo(scripted_tool_calls, tools):
+    """Pisa el grafo de juguete que dejo el lifespan por uno con herramientas
+    reales, para los tests de reanudacion.
+
+    Se asigna directo a `app.state` (no se monkeypatchea `build_graph`) porque
+    `client` ya corrio el lifespan cuando el test empieza. No hay que
+    restaurar nada: `client` vuelve a correr el lifespan en cada test y deja
+    un grafo nuevo."""
+    graph = _construir_grafo_de_juguete(scripted_tool_calls, tools)
+    main.app.state.agent_graph = graph
+    return graph
 
 
 @pytest.fixture
@@ -500,3 +565,245 @@ def test_the_thread_is_released_when_the_run_ends(client, seeded_user):
         headers=_auth(seeded_user),
     )
     assert segunda.status_code != 409
+
+
+# ---------------------------------------------------------------------
+# Reanudar una confirmacion: la rama `decision` del endpoint
+#
+# Es la unica linea de produccion de esta rama que construye un `Command`
+# (`agent.py`), la mitad del proposito de la rama, y el spec la pide por
+# nombre entre los tests nuevos del endpoint («Reanudar con una aprobacion
+# escribe»). No tenia ningun test: la palabra `decision` aparecia en este
+# archivo solo en el test del 422.
+#
+# Estos tres tests usan las herramientas de escritura REALES y atraviesan
+# `eventos_sse` de punta a punta -- los tests de herramientas hermanas que ya
+# existian (`tests/test_agent_graph.py`) reanudan con `graph.invoke` crudo, y
+# por eso nunca vieron que el endpoint no podia responder una de dos pausas.
+# ---------------------------------------------------------------------
+
+
+def test_resuming_with_an_approval_writes(
+    client, db_session, seeded_user, seeded_customer, seeded_product_with_lot
+):
+    """El test que el spec pide por nombre.
+
+    Una aprobacion que entra por HTTP tiene que terminar en una fila escrita
+    -- y escrita a nombre del usuario del token, no de nadie mas."""
+    _instalar_grafo(
+        [_sale_tool_call(seeded_customer, seeded_product_with_lot)], [registrar_venta]
+    )
+    hilo = _create_thread_as(client, seeded_user, "mio")
+
+    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    confirmaciones = _confirmaciones(primero)
+    assert len(confirmaciones) == 1
+    pausa = confirmaciones[0]
+    assert primero[-1] == {"event": "fin", "data": {"estado": "pausado"}}
+    assert db_session.query(Sale).count() == 0
+
+    decision = {"accion": "aprobar", "huella": pausa["huella"]}
+    segundo = _turno(
+        client,
+        seeded_user,
+        {
+            "thread_id": hilo["id"],
+            "decision": decision,
+            "interrupt_id": pausa["interrupt_id"],
+        },
+    )
+
+    assert [e for e in segundo if e["event"] == "error"] == []
+    assert segundo[-1] == {"event": "fin", "data": {"estado": "completo"}}
+
+    # La forma del resume, no solo el efecto: SIEMPRE mapa `{id: decision}`,
+    # tambien con una sola pausa. Un resume escalar funciona con una y
+    # revienta con dos (`langgraph/pregel/_loop.py`), y tener dos caminos es
+    # exactamente lo que dejo pasar ese agujero.
+    entrada = _last_entrada()
+    assert isinstance(entrada, Command)
+    assert entrada.resume == {pausa["interrupt_id"]: decision}
+
+    db_session.expire_all()
+    ventas = db_session.query(Sale).all()
+    assert len(ventas) == 1
+    assert ventas[0].user_id == seeded_user.id
+
+
+def test_resuming_with_a_cancellation_does_not_write(
+    client, db_session, seeded_user, seeded_customer, seeded_product_with_lot
+):
+    _instalar_grafo(
+        [_sale_tool_call(seeded_customer, seeded_product_with_lot)], [registrar_venta]
+    )
+    hilo = _create_thread_as(client, seeded_user, "mio")
+
+    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    pausa = _confirmaciones(primero)[0]
+
+    segundo = _turno(
+        client,
+        seeded_user,
+        {
+            "thread_id": hilo["id"],
+            "decision": {"accion": "cancelar"},
+            "interrupt_id": pausa["interrupt_id"],
+        },
+    )
+
+    assert [e for e in segundo if e["event"] == "error"] == []
+    assert segundo[-1] == {"event": "fin", "data": {"estado": "completo"}}
+    db_session.expire_all()
+    assert db_session.query(Sale).count() == 0
+
+
+def test_two_pending_confirmations_can_each_be_answered(
+    client,
+    db_session,
+    seeded_user,
+    seeded_customer,
+    seeded_product_with_lot,
+    seeded_purchase_draft,
+):
+    """El caso que dejaba el hilo inutilizable para siempre (B1).
+
+    Dos herramientas de escritura reales en el MISMO mensaje del modelo -- el
+    estado que `tests/test_agent_graph.py` ya construia, y que
+    `docs/agente.md` documenta como contrato del panel. Antes de este arreglo,
+    el endpoint armaba `Command(resume=<escalar>)`: LangGraph 1.0.3 levanta
+    `RuntimeError` con mas de una pausa pendiente, `eventos_sse` lo traducia
+    al evento `error` generico, y NINGUNA entrada del panel sacaba al hilo de
+    ahi -- ni aprobar ni cancelar.
+    """
+    _instalar_grafo(
+        [
+            {
+                "name": "registrar_movimiento_caja",
+                "args": {
+                    "tipo": "aporte_socio",
+                    "monto": "60.00",
+                    "fecha": "2026-09-20",
+                    "compra_id": str(seeded_purchase_draft.id),
+                },
+                "id": "call_caja",
+            },
+            _sale_tool_call(seeded_customer, seeded_product_with_lot, call_id="call_venta"),
+        ],
+        [registrar_movimiento_caja, registrar_venta],
+    )
+    hilo = _create_thread_as(client, seeded_user, "mio")
+
+    primero = _turno(
+        client, seeded_user, {"thread_id": hilo["id"], "mensaje": "el aporte del socio, y vendi 1"}
+    )
+    pausas = {c["tipo"]: c for c in _confirmaciones(primero)}
+    assert set(pausas) == {"confirmar_movimiento_caja", "confirmar_venta"}
+    # Cada confirmacion trae SU id: sin eso el panel no tiene con que decir a
+    # cual de las dos responde.
+    assert pausas["confirmar_venta"]["interrupt_id"] != pausas["confirmar_movimiento_caja"]["interrupt_id"]
+
+    # Responder UNA de las dos: la otra vuelve a pausarse y se anuncia de
+    # nuevo, con su id (que puede ser otro), asi que el panel siempre tiene
+    # con que seguir.
+    segundo = _turno(
+        client,
+        seeded_user,
+        {
+            "thread_id": hilo["id"],
+            "decision": {"accion": "aprobar", "huella": pausas["confirmar_venta"]["huella"]},
+            "interrupt_id": pausas["confirmar_venta"]["interrupt_id"],
+        },
+    )
+    assert [e for e in segundo if e["event"] == "error"] == []
+    db_session.expire_all()
+    assert db_session.query(Sale).count() == 1
+
+    restantes = _confirmaciones(segundo)
+    assert [c["tipo"] for c in restantes] == ["confirmar_movimiento_caja"]
+
+    tercero = _turno(
+        client,
+        seeded_user,
+        {
+            "thread_id": hilo["id"],
+            "decision": {"accion": "aprobar"},
+            "interrupt_id": restantes[0]["interrupt_id"],
+        },
+    )
+    assert [e for e in tercero if e["event"] == "error"] == []
+    assert tercero[-1] == {"event": "fin", "data": {"estado": "completo"}}
+    db_session.expire_all()
+    assert (
+        db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
+    )
+    assert db_session.query(Sale).count() == 1
+
+
+def test_a_decision_without_its_interrupt_id_is_a_422(client, seeded_user):
+    """La decision sola no dice a que pausa responde. Antes se aceptaba y se
+    armaba un resume escalar -- el camino que rompia con dos pausas."""
+    hilo = _create_thread_as(client, seeded_user, "mio")
+
+    resp = client.post(
+        "/api/v1/agent/stream",
+        json={"thread_id": hilo["id"], "decision": {"accion": "aprobar"}},
+        headers=_auth(seeded_user),
+    )
+
+    assert resp.status_code == 422
+    assert "interrupt_id" in resp.json()["detail"]
+
+
+def test_answering_a_confirmation_that_is_no_longer_pending_is_a_409(
+    client, db_session, seeded_user, seeded_customer, seeded_product_with_lot
+):
+    """Un doble click en "aprobar", o una pestaña vieja.
+
+    Sin el chequeo, LangGraph guarda el resume bajo un id que ninguna tarea
+    reclama y el panel recibe otra `confirmacion` como si nunca hubiera
+    aprobado -- o, peor, un `error` generico. El codigo sale ANTES del primer
+    byte, asi que puede ser un codigo HTTP de verdad."""
+    _instalar_grafo(
+        [_sale_tool_call(seeded_customer, seeded_product_with_lot)], [registrar_venta]
+    )
+    hilo = _create_thread_as(client, seeded_user, "mio")
+    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    pausa = _confirmaciones(primero)[0]
+
+    inventado = client.post(
+        "/api/v1/agent/stream",
+        json={
+            "thread_id": hilo["id"],
+            "decision": {"accion": "cancelar"},
+            "interrupt_id": "0" * 32,
+        },
+        headers=_auth(seeded_user),
+    )
+    assert inventado.status_code == 409
+    assert "pendiente" in inventado.json()["detail"].lower()
+
+    # Y una pausa YA respondida tampoco se puede responder de nuevo.
+    _turno(
+        client,
+        seeded_user,
+        {
+            "thread_id": hilo["id"],
+            "decision": {"accion": "aprobar", "huella": pausa["huella"]},
+            "interrupt_id": pausa["interrupt_id"],
+        },
+    )
+    db_session.expire_all()
+    assert db_session.query(Sale).count() == 1
+
+    repetido = client.post(
+        "/api/v1/agent/stream",
+        json={
+            "thread_id": hilo["id"],
+            "decision": {"accion": "aprobar", "huella": pausa["huella"]},
+            "interrupt_id": pausa["interrupt_id"],
+        },
+        headers=_auth(seeded_user),
+    )
+    assert repetido.status_code == 409
+    db_session.expire_all()
+    assert db_session.query(Sale).count() == 1, "el reintento escribio una segunda venta"

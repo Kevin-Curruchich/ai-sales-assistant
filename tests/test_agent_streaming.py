@@ -133,6 +133,48 @@ async def test_an_interrupt_becomes_a_confirmacion_carrying_its_huella(grafo_que
 
 
 @pytest.mark.asyncio
+async def test_a_confirmacion_carries_the_id_of_its_interrupt(grafo_que_interrumpe):
+    """Sin el id, el panel no puede decir a CUAL pausa responde -- y con dos
+    pausas pendientes LangGraph exige la forma de mapa
+    `Command(resume={id: decision})`, asi que descartar el id dejaba el hilo
+    sin ninguna entrada posible (ni aprobar ni cancelar). El id tiene que ser
+    el de la interrupcion, no uno inventado por esta capa: se compara contra
+    el que trae el estado del grafo."""
+    eventos = [e async for e in eventos_sse(grafo_que_interrumpe, ENTRADA, CONFIG)]
+    conf = [e for e in eventos if e["event"] == "confirmacion"][0]
+
+    estado = grafo_que_interrumpe.get_state(CONFIG)
+    pendientes = [i.id for t in estado.tasks for i in t.interrupts]
+    assert conf["data"]["interrupt_id"] in pendientes
+    # El payload de la herramienta sigue llegando entero al lado del id.
+    assert conf["data"]["tipo"] == "confirmar_algo"
+
+
+@pytest.mark.asyncio
+async def test_an_interrupt_payload_that_is_not_a_dict_still_carries_its_id():
+    """Las tres herramientas de escritura pasan un dict, pero una capa que
+    hace `{**payload, "interrupt_id": ...}` revienta con cualquier otra cosa
+    -- y esa `TypeError` saldria como el evento `error` generico ("hubo un
+    problema"), escondiendo un problema de contrato y dejando al panel sin id
+    con que responder."""
+
+    @tool
+    def confirmar_texto() -> dict:
+        """Tool de juguete que interrumpe con un payload que no es dict."""
+        return {"decision": interrupt("¿confirmas?")}
+
+    grafo = _grafo_de_juguete(
+        [{"name": "confirmar_texto", "args": {}, "id": "call_texto"}], [confirmar_texto]
+    )
+    eventos = [e async for e in eventos_sse(grafo, ENTRADA, CONFIG)]
+    conf = [e for e in eventos if e["event"] == "confirmacion"][0]
+
+    assert conf["data"]["valor"] == "¿confirmas?"
+    assert conf["data"]["interrupt_id"]
+    assert eventos[-1] == {"event": "fin", "data": {"estado": "pausado"}}
+
+
+@pytest.mark.asyncio
 async def test_an_exception_inside_a_tool_becomes_an_error_event_and_closes(grafo_que_revienta):
     """Falla numero 3 del Review Focus: ni excepcion colgada ni stream infinito."""
     eventos = [e async for e in eventos_sse(grafo_que_revienta, ENTRADA, CONFIG)]
