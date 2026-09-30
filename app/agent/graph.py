@@ -41,6 +41,7 @@ que la escritura. Su docstring explica la clave y lo que queda afuera.
 
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.prebuilt import create_react_agent
 
 from app.agent.prompt import SYSTEM_PROMPT
@@ -79,13 +80,13 @@ def build_graph(model, checkpointer: BaseCheckpointSaver):
     )
 
 
-def _default_model() -> ChatAnthropic:
+def default_model() -> ChatAnthropic:
     return ChatAnthropic(model=MODEL_NAME)
 
 
-async def build_async_checkpointer(conn_string: str, schema: str) -> BaseCheckpointSaver:
-    """`AsyncPostgresSaver` apuntado a `schema`, para el grafo servido en
-    proceso por FastAPI.
+async def build_async_checkpointer(conn_string: str, schema: str) -> AsyncPostgresSaver:
+    """`AsyncPostgresSaver` sobre un `AsyncConnectionPool` apuntado a `schema`,
+    para el grafo servido en proceso por FastAPI.
 
     Se construye UNA VEZ, en el lifespan de la app (ver `app/main.py`), y se
     guarda en `app.state`: construirlo por pedido abriria una conexion nueva
@@ -98,32 +99,59 @@ async def build_async_checkpointer(conn_string: str, schema: str) -> BaseCheckpo
     `NotImplementedError`. El grafo servido con `astream`/`ainvoke` necesita
     `AsyncPostgresSaver`.
 
-    Mismo procedimiento que el saver sincronico y por la misma razon (ver
-    `checkpointer_schema`): `setup()` corre DDL sin calificar y no crea el
-    schema, asi que el schema se crea aca, explicito, ANTES de fijar
-    `search_path` y ANTES de `setup()`.
+    ## Por que un pool y no una conexion suelta
+
+    `AsyncPostgresSaver` acepta tanto una `AsyncConnection` como un
+    `AsyncConnectionPool` (`langgraph/checkpoint/postgres/_ainternal.py::Conn`
+    es la union de ambos). Con una conexion suelta, si esa conexion muere --
+    un reinicio de Postgres, un idle timeout, un blip de red en Railway --
+    nada la reabre: el checkpointer queda roto por el resto de la vida del
+    proceso y la unica salida es un redeploy. Un `AsyncConnectionPool`
+    reconecta solo cuando una conexion se muere, y sigue siendo una unica
+    cosa construida en el lifespan que se cierra con `.close()` -- no
+    reintroduce la fuga de "una conexion nueva por pedido" que este modulo ya
+    arreglo una vez.
+
+    `min_size=1, max_size=3`: nada mas comparte este pool. El
+    `asyncio.Lock` interno de `AsyncPostgresSaver` (`aio.py::_cursor`) ya
+    serializa toda su E/S sobre UNA conexion prestada del pool a la vez, pool
+    o no -- eso no lo resuelve tener mas conexiones disponibles, asi que el
+    pool no elimina el head-of-line blocking del checkpointer. Lo que si
+    resuelve es no quedar con una unica conexion muerta para siempre.
+
+    `configure` fija el `search_path` en CADA conexion que el pool abre --
+    inicial o de reemplazo tras una reconexion -- porque `search_path` es
+    estado de sesion: no viaja con el pool, y sin esto una conexion de
+    reemplazo apuntaria a `public`. Mismo procedimiento que el saver
+    sincronico y por la misma razon (ver `checkpointer_schema`): `setup()`
+    corre DDL sin calificar y no crea el schema, asi que el schema se crea
+    aca, explicito, con una conexion ya abierta, ANTES de `setup()`.
     """
-    from psycopg import AsyncConnection
     from psycopg.rows import dict_row
+    from psycopg_pool import AsyncConnectionPool
 
-    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-    conn = await AsyncConnection.connect(
-        conn_string,
-        autocommit=True,
-        prepare_threshold=0,
-        row_factory=dict_row,
-    )
-    # Si el `CREATE SCHEMA` o el `setup()` revientan, la conexion no debe
-    # quedar abierta y sin dueño: nadie tendria una referencia para cerrarla
-    # y el pool del servidor de Postgres se la comeria hasta que muera el
-    # proceso.
-    try:
-        await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    async def _set_search_path(conn) -> None:
         await conn.execute(f'SET search_path TO "{schema}"')
-        checkpointer = AsyncPostgresSaver(conn)
+
+    pool = AsyncConnectionPool(
+        conn_string,
+        open=False,
+        min_size=1,
+        max_size=3,
+        configure=_set_search_path,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+    )
+    # Si el `open()`, el `CREATE SCHEMA` o el `setup()` revientan, el pool no
+    # debe quedar abierto y sin dueño: nadie tendria una referencia para
+    # cerrarlo y el servidor de Postgres se comeria sus conexiones hasta que
+    # muera el proceso.
+    try:
+        await pool.open(wait=True)
+        async with pool.connection() as conn:
+            await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()
     except BaseException:
-        await conn.close()
+        await pool.close()
         raise
     return checkpointer

@@ -27,6 +27,34 @@ FORBIDDEN_HOST_MARKERS = ("rlwy.net", "railway", "proxy.rlwy")
 # configuracion no es un control.  Los tests traen el suyo.
 os.environ.setdefault("AGENT_HUELLA_SECRET", "secreto-de-prueba-no-usar-en-produccion")
 
+# `app/core/database.py` construye su `engine` EN TIEMPO DE IMPORT
+# (`create_engine(settings.SQLALCHEMY_DATABASE_URI)` a nivel de modulo), y
+# cualquier `Settings()` que se construya de nuevo mas adelante (la propia
+# `app.core.config.settings`, o una instancia fresca como
+# `tests/test_settings_tolerates_agent_env.py`) lee `DATABASE_URL` del
+# entorno en ese momento. Fijarlo aca, a nivel de modulo -- ANTES de que
+# `pytest_plugins` de arriba importe `fixtures_http`, que importa `app.main`,
+# que importa `app.core.database` -- alinea las tres cosas con la base
+# desechable de test.
+#
+# Asignacion INCONDICIONAL, no `setdefault`: un `DATABASE_URL` que ya venga
+# exportado en el shell (por ejemplo, apuntando a Railway) no pasa por el
+# guard de `FORBIDDEN_HOST_MARKERS` de abajo -- ese guard solo mira
+# `TEST_DATABASE_URL`. Con `setdefault`, ese `DATABASE_URL` externo ganaria y
+# la suite correria contra produccion sin que nada lo frenara. La perilla
+# para apuntar los tests a otra base sigue siendo `TEST_DATABASE_URL`, que si
+# esta protegida.
+#
+# Esto NO es, por si solo, lo que impide que los tests toquen el puerto
+# 55433: eso ya lo hacian los overrides por fixture (`get_db` overrideado en
+# la fixture `client` de `fixtures_http.py`, `SessionLocal` monkeypatcheado en
+# `fixtures_domain.py`). Esto alinea el engine de import-time y cualquier
+# `Settings()` nueva con esa misma convencion, para que un codigo que SI use
+# `settings.SQLALCHEMY_DATABASE_URI` directo -- como el lifespan de
+# `app.main` que arma el checkpointer del agente (Task 4) -- caiga del mismo
+# lado.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
 
 def pytest_configure(config):
     if not TEST_DATABASE_URL.strip():
@@ -42,22 +70,6 @@ def pytest_configure(config):
                 f"TEST_DATABASE_URL apunta a {marker!r}. Los tests crean y borran "
                 "schemas: usa la base desechable de docker-compose.test.yml."
             )
-
-    # El lifespan de `app.main` (Task 4) construye un checkpointer real de
-    # Postgres -- una conexion de verdad, no perezosa como la de SQLAlchemy --
-    # apenas arranca la app. Cualquier test que instancie `TestClient(main.app)`
-    # (directo, como `tests/test_startup.py`, o via la fixture `client` de
-    # `fixtures_http.py`) dispara ese lifespan. Sin este parche apuntaria a
-    # `settings.SQLALCHEMY_DATABASE_URI` -- la base de desarrollo del `.env`,
-    # puerto 55433 -- violando la regla de "los tests solo tocan el 55432".
-    # `settings` ya existe para cuando corre este hook (los `pytest_plugins`
-    # de arriba importan `fixtures_http`, que importa `app.main`, antes de que
-    # pytest invoque `pytest_configure`), y `SQLALCHEMY_DATABASE_URI` es una
-    # `@property` que se reevalua en cada lifespan -- mutar el atributo una
-    # vez aca alcanza para el resto de la sesion.
-    from app.core.config import settings as _settings
-
-    _settings.DATABASE_URL = TEST_DATABASE_URL
 
 
 @pytest.fixture(scope="session")
