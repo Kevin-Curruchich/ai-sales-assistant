@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
+import os
 from app.core.config import settings
 from app.core.security import initialize_firebase
 from app.core.database import engine
@@ -17,6 +18,33 @@ from app.models import User, Customer, Product, Sale, SaleItem, SaleItemLotAlloc
 
 logger = logging.getLogger("app.startup")
 startup_issues: list[str] = []
+
+# Variables de entorno sin las que el agente NO funciona, y el marcador que
+# cada una deja en `startup_issues`.
+#
+# Ninguna de las dos falla al arrancar por su cuenta, y eso era el problema:
+# `ChatAnthropic(model=...)` se CONSTRUYE sin clave (la validacion es al
+# llamar, no al instanciar), asi que el grafo se armaba, `startup_issues`
+# quedaba vacio, `/health` devolvia `{"status": "ok"}`, el despliegue quedaba
+# verde -- y cada turno del agente moria en el evento `error` generico, con la
+# causa solo en el log del servidor. `AGENT_HUELLA_SECRET` era peor: nadie lo
+# miraba en ninguna parte, y su ausencia solo se manifestaba cuando alguien
+# intentaba registrar algo. Un operador no tenia forma de ver la diferencia
+# entre "el agente esta listo" y "el agente va a fallar en cada intento".
+AGENT_REQUIRED_ENV = {
+    "ANTHROPIC_API_KEY": "agent_api_key_missing",
+    "AGENT_HUELLA_SECRET": "agent_huella_secret_missing",
+}
+
+
+def missing_agent_env() -> list[str]:
+    """Las variables obligatorias del agente que faltan (o estan vacias).
+
+    Vacia cuenta como ausente: `ANTHROPIC_API_KEY=""` en un panel de Railway
+    es un error de dedo mas probable que la variable sin definir, y las dos
+    fallan igual.
+    """
+    return [nombre for nombre in AGENT_REQUIRED_ENV if not os.environ.get(nombre, "").strip()]
 
 
 @asynccontextmanager
@@ -37,20 +65,35 @@ async def lifespan(app: FastAPI):
     # propagaba y la API ni siquiera llegaba a responder /health).
     checkpointer = None
     app.state.agent_graph = None
-    try:
-        checkpointer = await build_async_checkpointer(settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema())
-        app.state.agent_graph = build_graph(default_model(), checkpointer)
-    except Exception:
-        logger.exception("Agent graph initialization failed during startup")
-        startup_issues.append("agent_graph_init_failed")
-        # Si `build_async_checkpointer` broto, ya cerro lo que abrio y nunca
-        # llegamos a asignar `checkpointer` aca. Si broto `build_graph` con
-        # el checkpointer ya construido, esta es la unica referencia que
-        # queda para cerrarlo -- sin esto, el pool quedaria abierto y sin
-        # dueño.
-        if checkpointer is not None:
-            await checkpointer.conn.close()
-            checkpointer = None
+
+    # Mismo patron, un paso antes: sin estas variables el agente no puede
+    # funcionar, asi que no se construye -- el endpoint `/stream` ya responde
+    # 503 cuando `agent_graph` es `None`, y `/health` reporta cual falta. Es
+    # ruidoso a proposito: un agente que arranca "bien" y falla en cada turno
+    # es la peor de las dos opciones. Ver `AGENT_REQUIRED_ENV`.
+    faltantes = missing_agent_env()
+    if faltantes:
+        logger.error(
+            "El agente no se construyo: faltan variables de entorno obligatorias (%s). "
+            "La API sigue sirviendo el resto de los endpoints; /stream responde 503.",
+            ", ".join(faltantes),
+        )
+        startup_issues.extend(AGENT_REQUIRED_ENV[nombre] for nombre in faltantes)
+    else:
+        try:
+            checkpointer = await build_async_checkpointer(settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema())
+            app.state.agent_graph = build_graph(default_model(), checkpointer)
+        except Exception:
+            logger.exception("Agent graph initialization failed during startup")
+            startup_issues.append("agent_graph_init_failed")
+            # Si `build_async_checkpointer` broto, ya cerro lo que abrio y nunca
+            # llegamos a asignar `checkpointer` aca. Si broto `build_graph` con
+            # el checkpointer ya construido, esta es la unica referencia que
+            # queda para cerrarlo -- sin esto, el pool quedaria abierto y sin
+            # dueño.
+            if checkpointer is not None:
+                await checkpointer.conn.close()
+                checkpointer = None
 
     try:
         yield

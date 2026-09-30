@@ -24,15 +24,20 @@ proposito, y este archivo asume que los leiste.
 - **Construccion del grafo**: `app/main.py::lifespan` llama a
   `build_async_checkpointer` y `build_graph` (ambas en `app/agent/graph.py`)
   una sola vez al arrancar, y guarda el resultado en `app.state.agent_graph`.
-  Si esa construccion falla -- tipicamente porque Postgres no responde al
-  momento de arrancar -- el lifespan no propaga la excepcion: deja
-  `app.state.agent_graph = None`, agrega `"agent_graph_init_failed"` a la
-  lista `startup_issues` de `app/main.py`, y sigue sirviendo el resto de la
-  API (clientes, ventas, reportes). `GET /health` refleja eso devolviendo
-  `{"status": "degraded", "issues": [...]}` en vez de `{"status": "ok"}`. Un
-  operador que ve un `503` en `/stream` (mas abajo) tiene que mirar
-  `/health`: si `agent_graph_init_failed` esta en `issues`, el problema es
-  que el grafo nunca se construyo, no un fallo puntual de esa corrida.
+  Antes de construir nada, valida las dos variables de entorno obligatorias
+  del agente (`ANTHROPIC_API_KEY`, `AGENT_HUELLA_SECRET`): si falta alguna, no
+  construye el grafo y deja `agent_api_key_missing` /
+  `agent_huella_secret_missing` en `startup_issues`. Si la construccion misma
+  falla -- tipicamente porque Postgres no responde al momento de arrancar --
+  el lifespan no propaga la excepcion: deja `app.state.agent_graph = None`,
+  agrega `"agent_graph_init_failed"` a la lista `startup_issues` de
+  `app/main.py`, y sigue sirviendo el resto de la API (clientes, ventas,
+  reportes). En los tres casos `GET /health` devuelve
+  `{"status": "degraded", "issues": [...]}` en vez de `{"status": "ok"}`, y
+  `/stream` responde 503. Un operador que ve ese `503` tiene que mirar
+  `/health`: el marcador que encuentre ahi le dice si el problema es una
+  variable de entorno, un Postgres caido al arrancar, o un fallo puntual de
+  esa corrida (ningun marcador).
 - **Checkpointer**: `AsyncPostgresSaver` de `langgraph-checkpoint-postgres`
   sobre un `AsyncConnectionPool` (`min_size=1, max_size=3`), apuntado al
   schema `agent` de la misma base Postgres que usa el negocio (ver mas
@@ -59,16 +64,27 @@ servicio aparte que las consuma:
 
 | Variable | Para que |
 |---|---|
-| `ANTHROPIC_API_KEY` | El modelo (`ChatAnthropic`, `claude-sonnet-5`, `app/agent/graph.py::default_model`). Sin esto, la construccion del grafo falla en el lifespan y la API arranca en `degraded` (ver "Como esta servido"). |
-| `AGENT_HUELLA_SECRET` | Firma la huella de aprobacion (ver mas abajo). Sin esto, el agente se niega a emitir o verificar una aprobacion. |
+| `ANTHROPIC_API_KEY` | **Obligatoria.** El modelo (`ChatAnthropic`, `claude-sonnet-5`, `app/agent/graph.py::default_model`). El lifespan la valida al arrancar: si falta, no construye el grafo y la API arranca en `degraded` con `agent_api_key_missing` (ver "Como esta servido"). |
+| `AGENT_HUELLA_SECRET` | **Obligatoria.** Firma la huella de aprobacion (ver mas abajo). Sin esto, el agente se niega a emitir o verificar una aprobacion. Tambien se valida al arrancar: `agent_huella_secret_missing`. |
 | `LANGSMITH_TRACING` | `true`/`false`. Activa el trazado de cada corrida en LangSmith. Opcional para desarrollo, util para depurar una conversacion completa (incluidas las pausas de `interrupt()`). |
 | `LANGSMITH_API_KEY` | Credencial de LangSmith. Solo hace falta si `LANGSMITH_TRACING=true`. |
 | `LANGSMITH_PROJECT` | Nombre del proyecto en LangSmith donde aparecen esas trazas. |
 
 Ninguna de las cinco pasa por `app/core/config.py` (`Settings`, pydantic) --
 `ChatAnthropic`, la firma de la huella y el SDK de LangSmith las leen directo
-de `os.environ`. Van en `.env` como cualquier otra variable local;
-`.env.example` las trae comentadas.
+de `os.environ`. `.env.example` las trae comentadas.
+
+**Y por eso ponerlas en `.env` no alcanza.** `Settings` lee `.env` con
+pydantic-settings, que NO exporta nada a `os.environ`: una
+`ANTHROPIC_API_KEY` que vive solo en `.env` no existe para `ChatAnthropic`.
+Tienen que estar en el entorno del proceso:
+
+```bash
+set -a; source .env; set +a      # antes de levantar hypercorn en local
+```
+
+En Railway son variables del servicio, que si llegan al entorno. Si faltan, el
+arranque lo dice (ver abajo) en vez de dejarlas fallar turno por turno.
 
 ### Levantarlo
 
@@ -81,10 +97,18 @@ venv/bin/alembic upgrade head        # si todavia no corriste esto
 venv/bin/hypercorn app.main:app --reload
 ```
 
-`GET /health` confirma que el grafo se construyo (`{"status": "ok"}`, sin
-`agent_graph_init_failed` en `issues`). `POST /api/v1/agent/stream` exige el
-mismo token de Firebase que el resto del panel -- sin `Authorization` valido,
-401, antes de que el streaming arranque.
+`GET /health` confirma que el agente esta listo: `{"status": "ok"}`, con
+`issues` vacio. Cualquiera de `agent_api_key_missing`,
+`agent_huella_secret_missing` o `agent_graph_init_failed` ahi significa que
+`app.state.agent_graph` es `None` y que `/stream` va a responder 503 -- no un
+fallo puntual de una corrida. `POST /api/v1/agent/stream` exige el mismo token
+de Firebase que el resto del panel -- sin `Authorization` valido, 401, antes de
+que el streaming arranque.
+
+**El healthcheck de Railway no distingue `ok` de `degraded`**: mira el codigo
+HTTP, y `/health` devuelve 200 en los dos casos (a proposito -- un Firebase
+caido no debe tumbar el despliegue de las ventas). Despues de desplegar hay que
+LEER el cuerpo de `/health`, no confiar en el tilde verde.
 
 ## Desplegarlo
 
@@ -96,7 +120,11 @@ servicio:
 
 - **`AGENT_HUELLA_SECRET` y `ANTHROPIC_API_KEY` en el servicio que ya
   existe.** No hay un segundo lugar donde cargarlas. Las `LANGSMITH_*` son
-  opcionales, igual que en local.
+  opcionales, igual que en local. Si una de las dos falta, el despliegue queda
+  verde igual (el healthcheck mira el codigo HTTP, y `/health` devuelve 200
+  tambien en `degraded`) pero el agente NO arranca: `/health` trae
+  `agent_api_key_missing` o `agent_huella_secret_missing` en `issues` y
+  `/stream` responde 503. Leer ese cuerpo es parte del checklist.
 - **No agregues `--workers` al comando de `entrypoint.sh` sin resolver esto
   primero.** El endpoint `/stream` rechaza una segunda corrida sobre el
   mismo `thread_id` con `409` mientras la primera sigue viva

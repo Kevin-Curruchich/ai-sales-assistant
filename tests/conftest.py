@@ -27,6 +27,16 @@ FORBIDDEN_HOST_MARKERS = ("rlwy.net", "railway", "proxy.rlwy")
 # configuracion no es un control.  Los tests traen el suyo.
 os.environ.setdefault("AGENT_HUELLA_SECRET", "secreto-de-prueba-no-usar-en-produccion")
 
+# Y el lifespan de `app.main` exige `ANTHROPIC_API_KEY` para construir el
+# grafo -- sin ella deja el agente no disponible y `/health` en `degraded`
+# (`app/main.py::AGENT_REQUIRED_ENV`), que es justo lo que los tests del
+# endpoint del agente NO quieren. `.env` no sirve para esto: pydantic-settings
+# lo lee para `Settings` pero no lo exporta a `os.environ`, y `ChatAnthropic`
+# lee de `os.environ`. Una clave de juguete alcanza: ningun test de esta suite
+# llama al modelo de verdad -- los que levantan un grafo usan
+# `FakeToolCallingModel`.
+os.environ.setdefault("ANTHROPIC_API_KEY", "clave-de-prueba-no-usar-en-produccion")
+
 # `app/core/database.py` construye su `engine` EN TIEMPO DE IMPORT
 # (`create_engine(settings.SQLALCHEMY_DATABASE_URI)` a nivel de modulo), y
 # cualquier `Settings()` que se construya de nuevo mas adelante (la propia

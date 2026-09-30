@@ -106,9 +106,17 @@ async def build_async_checkpointer(conn_string: str, schema: str) -> AsyncPostgr
     es la union de ambos). Con una conexion suelta, si esa conexion muere --
     un reinicio de Postgres, un idle timeout, un blip de red en Railway --
     nada la reabre: el checkpointer queda roto por el resto de la vida del
-    proceso y la unica salida es un redeploy. Un `AsyncConnectionPool`
-    reconecta solo cuando una conexion se muere, y sigue siendo una unica
-    cosa construida en el lifespan que se cierra con `.close()` -- no
+    proceso y la unica salida es un redeploy. Un `AsyncConnectionPool` abre una
+    conexion de reemplazo cuando la anterior se muere, y ademas recicla
+    conexiones SANAS por su cuenta: con los defaults de `psycopg_pool` 3.2.8,
+    `max_lifetime` (3600 s, con jitter de -5%) cierra y reemplaza cada
+    conexion al cumplir ese tiempo, y `max_idle` (600 s) encoge el pool por
+    encima de `min_size`. Las dos cosas significan lo mismo para este codigo:
+    la conexion que el checkpointer usa NO es la misma para siempre -- toda
+    conexion se recicla al menos una vez por hora, sana o no -- asi que el
+    `search_path` tiene que fijarse en CADA conexion que el pool abra (ver
+    `configure`, mas abajo) y no una vez al construirlo. Y sigue siendo una
+    unica cosa construida en el lifespan que se cierra con `.close()`: no
     reintroduce la fuga de "una conexion nueva por pedido" que este modulo ya
     arreglo una vez.
 

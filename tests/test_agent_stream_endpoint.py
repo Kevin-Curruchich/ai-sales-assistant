@@ -807,3 +807,25 @@ def test_answering_a_confirmation_that_is_no_longer_pending_is_a_409(
     assert repetido.status_code == 409
     db_session.expire_all()
     assert db_session.query(Sale).count() == 1, "el reintento escribio una segunda venta"
+
+
+def test_the_stream_response_tells_proxies_not_to_buffer_it(client, seeded_user):
+    """Las cabeceras son para intermediarios, no para el navegador: detras del
+    proxy de Railway, una respuesta bufereada hace que el panel no vea NADA
+    hasta que el turno termina. Este test no puede demostrar el efecto -- no
+    hay proxy en `TestClient` -- pero si que las cabeceras salen, que es lo
+    unico que este lado controla."""
+    hilo = _create_thread_as(client, seeded_user, "mio")
+
+    with client.stream(
+        "POST",
+        "/api/v1/agent/stream",
+        json={"thread_id": hilo["id"], "mensaje": "hola"},
+        headers=_auth(seeded_user),
+    ) as resp:
+        cabeceras = resp.headers
+        _consume(resp)
+
+    assert cabeceras["content-type"].startswith("text/event-stream")
+    assert cabeceras["cache-control"] == "no-cache"
+    assert cabeceras["x-accel-buffering"] == "no"

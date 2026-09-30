@@ -344,4 +344,16 @@ async def stream_agent(
         async for evento in eventos_sse(graph, entrada, config):
             yield _sse_line(evento)
 
-    return StreamingResponse(generar(), media_type="text/event-stream")
+    return StreamingResponse(
+        generar(),
+        media_type="text/event-stream",
+        # Las dos cabeceras existen para intermediarios, no para el navegador,
+        # y su ausencia es un fallo que NINGUN test de este repo puede exponer:
+        # `TestClient` y `ASGITransport` hablan con la app directo, sin proxy en
+        # el medio. `Cache-Control: no-cache` para que nadie guarde ni reuse un
+        # stream de eventos; `X-Accel-Buffering: no` para que el proxy de
+        # Railway (y cualquier nginx) no acumule la respuesta antes de
+        # reenviarla -- bufereada, el panel no ve NADA hasta que el turno
+        # termina, que es exactamente lo que el streaming existe para eliminar.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
