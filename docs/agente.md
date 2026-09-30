@@ -240,13 +240,18 @@ data: {"tipo": "confirmar_venta", "huella": {"datos": {...}, "firma": "..."}, "p
 **Dos herramientas hermanas que interrumpen en el mismo turno producen DOS
 eventos `confirmacion`** -- una por cada `interrupt()`, en el orden en que
 vienen en la lista `__interrupt__` del chunk de `"updates"` -- **y un solo
-`fin`** con `estado: "pausado"` al final, no uno por confirmacion.
+`fin`** con `estado: "pausado"` al final, no uno por confirmacion. Esto es
+en parte un hecho probado y en parte uno derivado, y vale distinguirlos:
 `tests/test_agent_graph.py::test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_still_interrupted`
 prueba, contra las dos herramientas de escritura reales en el mismo mensaje
 del modelo, que ese `__interrupt__` trae efectivamente dos entradas
-(`len(interrupts) == 2`); `eventos_sse` itera esa lista una por una y solo
-manda el `fin` despues de que el `astream` termina, no despues de cada
-`interrupt()`.
+(`len(interrupts) == 2`) -- pero lo hace invocando `graph.invoke` directo,
+no a traves de `eventos_sse`. Que esa lista de dos se traduzca en dos
+eventos `confirmacion` y un solo `fin` es una lectura del codigo de
+`eventos_sse` (el `for interrupcion in interrupciones: yield ...` esta dentro
+del bucle principal, y el `yield fin` esta una sola vez, al final de toda la
+funcion, fuera de ese bucle) -- **no hay un test que corra dos herramientas
+hermanas a traves de `eventos_sse` y cuente los eventos que salen.**
 
 **Al reanudar, las llamadas a herramienta que quedaron pendientes NO se
 vuelven a anunciar.** El evento `herramienta` sale del nodo del modelo (el
@@ -256,7 +261,13 @@ quedo pausada dentro del nodo de herramientas, no vuelve a invocar al
 modelo -- asi que no hay un `AIMessage` nuevo del que salga un `herramienta`
 repetido para esas llamadas. Un panel que cuenta "cuantas herramientas se
 anunciaron" no debe esperar volver a ver las que ya estaban pendientes antes
-de la pausa.
+de la pausa. **Este parrafo tambien es una lectura del codigo, no un hecho
+con test dedicado**: los tests de herramientas hermanas
+(`test_agent_graph.py`, arriba) reanudan con `graph.invoke` crudo, nunca a
+traves de `eventos_sse`, asi que ningun test de la suite verifica hoy que
+el evento `herramienta` no se repita al reanudar. Si el panel llega a
+depender de este comportamiento, este es el punto donde falta un test antes
+de confiar en el.
 
 ### `fin`
 

@@ -5,6 +5,28 @@
 **Spec:** `docs/superpowers/specs/2026-09-24-agente-runtime-conversacional-design.md`
 **Operación del agente:** `docs/agente.md`
 
+> **Nota del 2026-09-30: la topología cambió después de que se escribió este
+> encargo.** Este documento no es un registro fechado como un plan o un
+> spec -- es un encargo activo, y una parte de lo que instruye ya no
+> corresponde a como corre el agente hoy.
+>
+> Lo que sigue en pie: la pieza 2B y el panel siguen siendo el trabajo
+> pendiente, y todo lo que este documento dice sobre el contrato del panel
+> (la huella, el token de Firebase, los huecos de autorización, los bugs
+> preexistentes) sigue siendo correcto y sigue siendo la lista de lo que
+> falta.
+>
+> Lo que quedó obsoleto: las secciones **"El mecanismo de despliegue no
+> está determinado"** y **"`langgraph dev` nunca se corrió contra esta
+> rama"** más abajo describen construir un segundo servicio con
+> `langgraph-cli`/`langgraph-api` y correr `langgraph dev` en local. Eso ya
+> no existe -- el agente se sirve en proceso, desde el mismo FastAPI que
+> sirve el resto del panel, sin un servidor de LangGraph aparte. No sigas
+> esas dos secciones como instrucción. La topología vigente, con el
+> contrato de eventos SSE que la reemplaza, está en `docs/agente.md`; la
+> decisión que la cambió está en
+> `docs/superpowers/specs/2026-09-29-agente-en-proceso-design.md`.
+
 La pieza 2A dejó al agente conversando y escribiendo con confirmación humana. Esto
 es lo que quedó abierto, con la razón por la que quedó y lo que cuesta cerrarlo.
 Sale de nueve revisiones por task más una de rama completa.
