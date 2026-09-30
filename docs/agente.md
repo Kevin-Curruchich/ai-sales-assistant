@@ -326,6 +326,20 @@ responde **409**, tambien antes del primer byte -- ver la seccion
 "Desplegarlo" arriba para la restriccion de un solo proceso de la que
 depende esto.
 
+### El cuerpo sin `mensaje` ni `decision`: `422`
+
+El cuerpo de `/stream` (`AgentStreamRequest`) trae `thread_id` y, opcionales,
+`mensaje` (arranca o continua la conversacion con texto del usuario) y
+`decision` (resuelve un `interrupt()` pendiente -- ver "El contrato del
+panel: la huella"). Un pedido que no manda ninguno de los dos no tiene nada
+que decirle al grafo: responde **422**, tambien antes del primer byte, con
+`detail: "Mandá 'mensaje' o 'decision'."`. Es el unico de los cuatro codigos
+de esta seccion que un panel en desarrollo va a pisar seguido, mientras
+todavia arma la forma exacta del cuerpo del pedido -- por ejemplo, un envio
+que solo manda `thread_id` porque el campo con el mensaje del usuario
+todavia no se cableo del lado del panel. Cubierto por
+`tests/test_agent_stream_endpoint.py::test_streaming_without_mensaje_or_decision_is_a_422`.
+
 ### Un cliente que se desconecta cancela la corrida de verdad
 
 El endpoint itera `eventos_sse` directo (`async for evento in
