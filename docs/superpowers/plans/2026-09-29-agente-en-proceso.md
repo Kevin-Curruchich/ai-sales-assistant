@@ -187,6 +187,15 @@ git commit -m "feat: Add agent threads as an owned object"
 
 **Interfaces:**
 - Consumes: `AgentThreadRepository` de la Task 1.
+- Produces: **el harness de tests HTTP autenticados**, en `tests/fixtures_http.py`,
+  registrado en `tests/conftest.py`. La Task 6 lo consume. Este repo **no tiene
+  ni un test de endpoint autenticado** — `test_startup.py` sólo golpea `/health`,
+  que es público — así que no hay patrón que copiar. Hace falta: un `client`
+  (`TestClient` sobre `app.main.app`) con `app.dependency_overrides` para
+  `get_current_user` y `get_db`, apuntando la sesión a la base desechable; un
+  `_auth(user)` que devuelva las cabeceras; y un `_create_thread_as(client, user,
+  title)`. Seguí el patrón de `_session_for` en `tests/test_cash_service.py` para
+  atar la sesión al schema desechable.
 - Produces: `AgentThreadService(db)` con `create(owner_id, title)`, `list_for(owner_id)`, `get_owned(thread_id, user_id) -> AgentThread` — **levanta `HTTPException(404)` si no existe O si no es del usuario**, con el mismo código en ambos casos. `rename_owned`, `delete_owned`.
 - Endpoints bajo `/api/v1/agent/threads`: `GET` (listar), `POST` (crear), `PATCH /{id}` (renombrar), `DELETE /{id}`.
 
