@@ -82,6 +82,17 @@ def seeded_user(db_session):
 
 
 @pytest.fixture
+def second_user(db_session):
+    """Un segundo usuario, distinto de `seeded_user`.  Sin este, "solo el
+    dueno puede..." no se puede probar: hace falta a alguien mas."""
+    user = User(email="otro-vendedor@example.com", display_name="Otro vendedor", role="admin")
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
 def seeded_customer(db_session):
     customer = Customer(name="Cliente de prueba")
     db_session.add(customer)
