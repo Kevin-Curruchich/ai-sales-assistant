@@ -35,3 +35,27 @@ def test_renaming_and_deleting(db_session, seeded_user):
 
     repo.delete(thread.id)
     assert repo.get(thread.id) is None
+
+
+def test_create_without_commit_leaves_the_row_rollbackable(db_session, seeded_user):
+    """`create` hace flush, no commit: el service decide el limite de
+    transaccion.  Sin este test, un `create` que commitea por su cuenta
+    pasaria los otros tests igual -- ninguno de ellos hace rollback."""
+    repo = AgentThreadRepository(db_session)
+    thread = repo.create(owner_id=seeded_user.id, title="se deshace")
+    thread_id = thread.id
+
+    db_session.rollback()
+
+    assert repo.get(thread_id) is None
+
+
+def test_rename_without_commit_leaves_the_row_rollbackable(db_session, seeded_user):
+    repo = AgentThreadRepository(db_session)
+    thread = repo.create(owner_id=seeded_user.id, title="titulo original")
+    db_session.commit()
+
+    repo.rename(thread.id, "titulo nuevo")
+    db_session.rollback()
+
+    assert repo.get(thread.id).title == "titulo original"
