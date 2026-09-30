@@ -382,14 +382,16 @@ estado del hilo.
 ### El agente no disponible: `503`
 
 Si el grafo no se pudo construir al arrancar (ver "Como esta servido" --
-tipicamente Postgres caido en ese momento), `request.app.state.agent_graph`
-es `None` y `/stream` responde **503** con un mensaje fijo, antes de tocar
-`eventos_sse`, antes de devolver el `StreamingResponse` -- este es un codigo
-HTTP normal porque pasa antes del primer byte del stream, a diferencia del
-caso de `error` de arriba. `GET /health` en ese momento reporta
-`agent_graph_init_failed` en `startup_issues`: un operador que ve el 503
-tiene que mirar ahi para confirmar que la causa es que el grafo nunca
-arranco, no un fallo puntual de esa corrida.
+falta una variable de entorno obligatoria, o Postgres estaba caido en ese
+momento), `request.app.state.agent_graph` es `None` y `/stream` responde
+**503** con un mensaje fijo, antes de tocar `eventos_sse`, antes de devolver el
+`StreamingResponse` -- este es un codigo HTTP normal porque pasa antes del
+primer byte del stream, a diferencia del caso de `error` de arriba. `GET
+/health` en ese momento trae el marcador que dice por que:
+`agent_api_key_missing`, `agent_huella_secret_missing` o
+`agent_graph_init_failed`. Un operador que ve el 503 tiene que mirar ahi para
+saber si el agente nunca arranco -- y por que -- o si fue un fallo puntual de
+esa corrida.
 
 ### El hilo ocupado, o la confirmacion que ya no esta pendiente: `409`
 
@@ -429,6 +431,21 @@ dos **422**, antes del primer byte:
   responde: `detail: "Mandá 'interrupt_id' junto con 'decision'..."`. Cubierto
   por `tests/test_agent_stream_endpoint.py::test_a_decision_without_its_interrupt_id_is_a_422`.
 
+### Un cliente que se desconecta cancela la corrida de verdad
+
+El endpoint itera `eventos_sse` directo (`async for evento in
+eventos_sse(...): yield ...`), sin una tarea propia ni sondeo de
+`is_disconnected()`. Cuando Starlette detecta que el cliente se fue,
+cancela la tarea que esta sirviendo el pedido, y esa cancelacion llega
+directo a donde el generador esta suspendido -- adentro de `eventos_sse`,
+que deja pasar `asyncio.CancelledError` sin convertirla en un evento
+`error` (es `except Exception`, no `except BaseException`, a proposito). El
+turno muere ahi: no sigue gastando modelo contra un cliente que ya no esta
+escuchando. Probado con una cancelacion real de la tarea ASGI en
+`tests/test_agent_stream_endpoint.py::test_a_disconnected_client_cancels_the_run`
+y, contra la funcion real (no un doble), en
+`tests/test_agent_streaming.py::test_a_cancelled_run_dies_instead_of_becoming_an_error_event`.
+
 ## Responder una confirmacion: el cuerpo de `POST /stream`
 
 ```json
@@ -462,20 +479,11 @@ parseando las lineas `event:` / `data:` a mano. Es poco codigo, pero no es la
 API que uno buscaria primero, y no hay un polyfill de `EventSource` que
 arregle el `POST` con cabeceras sin cambiar el contrato del servidor.
 
-### Un cliente que se desconecta cancela la corrida de verdad
-
-El endpoint itera `eventos_sse` directo (`async for evento in
-eventos_sse(...): yield ...`), sin una tarea propia ni sondeo de
-`is_disconnected()`. Cuando Starlette detecta que el cliente se fue,
-cancela la tarea que esta sirviendo el pedido, y esa cancelacion llega
-directo a donde el generador esta suspendido -- adentro de `eventos_sse`,
-que deja pasar `asyncio.CancelledError` sin convertirla en un evento
-`error` (es `except Exception`, no `except BaseException`, a proposito). El
-turno muere ahi: no sigue gastando modelo contra un cliente que ya no esta
-escuchando. Probado con una cancelacion real de la tarea ASGI en
-`tests/test_agent_stream_endpoint.py::test_a_disconnected_client_cancels_the_run`
-y, contra la funcion real (no un doble), en
-`tests/test_agent_streaming.py::test_a_cancelled_run_dies_instead_of_becoming_an_error_event`.
+Del lado del servidor la respuesta sale con `Cache-Control: no-cache` y
+`X-Accel-Buffering: no` ademas de `Content-Type: text/event-stream`: son para
+los intermediarios (el proxy de Railway, cualquier nginx), no para el
+navegador. Sin ellas, una respuesta bufereada llega entera al final y el
+streaming no sirve de nada.
 
 ## El contrato del panel: la huella
 

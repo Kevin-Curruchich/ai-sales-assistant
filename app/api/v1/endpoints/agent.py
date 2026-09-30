@@ -180,6 +180,19 @@ async def stream_agent(
     `AgentStreamRequest` de arriba ni siquiera los retiene (`extra="ignore"`):
     no hay forma de que lleguen hasta aca.
 
+    ## Reanudar: la decision siempre va con su `interrupt_id`
+
+    Un turno puede dejar DOS pausas abiertas (dos escrituras en el mismo
+    mensaje del modelo), y LangGraph exige la forma de mapa --
+    `Command(resume={id: decision})` -- cuando hay mas de una pendiente: con un
+    resume escalar levanta `RuntimeError`, que `eventos_sse` traduce al evento
+    `error` generico y deja el hilo sin ninguna entrada posible. Este endpoint
+    arma esa forma SIEMPRE, tambien con una sola pausa, para no tener un camino
+    que funciona y otro que no; y valida el id contra las pausas realmente
+    pendientes (`_pausas_pendientes`) antes del primer byte, para que un id
+    inventado o de una pausa ya respondida sea un 409 claro en vez de una
+    `confirmacion` repetida que finge que nada paso.
+
     ## Orden de las validaciones
 
     `get_owned` corre ANTES de tocar el grafo o devolver el `StreamingResponse`:
@@ -206,7 +219,9 @@ async def stream_agent(
     graph = request.app.state.agent_graph
     if graph is None:
         # El lifespan (`app/main.py`) deja `agent_graph = None` y sigue
-        # sirviendo el resto de la API si Postgres no respondio al arrancar.
+        # sirviendo el resto de la API si falta una variable de entorno
+        # obligatoria del agente o si Postgres no respondio al arrancar; en los
+        # dos casos `/health` dice cual de las dos cosas fue.
         # Sin este chequeo, `eventos_sse(None, ...)` explota con un
         # `AttributeError` que el cliente veria como un 500 opaco.
         raise HTTPException(
