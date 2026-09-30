@@ -113,12 +113,14 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
         # contra Postgres via `agent_session()`, y un `str(exc)` crudo de
         # psycopg/SQLAlchemy arrastra SQL y datos de conexion hasta el panel
         # ademas de perder el traceback entero. El mensaje que sale al panel
-        # es acotado a proposito: el nombre del tipo de excepcion, sin sus
-        # internos.
+        # es fijo y en espanol, sin nombre de excepcion ni ningun otro
+        # detalle de implementacion: quien vende no necesita saber que fue
+        # un `ValueError`, y `type(exc).__name__` seguia siendo un interno
+        # filtrado. El diagnostico vive en el log, no en el panel.
         logger.exception("La corrida del agente termino con una excepcion")
         yield {
             "event": "error",
-            "data": {"mensaje": f"Ocurrio un error inesperado ({type(exc).__name__})."},
+            "data": {"mensaje": "Hubo un problema y no se registro nada. Intenta de nuevo."},
         }
         return
 
