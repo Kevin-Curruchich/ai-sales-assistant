@@ -899,6 +899,26 @@ def _approve_with(huella):
     return lambda _p: {"accion": "aprobar", "huella": huella}
 
 
+def _config_con_tarea(user):
+    """Como `_config`, pero con un id de tarea de Pregel -- lo que hace que
+    `write_key` (y con ella la identidad que va dentro de la huella) no sea
+    `None`.
+
+    `uuid4` en el `checkpoint_ns`, no una constante: `agent.tool_writes` vive en
+    el schema `agent`, que es COMPARTIDO entre tests y sobrevive a la suite
+    (no es el schema desechable de `db_session`). Una clave literal la reclama
+    el primer test que corra y el segundo recibe `ya_registrado` -- verificado a
+    la mala: estos dos tests pasaban solos y fallaban en la corrida completa.
+    Mismo motivo que `_config` en `tests/test_agent_idempotency.py`."""
+    return {
+        "configurable": {
+            "user_id": str(user.id),
+            "thread_id": f"hilo-{uuid.uuid4()}",
+            "checkpoint_ns": f"tools:{uuid.uuid4()}",
+        }
+    }
+
+
 def test_a_sale_approved_with_a_huella_the_server_did_not_issue_writes_nothing(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
 ):
@@ -997,13 +1017,7 @@ def test_a_sale_approved_with_a_huella_from_another_operation_says_so(
 
     result = registrar_venta.invoke(
         _sale_payload(seeded_customer, seeded_product_with_lot),
-        config={
-            "configurable": {
-                "user_id": str(seeded_user.id),
-                "thread_id": "hilo-1",
-                "checkpoint_ns": "tools:esta-tarea",
-            }
-        },
+        config=_config_con_tarea(seeded_user),
     )
 
     assert result["estado"] == "huella_de_otra_operacion"
@@ -1022,13 +1036,7 @@ def test_a_sale_approved_with_a_huella_of_this_operation_still_writes(
 
     result = registrar_venta.invoke(
         _sale_payload(seeded_customer, seeded_product_with_lot),
-        config={
-            "configurable": {
-                "user_id": str(seeded_user.id),
-                "thread_id": "hilo-1",
-                "checkpoint_ns": "tools:esta-tarea",
-            }
-        },
+        config=_config_con_tarea(seeded_user),
     )
 
     assert result["estado"] == "registrado"
