@@ -2,253 +2,121 @@
 
 `app/agent/` es un grafo de LangGraph (`create_react_agent`, `version="v2"`)
 con siete herramientas -- tres de lectura, tres de escritura que pausan a
-pedir confirmacion humana, y `buscar_cliente`. Corre en un **proceso
-separado** del backend FastAPI de este mismo repositorio, aunque comparte su
-base de datos y sus modelos (`app/models`, `app/services`).
+pedir confirmacion humana, y `buscar_cliente`. Se sirve **en el mismo
+proceso** que el backend FastAPI de este repositorio: el grafo se construye
+una vez en el `lifespan` de `app/main.py` y vive en `app.state.agent_graph`
+mientras dure el proceso. No hay un segundo servicio, ni un segundo
+`Dockerfile`, ni un protocolo de streaming aparte -- el panel habla con el
+grafo por un endpoint REST comun, `POST /api/v1/agent/stream`
+(`app/api/v1/endpoints/agent.py`), que devuelve Server-Sent Events.
 
 Este documento cubre como correrlo local, como se despliega, por que el
-checkpointer vive en su propio schema de Postgres, el contrato que el panel
-tiene que cumplir -- el token de Firebase en cada request y la huella al
-aprobar una escritura -- y el checklist antes de desplegar el enganche de
-caja. Si estas por tocar las herramientas de
-escritura, lee primero los docstrings de modulo de
-`app/agent/tools/write.py` y `app/agent/graph.py` -- son mas largos que el
-codigo que documentan a proposito, y este archivo asume que los leiste.
+checkpointer vive en su propio schema de Postgres, el contrato de eventos
+que el panel tiene que entender, el token de Firebase en cada request y la
+huella al aprobar una escritura, y el checklist antes de desplegar el
+enganche de caja. Si estas por tocar las herramientas de escritura, lee
+primero los docstrings de modulo de `app/agent/tools/write.py` y
+`app/agent/graph.py` -- son mas largos que el codigo que documentan a
+proposito, y este archivo asume que los leiste.
 
-## Por que dos procesos
+## Como esta servido
 
-El panel usa `useStream`, del LangGraph JS SDK, para hablar con el agente.
-`useStream` necesita un **servidor LangGraph real** del otro lado (el
-protocolo de streaming de LangGraph, no un endpoint REST comun) -- no hay
-forma de servir eso desde dentro de la aplicacion FastAPI existente sin
-adoptar ese protocolo ahi tambien.
-
-Aparte de esa restriccion tecnica, hay una razon para mantenerlos separados
-aunque no la hubiera: una corrida del agente que crashea -- un prompt mal
-armado, una herramienta que revienta, un limite de la API de Anthropic -- no
-tiene por que tirar abajo el backend del que depende el resto del panel
-(clientes, ventas, reportes). Dos procesos, un crash en uno no toca al otro.
-
-Los dos procesos:
-
-- **API** (`hypercorn app.main:app`): lo que ya existia. Sirve el panel de
-  administracion (clientes, ventas, compras, reportes).
-- **Agente** (`langgraph dev` en local / el servidor de LangGraph en
-  produccion): sirve el grafo conversacional que `useStream` consume.
-
-Ambos leen la misma base de datos Postgres, con el mismo `POSTGRES_SCHEMA`
-para las tablas del negocio -- pero el agente ademas usa el schema `agent`
-para su propio estado (ver mas abajo). Ninguno de los dos importa al otro en
-tiempo de ejecucion.
+- **Construccion del grafo**: `app/main.py::lifespan` llama a
+  `build_async_checkpointer` y `build_graph` (ambas en `app/agent/graph.py`)
+  una sola vez al arrancar, y guarda el resultado en `app.state.agent_graph`.
+  Si esa construccion falla -- tipicamente porque Postgres no responde al
+  momento de arrancar -- el lifespan no propaga la excepcion: deja
+  `app.state.agent_graph = None`, agrega `"agent_graph_init_failed"` a la
+  lista `startup_issues` de `app/main.py`, y sigue sirviendo el resto de la
+  API (clientes, ventas, reportes). `GET /health` refleja eso devolviendo
+  `{"status": "degraded", "issues": [...]}` en vez de `{"status": "ok"}`. Un
+  operador que ve un `503` en `/stream` (mas abajo) tiene que mirar
+  `/health`: si `agent_graph_init_failed` esta en `issues`, el problema es
+  que el grafo nunca se construyo, no un fallo puntual de esa corrida.
+- **Checkpointer**: `AsyncPostgresSaver` de `langgraph-checkpoint-postgres`
+  sobre un `AsyncConnectionPool` (`min_size=1, max_size=3`), apuntado al
+  schema `agent` de la misma base Postgres que usa el negocio (ver mas
+  abajo). Se abre una vez en el lifespan y se cierra ahi tambien, al salir
+  del `yield`.
+- **Endpoint**: `POST /api/v1/agent/stream`, en
+  `app/api/v1/endpoints/agent.py` -- el mismo archivo que tiene los
+  endpoints de hilos (`GET/POST /agent/threads`, etc.). Autenticado con la
+  misma dependencia `get_current_user` (`app/api/dependencies.py`) que usa
+  el resto del panel: valida el token de Firebase del header `Authorization`
+  y devuelve el `User` local.
+- **Traduccion a SSE**: `app/agent/streaming.py::eventos_sse` es la unica
+  capa que traduce lo que `graph.astream(...)` emite a los cinco eventos que
+  el panel entiende (`token`/`herramienta`/`confirmacion`/`fin`/`error`, ver
+  mas abajo).
 
 ## Correrlo local
 
 ### Variables de entorno
 
 Ademas de las que ya pide el backend (ver `docs/desarrollo-local.md`), el
-agente necesita:
+agente necesita estas, porque las lee **la API misma** -- no hay ya un
+servicio aparte que las consuma:
 
 | Variable | Para que |
 |---|---|
-| `ANTHROPIC_API_KEY` | El modelo (`ChatAnthropic`, `claude-sonnet-5`). Sin esto, `graph()` falla al construirse -- ver el docstring de `app/agent/graph.py::graph`. |
+| `ANTHROPIC_API_KEY` | El modelo (`ChatAnthropic`, `claude-sonnet-5`, `app/agent/graph.py::default_model`). Sin esto, la construccion del grafo falla en el lifespan y la API arranca en `degraded` (ver "Como esta servido"). |
+| `AGENT_HUELLA_SECRET` | Firma la huella de aprobacion (ver mas abajo). Sin esto, el agente se niega a emitir o verificar una aprobacion. |
 | `LANGSMITH_TRACING` | `true`/`false`. Activa el trazado de cada corrida en LangSmith. Opcional para desarrollo, util para depurar una conversacion completa (incluidas las pausas de `interrupt()`). |
 | `LANGSMITH_API_KEY` | Credencial de LangSmith. Solo hace falta si `LANGSMITH_TRACING=true`. |
 | `LANGSMITH_PROJECT` | Nombre del proyecto en LangSmith donde aparecen esas trazas. |
 
-Ninguna de las cuatro pasa por `app/core/config.py` (`Settings`, pydantic) --
-`ChatAnthropic` y el SDK de LangSmith las leen directo de `os.environ`. Van
-en `.env` como cualquier otra variable local; `.env.example` las trae
-comentadas.
-
-### El CLI va en un venv APARTE
-
-**No lo instales en `venv/`.** No es una preferencia: es un conflicto de
-dependencias sin solucion.
-
-| paquete | exige |
-|---|---|
-| `fastapi` 0.121.3 | `starlette>=0.40.0,<0.51.0` |
-| `langgraph-api` 0.15.1 | `starlette>=1.3.1`, y `langgraph_sdk.runtime` |
-| `langgraph` 1.0.3 (el pineado del repo) | `langgraph-sdk<0.4.4`, donde `runtime` **no existe** |
-
-No hay combinacion que satisfaga a los tres. Instalar `langgraph-cli[inmem]`
-en `venv/` sube starlette a 1.7 y **la API deja de arrancar**
-(`TypeError: Router.__init__() got an unexpected keyword argument`), ademas de
-mover `langgraph` a 1.2.12.
-
-Por eso el CLI vive en su propio entorno:
-
-```bash
-python3 -m venv .venv-agent
-.venv-agent/bin/python -m pip install -r requirements.txt
-.venv-agent/bin/python -m pip install "langgraph-cli[inmem]"
-```
-
-Ese segundo `pip install` va a **subir `langgraph` a 1.2.12 y el SDK a 0.4.x**,
-y a imprimir conflictos declarados. Es lo esperado y es necesario: el servidor
-no arranca con 1.0.3, falla con
-`ModuleNotFoundError: No module named 'langgraph_sdk.runtime'`.
-
-> **`pip install -e .` NO funciona:** este repo no tiene `pyproject.toml` ni
-> `setup.py`. Instala `requirements.txt` directamente, como arriba.
-
-**Las dos versiones conviven porque el comportamiento no depende de la
-diferencia.** Los 95 tests del agente pasan igual en 1.0.3 y en 1.2.12 —
-incluidos los de idempotencia, el despacho de un `Send()` por llamada bajo
-`version="v2"`, el replay del `interrupt()` y el hook de autenticacion. La
-suite COMPLETA sigue corriendo en `venv/`, porque `tests/test_startup.py`
-instancia una app FastAPI que starlette 1.7 rompe:
-
-```bash
-venv/bin/python -m pytest -q                      # las 263, en el venv principal
-.venv-agent/bin/python -m pytest -q tests/test_agent_*.py   # las 95 del agente, en 1.2.12
-```
-
-Si ya lo instalaste en `venv/` por error, se restaura con:
-
-```bash
-venv/bin/python -m pip uninstall -y langgraph-cli langgraph-api langgraph-runtime-inmem
-venv/bin/python -m pip install -r requirements.txt
-```
+Ninguna de las cinco pasa por `app/core/config.py` (`Settings`, pydantic) --
+`ChatAnthropic`, la firma de la huella y el SDK de LangSmith las leen directo
+de `os.environ`. Van en `.env` como cualquier otra variable local;
+`.env.example` las trae comentadas.
 
 ### Levantarlo
+
+No hay un venv ni un proceso aparte para el agente. Se levanta con el resto
+de la API, en `venv/`:
 
 ```bash
 docker compose -f docker-compose.dev.yml up -d
 venv/bin/alembic upgrade head        # si todavia no corriste esto
-.venv-agent/bin/langgraph dev
+venv/bin/hypercorn app.main:app --reload
 ```
 
-Verificado el 2026-09-25 contra `db_local`:
-
-```
-GET  /ok                 -> 200
-POST /assistants/search  -> 401  {"detail":"Falta el header Authorization con el token de Firebase"}
-```
-
-El grafo `revenew` se importa desde `./app/agent/graph.py`, el servidor queda
-en `http://127.0.0.1:2024`, Studio en
-`https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024` y la
-documentacion de la API en `/docs`.
-
-**Studio SI pasa por el hook de autenticacion.** Necesitas un ID token de
-Firebase desde el primer pedido, no solo para escribir: sin `Authorization` el
-servidor responde 401 con el mensaje de `auth_hook.py`. Eso es la unica parte
-del camino de autenticacion que se vio ejecutar de verdad.
-
-**Lo que todavia NO se probo:** un token valido de punta a punta —
-autenticacion, conversacion, aprobacion, y una fila escrita y firmada con el
-`user_id` que salio del token. Sabemos que la puerta cierra; falta ver que
-abre. Es la ultima verificacion manual pendiente, y conviene hacerla mirando
-el contador de conexiones de Postgres durante las primeras corridas.
-
+`GET /health` confirma que el grafo se construyo (`{"status": "ok"}`, sin
+`agent_graph_init_failed` en `issues`). `POST /api/v1/agent/stream` exige el
+mismo token de Firebase que el resto del panel -- sin `Authorization` valido,
+401, antes de que el streaming arranque.
 
 ## Desplegarlo
 
-> **Respondido el 2026-09-25, con evidencia: el segundo servicio NO puede
-> reusar la imagen de la API.** Esta seccion listaba eso como pregunta
-> abierta; ya no lo es.
->
-> `langgraph-api` 0.15.1 exige `starlette>=1.3.1` y el modulo
-> `langgraph_sdk.runtime`; `fastapi` 0.121.3 exige `starlette<0.51.0`; y
-> `langgraph` 1.0.3 -- el pineado de `requirements.txt` -- fija el SDK por
-> debajo de 0.4.4, donde `runtime` todavia no existe. **No hay combinacion que
-> satisfaga a los tres.** Instalar el servidor junto a la API rompe la API;
-> bajar el servidor a la version de la API impide que arranque.
->
-> Consecuencia para el despliegue: **dos imagenes, dos conjuntos de
-> dependencias.** El agente necesita su propio `Dockerfile` con
-> `requirements.txt` mas el paquete del servidor, resolviendo a `langgraph`
-> 1.2.x. Lo que sigue siendo cierto es que comparten repositorio, base de
-> datos y `.env`.
->
-> Y como corolario: **solo uno de los dos servicios debe correr
-> `alembic upgrade head`.** Hoy lo hace `entrypoint.sh` de la API. El servicio
-> del agente no debe migrar: dos procesos compitiendo por migrar al arrancar
-> es una carrera, y el schema `agent` que si necesita se crea solo, por otra
-> via (ver mas abajo).
+Un solo servicio de Railway, el que ya existe -- no hay un segundo servicio
+ni un segundo `Dockerfile` que crear. `entrypoint.sh` corre
+`alembic upgrade head` y despues `exec hypercorn app.main:app --bind
+"0.0.0.0:${PORT:-8000}"`. Lo que agrega el agente al checklist de ese
+servicio:
 
-La forma general esta clara: segundo servicio de Railway, mismo
-repositorio, mismo `.env` de produccion (misma base de datos), proceso
-separado del de la API. **El comando de arranque exacto -- y si de verdad
-puede ser "el mismo `Dockerfile`, otro `CMD`" o necesita algo distinto --
-todavia no esta determinado.** Esta seccion lo dice plano en vez de inventar
-un comando prolijo: es el mismo tipo de hueco que la advertencia sobre
-`langgraph dev` de arriba, pero un nivel mas grave, porque ahi no hay ni
-siquiera un `langgraph dev` corrido una vez para apoyarse -- es el otro
-lugar de todo este documento donde la confianza se habia adelantado a la
-verificacion, y quedo corregido aca por la misma razon que aquella
-advertencia existe: mejor decir "no se sabe" que afirmar un mecanismo que
-nadie corrio.
-
-Lo que si se puede afirmar, verificado contra este repo:
-
-- **Ninguna dependencia de servidor de LangGraph esta en
-  `requirements.txt`.** No hay `langgraph-cli` ni `langgraph-api` (el paquete
-  que de verdad implementa el servidor -- `langgraph dev`/`langgraph up` lo
-  usan por debajo). Sin uno de los dos instalado en la imagen de produccion,
-  no hay nada que escuche el protocolo de streaming que `useStream` necesita.
-- `langgraph-cli` (visto en PyPI, no instalado aca) expone `langgraph dev`
-  (desarrollo, recarga en caliente, pensado para localhost) y, para
-  produccion, `langgraph up`/`langgraph build`: los dos arman una imagen de
-  Docker PROPIA a partir de `langgraph.json` (con su propio `Dockerfile`
-  generado, no el de este repo) y, en el flujo documentado por LangChain,
-  esperan a la vez Postgres (para el checkpointer, que ya tenemos) y
-  colas/infra adicional de la plataforma LangGraph -- no simplemente "otro
-  comando sobre la misma imagen".
-- Instalar `langgraph-api` directo (el paquete que de verdad sirve el
-  protocolo) es la otra via, mas cercana a "un proceso mas en el mismo
-  `Dockerfile`" -- pero no esta probado aca, y sus dependencias (visto en su
-  metadata de PyPI) incluyen piezas pensadas para el runtime en memoria de
-  desarrollo (`langgraph-runtime-inmem`); un runtime de Postgres para
-  produccion parece vivir en un paquete separado, no publico en PyPI al
-  momento de escribir esto -- posiblemente detras de la licencia de
-  LangGraph Platform. No se confirmo si eso aplica al uso que este proyecto
-  le da (un solo grafo propio, sin multiinquilino).
-
-Puntos a confirmar antes de poder desplegar el segundo servicio -- ninguno
-verificado en esta rama:
-
-- **Que paquete sirve el servidor y como se instala.** `langgraph-cli[inmem]`
-  no esta pensado para produccion (su extra `inmem` lo dice: es el runtime
-  de desarrollo). Hay que decidir entre `langgraph-api` instalado directo
-  (si su runtime de Postgres esta disponible sin licencia adicional) o
-  adoptar el flujo `langgraph build`/`langgraph up` de LangGraph Platform
-  (que trae su propia imagen y, probablemente, sus propios requisitos de
-  infraestructura mas alla de este Postgres).
-- **El comando de arranque exacto**, una vez resuelto el punto anterior --
-  no hay ninguno verificado hoy, ni en este documento ni en el repo
-  (`entrypoint.sh` es especifico del servicio de la API).
-- **Si el segundo servicio puede reusar el `Dockerfile` de este repo tal
-  cual** (con un `CMD`/comando de arranque distinto en la configuracion de
-  Railway) o si necesita su propia imagen -- generada por `langgraph build`
-  o armada a mano -- porque el runtime de produccion trae dependencias que
-  `requirements.txt` no tiene hoy.
-- Las cuatro variables de entorno de la seccion anterior, cargadas en
-  Railway igual que las demas (`ANTHROPIC_API_KEY` es la unica realmente
-  obligatoria para que el grafo arranque; las tres de LangSmith son
-  opcionales).
-- El resto de las variables de `.env.production` (`POSTGRES_*`/`DATABASE_URL`,
-  credenciales de Firebase) las necesita tambien el agente: valida el mismo
-  token de Firebase que la API, en el hook de `app/agent/auth_hook.py` (que
-  compone `app/agent/auth.py::resolve_user`), y lee/escribe con los mismos
-  modelos y el mismo `POSTGRES_SCHEMA`. `FIREBASE_CREDENTIALS_PATH` no es
-  opcional para este servicio: sin ella, `initialize_firebase()` falla y
-  **todas** las escrituras del agente se rechazan con 401.
-- **Solo un servicio debe correr `alembic upgrade head`.** El proceso del
-  agente no deberia repetir esa migracion al arrancar -- ya la corre
-  `entrypoint.sh` del lado de la API. Si el arranque que se elija para el
-  agente en produccion tambien la dispara (por ejemplo si termina
-  reusando `entrypoint.sh` tal cual), confirmar que correrla dos veces en
-  paralelo, en dos deploys que arrancan casi al mismo tiempo, no genere una
-  condicion de carrera contra `alembic_version`. Si el arranque del agente
-  es un proceso propio (no `entrypoint.sh`), la solucion mas simple es que
-  ese proceso directamente no corra `alembic upgrade head` -- que lo siga
-  corriendo solo el servicio de la API, y que el del agente dependa de que
-  ese deploy ya haya migrado el schema del negocio.
-- El schema `agent` se crea solo, en el primer arranque del grafo (ver
-  abajo) -- no hace falta nada manual para eso, sea cual sea el mecanismo de
-  arranque que se termine eligiendo.
+- **`AGENT_HUELLA_SECRET` y `ANTHROPIC_API_KEY` en el servicio que ya
+  existe.** No hay un segundo lugar donde cargarlas. Las `LANGSMITH_*` son
+  opcionales, igual que en local.
+- **No agregues `--workers` al comando de `entrypoint.sh` sin resolver esto
+  primero.** El endpoint `/stream` rechaza una segunda corrida sobre el
+  mismo `thread_id` con `409` mientras la primera sigue viva
+  (`_hilos_en_curso`, un `set` en memoria en
+  `app/api/v1/endpoints/agent.py`). Ese `set` es correcto **solo con un
+  proceso**: `entrypoint.sh` termina sin `--workers`, y el default de
+  hypercorn es un unico worker. Con dos o mas workers, cada uno ve su propio
+  `set` -- memoria no compartida -- y dos corridas sobre el mismo hilo
+  podrian pisarse los checkpoints entre si; el estado resultante no seria el
+  de ninguna de las dos, y el `409` que hoy evita eso dejaria de dispararse
+  sin que nada lo avise. Si algun dia hace falta subir workers, este
+  mecanismo tiene que mudarse a la base (una fila con un lock) antes, no
+  despues.
+- **El schema `agent` se crea solo**, en el primer arranque del grafo (ver
+  abajo) -- no hace falta ningun paso manual para eso.
+- El resto de las variables de `.env.production`
+  (`POSTGRES_*`/`DATABASE_URL`, credenciales de Firebase) ya las necesitaba
+  la API para todo lo demas; el agente las reusa tal cual -- valida el mismo
+  token de Firebase, lee y escribe con los mismos modelos y el mismo
+  `POSTGRES_SCHEMA`.
 
 ## El schema `agent`
 
@@ -264,166 +132,227 @@ comparando el schema del negocio contra los modelos declarados en
 si vivieran en ese mismo schema, cada `alembic revision --autogenerate` las
 leeria como deriva no declarada y emitiria `drop_table` para cada una, en
 cada migracion, para siempre. El schema `agent` esta fuera del radar de
-Alembic a proposito.
+Alembic a proposito. La misma tabla `agent.tool_writes` que usa
+`app/agent/idempotency.py` (ver mas abajo) vive ahi por la misma razon.
 
-**`PostgresSaver.setup()` NO crea ese schema.** Un borrador anterior de la
-spec de este proyecto asumia que si -- es falso, y vale la pena decirlo
-explicito porque es facil de asumir lo contrario: las migraciones internas
-de `PostgresSaver` (`langgraph.checkpoint.postgres.PostgresSaver.MIGRATIONS`)
-son DDL sin calificar (`CREATE TABLE checkpoints`, no
+**`AsyncPostgresSaver.setup()` NO crea ese schema.** Las migraciones internas
+del saver son DDL sin calificar (`CREATE TABLE checkpoints`, no
 `CREATE TABLE agent.checkpoints`) que resuelve donde aterriza por el
 `search_path` de la conexion -- ningun `CREATE SCHEMA` en ninguna parte de
 esas migraciones. Contra una base fresca, `SET search_path TO "agent"` con
 el schema `agent` inexistente no falla ahi (Postgres permite un
 `search_path` que nombra un schema que todavia no existe) -- falla recien en
 el primer `CREATE TABLE` de `setup()`, con
-`InvalidSchemaName: no schema has been selected to create in`. Un lector que
-de por sentado que LangGraph resuelve esto solo va a perder una tarde
-entera persiguiendo ese error contra una base nueva (un `db_local` recien
-creado, un ambiente de CI, produccion en su primer deploy).
+`InvalidSchemaName: no schema has been selected to create in`.
 
-`_postgres_checkpointer` en `app/agent/graph.py` lo resuelve explicito,
+`build_async_checkpointer` (`app/agent/graph.py`) lo resuelve explicito,
 antes de fijar el `search_path` y antes de llamar a `setup()`:
 
 ```python
-conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-conn.execute(f'SET search_path TO "{schema}"')
-checkpointer = PostgresSaver(conn)
-checkpointer.setup()
+await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
 ```
 
 El mismo patron que `alembic/env.py` usa para el schema del negocio. No hace
 falta ningun paso manual antes de desplegar por esto -- se crea solo, la
-primera vez que se construye el grafo en el proceso, contra cualquier base
-(local, produccion, CI).
-
-### Una salvedad: bajo el servidor completo, el checkpointer es otro
-
-Todo lo de arriba describe el `PostgresSaver` que arma `app/agent/graph.py`.
-Bajo `langgraph-api` (el servidor de verdad), **ese no es el que persiste
-los checkpoints**: `graph.py:416-422` de langgraph-api hace
-`graph_obj.copy(update={"checkpointer": checkpointer, "store": store})` con
-el suyo, apenas la fabrica devuelve el grafo. El nuestro sigue siendo el que
-se usa sin ese reemplazo -- una construccion directa del grafo, los tests --
-y el schema `agent` sigue existiendo porque `agent.tool_writes` (ver
-"Idempotencia") vive ahi. Quien configure el servidor tiene que darle a
-**su** checkpointer una base y un schema, y esa configuracion no sale de
-este archivo: es una de las cosas que la seccion "Desplegarlo" deja
-explicitamente sin determinar.
-
-La fabrica `graph()` cachea lo que construye, por la misma razon: el
-servidor la llama **una vez por corrida**, no una vez por proceso
-(`graph.py:404` dentro de `get_graph`, entrado por corrida en
-`stream.py:182-194`, sin cache en el medio). Sin ese cache, cada corrida
-abria una conexion de Postgres que nadie cierra.
+primera vez que se construye el grafo en el proceso (local, produccion, CI).
 
 ## El contrato del panel: el token de Firebase
 
-Antes de la huella viene esto, porque sin esto no hay escritura posible: el
-panel tiene que mandar el token de Firebase del usuario en el header
-`Authorization` de **cada** request al servidor del agente.
+El panel tiene que mandar el token de Firebase del usuario en el header
+`Authorization` de **cada** request a `/api/v1/agent/stream`, igual que en
+cualquier otro endpoint de la API:
 
 ```
 Authorization: Bearer <id token de Firebase>
 ```
 
-Con `useStream` del SDK de JS eso se configura una vez, en las opciones del
-hook (`defaultHeaders` / `headers`), no request por request. El token es el
-mismo que el panel ya manda al backend de FastAPI -- no hay una credencial
-nueva ni un segundo login.
+No hay una credencial nueva ni un segundo login. `stream_agent`
+(`app/api/v1/endpoints/agent.py`) depende de `get_current_user`
+(`app/api/dependencies.py`) -- la misma dependencia que usa el resto del
+panel -- para resolver el `User` local a partir de ese token, y arma
+`config["configurable"]["user_id"]` **exclusivamente** con `current_user.id`.
+El cuerpo del request (`AgentStreamRequest`) usa `extra="ignore"`: un
+`user_id` o un `configurable` sueltos que un cliente intente colar en el
+body se descartan en silencio, nunca llegan al `config` que arma el
+servidor. Las tres herramientas de escritura firman la huella de aprobacion
+con ese `user_id` -- es la unica linea de defensa entre un cliente y una
+venta firmada a nombre de otro usuario, ver el docstring de `stream_agent`.
 
-### Que hace el servidor con el
+Un token ausente, vacio, vencido o invalido es un **401**, resuelto por
+`get_current_user` antes de que la conversacion llegue a existir -- antes
+incluso de que el endpoint compruebe que el hilo es del usuario, y muy
+antes de que arranque el streaming.
 
-`langgraph.json` declara el hook:
+**Orden de las validaciones dentro del endpoint:** `get_owned` (el hilo
+existe y es del usuario) corre ANTES de tocar el grafo o de devolver el
+`StreamingResponse`. Con SSE el `200 OK` sale con el primer byte del stream,
+y despues de eso el codigo de estado HTTP ya no se puede cambiar -- por eso
+un hilo ajeno o inexistente tiene que resolverse como **404** normal, antes
+de que arranque el stream, y no puede convertirse en un evento del stream
+mas adelante.
 
-```json
-"auth": { "path": "./app/agent/auth_hook.py:auth" }
+**No hay autorizacion mas alla de "el hilo es tuyo".** Una vez autenticado,
+un usuario puede leer y reanudar cualquier hilo **propio** -- `get_owned`
+filtra por `user_id` -- pero no hay roles distintos dentro del agente: para
+un negocio de un solo dueño con un puñado de usuarios de confianza es
+aceptable.
+
+## El contrato del panel: los eventos SSE
+
+`app/agent/streaming.py::eventos_sse` traduce `graph.astream(entrada, config,
+stream_mode=["messages", "updates"])` a cinco tipos de evento, cada uno
+`{"event": str, "data": dict}`, mandados por el endpoint como una linea SSE
+(`event: <tipo>\ndata: <json>\n\n`).
+
+### `token`
+
+Un fragmento de texto que el modelo va generando. Ejemplo:
+
+```
+event: token
+data: {"texto": "Para confirmar, "}
 ```
 
-En cada request, el servidor corre el handler `@auth.authenticate` de ese
-archivo. El handler valida el token contra Firebase (el mismo
-`verify_firebase_token` que usa la API), resuelve o crea el `User` local
-(`resolve_user`) y devuelve su `id` como `identity`. El servidor deja ese
-valor en el `configurable` de la corrida bajo `langgraph_auth_user_id`, y ahi
-lo lee `user_id_from_config` -- el unico canal por el que las tres
-herramientas de escritura saben quien firma una venta o una compra.
+### `herramienta`
 
-**Esa clave es afirmada por el servidor, no por el panel.**
-`langgraph_auth_user_id` (y `langgraph_auth_user`) estan en las claves
-reservadas del servidor. Si un request las manda en su propio `config`, el
-servidor **las borra en silencio y loguea un warning** -- no rechaza el
-request (`sanitize_reserved_keys`, `validation.py:164-170`; el patron que si
-rechazaria esta definido y no se usa). Y aunque no las borrara, las
-sobreescribe: al crear la corrida escribe encima el valor que salio del
-handler de autenticacion. Es la diferencia que importa: un `user_id` suelto
-en `config.configurable` -- que es lo que esta rama leia antes de esta
-correccion -- ni se descarta ni se pisa, asi que es un dato que el llamador
-afirma y nadie valida, y cualquiera que alcanzara el puerto podia escribir
-como quien quisiera. `user_id_from_config` ya **no** lo acepta.
+El modelo pidio una llamada a herramienta. Trae solo el nombre y un estado
+fijo -- no los argumentos: los de una escritura ya viajan en la
+`confirmacion` que sigue, mandarlos tambien aca seria un dato de mas (y para
+`registrar_venta`, una lista de items entera) que nadie pidio. Ejemplo:
 
-La identidad se reinyecta en cada corrida y no se persiste en el checkpoint.
-Eso incluye la corrida que reanuda una pausa de `interrupt()`: una aprobacion
-la firma quien la aprueba, con el token de ESE request, no quien empezo la
-conversacion dias antes.
+```
+event: herramienta
+data: {"nombre": "registrar_venta", "estado": "llamando"}
+```
 
-### Que pasa si el token falta o no sirve
+### `confirmacion`
 
-Un token ausente, vacio, vencido o invalido es un **401** del servidor, antes
-de que la conversacion llegue a existir. El handler convierte a 401 tambien
-el caso de que Firebase no se pueda inicializar en el proceso del agente
-(credenciales ausentes en el servicio): el request no esta autenticado, y un
-500 seria una mentira sobre la causa.
+Una herramienta de escritura se detuvo en `interrupt()` y necesita
+aprobacion humana. `data` es exactamente el payload que la herramienta le
+paso a `interrupt()` -- incluida la `huella` (ver la seccion siguiente), sin
+que esta capa la toque ni la firme de nuevo. Ejemplo:
 
-### Dos limites conocidos
+```
+event: confirmacion
+data: {"tipo": "confirmar_venta", "huella": {"datos": {...}, "firma": "..."}, "preview": {...}}
+```
 
-- **No hay autorizacion, solo autenticacion.** El hook registra
-  `@auth.authenticate` y ningun handler `@auth.on`. Una vez autenticado,
-  cualquier usuario puede listar, leer y reanudar cualquier hilo del
-  servidor -- incluidas las aprobaciones pendientes de otro. Para un negocio
-  de un solo dueño con un puñado de usuarios de confianza es aceptable;
-  aislar hilos por usuario es una pieza aparte, con su propio criterio de
-  producto sobre quien puede ver que conversacion.
-- **LangGraph Studio no pasa por este hook.** Con la autenticacion de Studio
-  activa (el default), un request del Studio se autentica contra LangSmith y
-  la identidad que llega es `"langgraph-studio-user"`, no un UUID de la tabla
-  `users`. Las herramientas de LECTURA funcionan; las tres de escritura
-  fallan con `AgentAuthError` porque esa identidad no es un UUID valido. Para
-  probar escrituras desde el Studio hay que agregar
-  `"disable_studio_auth": true` al bloque `auth` de `langgraph.json` y mandar
-  un token de Firebase real, o probarlas desde el panel.
+**Dos herramientas hermanas que interrumpen en el mismo turno producen DOS
+eventos `confirmacion`** -- una por cada `interrupt()`, en el orden en que
+vienen en la lista `__interrupt__` del chunk de `"updates"` -- **y un solo
+`fin`** con `estado: "pausado"` al final, no uno por confirmacion.
+`tests/test_agent_graph.py::test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_still_interrupted`
+prueba, contra las dos herramientas de escritura reales en el mismo mensaje
+del modelo, que ese `__interrupt__` trae efectivamente dos entradas
+(`len(interrupts) == 2`); `eventos_sse` itera esa lista una por una y solo
+manda el `fin` despues de que el `astream` termina, no despues de cada
+`interrupt()`.
 
-**Nada de esta seccion se corrio contra un servidor LangGraph de verdad** --
-vale la misma advertencia que la seccion "Levantarlo". Lo que si esta
-verificado, leyendo el fuente de `langgraph-sdk` 0.2.9 (instalado en este
-venv), `langgraph-cli` 0.4.32 y `langgraph-api` 0.15.1: la forma de la
-entrada `auth` en `langgraph.json`, que un handler sincrono esta soportado
-(el servidor lo envuelve en `run_in_threadpool`), que `authorization` es un
-parametro que el servidor sabe inyectar, que el resultado aterriza en
-`configurable` como `langgraph_auth_user_id`, y que esa clave es reservada
-(se descarta del request entrante y se sobreescribe al crear la corrida).
-`app/agent/auth_hook.py` cita el archivo y la linea de cada uno de esos
-puntos.
+**Al reanudar, las llamadas a herramienta que quedaron pendientes NO se
+vuelven a anunciar.** El evento `herramienta` sale del nodo del modelo (el
+`AIMessage` con `tool_calls` que decide que llamar); reanudar un
+`interrupt()` con `Command(resume=...)` continua la tarea de Pregel que
+quedo pausada dentro del nodo de herramientas, no vuelve a invocar al
+modelo -- asi que no hay un `AIMessage` nuevo del que salga un `herramienta`
+repetido para esas llamadas. Un panel que cuenta "cuantas herramientas se
+anunciaron" no debe esperar volver a ver las que ya estaban pendientes antes
+de la pausa.
+
+### `fin`
+
+Cierra el stream. `estado` es `"completo"` (la corrida termino sin
+pausarse) o `"pausado"` (hubo uno o mas `interrupt()`). Ejemplo:
+
+```
+event: fin
+data: {"estado": "completo"}
+```
+
+### `error`
+
+**Un error a mitad del turno es un evento `error`, nunca un codigo HTTP.**
+Con SSE el `200 OK` ya salio con el primer byte de la respuesta -- para
+cuando algo revienta adentro del `astream` (una herramienta que levanta una
+excepcion, un problema de conexion a Postgres a mitad de una escritura), no
+hay forma de cambiar el codigo de estado. `eventos_sse` atrapa la excepcion,
+loguea el traceback completo del lado del servidor (`logger.exception`, para
+diagnostico) y manda un evento `error` con un mensaje fijo en español, sin
+nombre de excepcion ni detalle de implementacion -- quien vende no necesita
+saber que fue un `ValueError`, y un `str(exc)` crudo de psycopg/SQLAlchemy
+arrastraria SQL y datos de conexion hasta el panel. Ejemplo:
+
+```
+event: error
+data: {"mensaje": "Hubo un problema y no se registro nada. Intenta de nuevo."}
+```
+
+`error` es siempre el ultimo evento del stream cuando aparece -- no hay
+`fin` despues.
+
+### Contrato del generador, en una linea
+
+Siempre termina, y termina en un evento terminal: `fin` (completo o
+pausado) o `error`. Nunca los dos. Un stream que no cierra deja al panel
+esperando para siempre; uno que sigue vivo despues de un terminal manda
+eventos que ya nadie deberia leer.
+
+### El agente no disponible: `503`
+
+Si el grafo no se pudo construir al arrancar (ver "Como esta servido" --
+tipicamente Postgres caido en ese momento), `request.app.state.agent_graph`
+es `None` y `/stream` responde **503** con un mensaje fijo, antes de tocar
+`eventos_sse`, antes de devolver el `StreamingResponse` -- este es un codigo
+HTTP normal porque pasa antes del primer byte del stream, a diferencia del
+caso de `error` de arriba. `GET /health` en ese momento reporta
+`agent_graph_init_failed` en `startup_issues`: un operador que ve el 503
+tiene que mirar ahi para confirmar que la causa es que el grafo nunca
+arranco, no un fallo puntual de esa corrida.
+
+### El hilo ocupado: `409`
+
+Un segundo pedido sobre un `thread_id` que ya tiene una corrida en curso
+responde **409**, tambien antes del primer byte -- ver la seccion
+"Desplegarlo" arriba para la restriccion de un solo proceso de la que
+depende esto.
+
+### Un cliente que se desconecta cancela la corrida de verdad
+
+El endpoint itera `eventos_sse` directo (`async for evento in
+eventos_sse(...): yield ...`), sin una tarea propia ni sondeo de
+`is_disconnected()`. Cuando Starlette detecta que el cliente se fue,
+cancela la tarea que esta sirviendo el pedido, y esa cancelacion llega
+directo a donde el generador esta suspendido -- adentro de `eventos_sse`,
+que deja pasar `asyncio.CancelledError` sin convertirla en un evento
+`error` (es `except Exception`, no `except BaseException`, a proposito). El
+turno muere ahi: no sigue gastando modelo contra un cliente que ya no esta
+escuchando. Probado con una cancelacion real de la tarea ASGI en
+`tests/test_agent_stream_endpoint.py::test_a_disconnected_client_cancels_the_run`
+y, contra la funcion real (no un doble), en
+`tests/test_agent_streaming.py::test_a_cancelled_run_dies_instead_of_becoming_an_error_event`.
 
 ## El contrato del panel: la huella
 
-> **La huella va firmada.** Desde 2026-09-29 el sobre que el panel recibe es
-> `{"datos": ..., "firma": "<hmac-sha256>"}`. **Para el panel no cambia nada**:
-> lo sigue guardando opaco y lo sigue devolviendo tal cual. Lo que cambia es
-> que el servidor ahora puede verificar que esa huella la emitio el.
+> **La huella va firmada.** El sobre que el panel recibe es
+> `{"datos": ..., "firma": "<hmac-sha256>"}`. **Para el panel no cambia
+> nada**: lo sigue guardando opaco y lo sigue devolviendo tal cual. Lo que
+> cambia es que el servidor puede verificar que esa huella la emitio el.
 >
 > Antes solo podia comparar el valor recibido contra el estado actual de la
 > base: un panel que RECALCULARA la huella en vez de guardarla apagaba la
 > comparacion **en silencio** y era indetectable. Ahora esa falla devuelve
 > `"estado": "huella_no_valida"` la primera vez.
 >
-> Requiere `AGENT_HUELLA_SECRET` en el entorno del agente. Si falta, el agente
-> **se niega** a emitir o verificar una aprobacion en vez de degradar a sin
-> firma. Rotar el secreto invalida las aprobaciones pendientes en ese momento:
-> hay que volver a aprobarlas.
+> Requiere `AGENT_HUELLA_SECRET` en el entorno. Si falta, el agente **se
+> niega** a emitir o verificar una aprobacion en vez de degradar a sin
+> firma. Rotar el secreto invalida las aprobaciones pendientes en ese
+> momento: hay que volver a aprobarlas.
 >
-> Los cuatro estados de una aprobacion: `registrado`, `recalculado` (el
-> inventario cambio), `aprobacion_sin_huella` (no vino), `huella_no_valida`
-> (vino una que este servidor no emitio).
+> Los estados de una aprobacion: `registrado` (se escribio), `cancelado`
+> (no se escribio nada, a pedido), `ya_registrado` (esta tarea ya habia
+> escrito antes -- ver "Idempotencia"), `recalculado` (el inventario
+> cambio entre el preview y la aprobacion), `aprobacion_sin_huella` (la
+> aprobacion no trajo huella utilizable), `huella_no_valida` (vino una
+> huella que este servidor no emitio).
 
 Esta es la seccion mas importante de este documento. Un panel que la
 ignora no falla ruidosamente -- deja pasar aprobaciones sin ninguna
@@ -575,8 +504,8 @@ como un error: nada se escribio de mas y no hay nada que corregir.
 - **La tabla se crea sola, la primera vez que una herramienta escribe.** No
   hay migracion de Alembic (a proposito: el schema `agent` esta fuera de su
   radar), asi que el usuario de la base necesita permiso de `CREATE` --
-  el mismo que ya necesita para que `_postgres_checkpointer` cree el schema
-  `agent` y las tablas del checkpointer al construir el grafo.
+  el mismo que ya necesita para que `build_async_checkpointer` cree el
+  schema `agent` y las tablas del checkpointer al construir el grafo.
 - **Una invocacion directa de la herramienta, fuera de un grafo, no se
   desduplica.** No hay id de tarea, no hay reanudacion posible, y dos
   llamadas son dos hechos distintos. La guardia se desactiva sola en vez de
@@ -627,8 +556,8 @@ y no lo es.
    produccion si el agente todavia no esta desplegado).
 3. Verificar que `CashService.running_balance()` devuelve exactamente ese
    numero -- sin ninguna venta ni compra todavia registrada encima.
-4. Recien entonces desplegar el servicio del agente (o el cambio del
-   orquestador de ventas, si no se habia desplegado antes). A partir de
+4. Recien entonces desplegar el cambio (el grafo del agente, o el cambio
+   del orquestador de ventas, si no se habia desplegado antes). A partir de
    ahi, cada venta pagada y cada compra confirmada se suman/restan sobre
    ese punto de partida real.
 
