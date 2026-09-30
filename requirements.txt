@@ -31,6 +31,12 @@ langgraph==1.0.3
 langgraph-checkpoint==3.0.1
 langgraph-checkpoint-postgres==3.0.1
 langgraph-prebuilt==1.0.4
+# Ya no la importa ningun fuente nuestro (Task 3 borro app/agent/auth_hook.py,
+# su unico consumidor) -- pero langgraph==1.0.3 la declara en su requires_dist
+# (langgraph-sdk<0.3.0,>=0.2.2) y sigue entrando transitivamente. Se pinea por
+# la misma convencion que el resto del archivo: todo pineado, incluidas las
+# dependencias transitivas.
+langgraph-sdk==0.2.9
 langsmith==0.4.44
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3

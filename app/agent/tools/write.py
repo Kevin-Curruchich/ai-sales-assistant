@@ -315,11 +315,12 @@ def registrar_venta(
     # Autenticar ANTES de interrumpir: pedirle a una persona que apruebe algo
     # que nunca se iba a poder escribir es el orden equivocado, aunque nada
     # se escriba (no era un bug de correccion, era un orden raro -- ronda 2
-    # de revision). El `user_id` lo puso el SERVIDOR en el `configurable` de
-    # la corrida, resolviendo el token de Firebase que mando el panel
-    # (`app/agent/auth_hook.py`, bajo una clave que el validador del servidor
-    # no deja mandar al llamador); `config` lo inyecta LangGraph, el modelo
-    # no lo ve ni lo puede inventar.
+    # de revision). El `user_id` viene del `configurable` que arma quien
+    # invoca el grafo -- hoy el endpoint que corre en el mismo proceso
+    # FastAPI (Task 6, todavia no escrito) -- y que esa identidad corresponda
+    # a una sesion autenticada es responsabilidad de ese invocador, no de
+    # esta funcion; `config` lo pasa LangGraph, el modelo no lo ve ni lo
+    # puede inventar.
     usuario_id = user_id_from_config(config)
     clave_escritura = idempotency.write_key(config)
 
@@ -747,8 +748,8 @@ def registrar_movimiento_caja(
     nuevo).
     """
     # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
-    # para asociar el movimiento a nadie, sino para comprobar que el
-    # SERVIDOR autentico esta corrida (`app/agent/auth_hook.py`), y se hace
+    # para asociar el movimiento a nadie, sino para comprobar que esta
+    # corrida trae una identidad valida en `configurable`, y se hace
     # ANTES de interrumpir: sin ella, un hilo sin autenticar podia
     # interrumpir a una persona, juntar una aprobacion, y recien ahi
     # reventar -- pedirle a alguien que apruebe algo que nunca se iba a

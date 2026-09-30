@@ -24,7 +24,7 @@ def agent_session():
 
 #: La clave bajo `config["configurable"]` donde el endpoint deja el
 #: `user_id` que salio de `get_current_user`.
-AUTH_USER_ID_KEY = "user_id"
+USER_ID_CONFIGURABLE_KEY = "user_id"
 
 
 def user_id_from_config(config: dict) -> uuid.UUID:
@@ -44,14 +44,14 @@ def user_id_from_config(config: dict) -> uuid.UUID:
     except (KeyError, TypeError) as exc:
         raise AgentAuthError(
             f"config['configurable'] falta -- se esperaba "
-            f"'{AUTH_USER_ID_KEY}' puesto por el endpoint"
+            f"'{USER_ID_CONFIGURABLE_KEY}' puesto por el endpoint"
         ) from exc
 
-    raw_user_id = configurable.get(AUTH_USER_ID_KEY)
+    raw_user_id = configurable.get(USER_ID_CONFIGURABLE_KEY)
 
     if raw_user_id is None:
         raise AgentAuthError(
-            f"config['configurable']['{AUTH_USER_ID_KEY}'] falta -- el "
+            f"config['configurable']['{USER_ID_CONFIGURABLE_KEY}'] falta -- el "
             "endpoint no armo el `configurable` con la identidad de "
             "`get_current_user` antes de invocar al agente."
         )
@@ -63,6 +63,6 @@ def user_id_from_config(config: dict) -> uuid.UUID:
         return uuid.UUID(str(raw_user_id))
     except (ValueError, AttributeError) as exc:
         raise AgentAuthError(
-            f"config['configurable']['{AUTH_USER_ID_KEY}'] no es un UUID "
+            f"config['configurable']['{USER_ID_CONFIGURABLE_KEY}'] no es un UUID "
             f"valido: {raw_user_id!r}"
         ) from exc

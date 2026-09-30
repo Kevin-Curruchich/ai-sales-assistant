@@ -195,9 +195,9 @@ def graph(config: dict | None = None):
     (`_factory_utils.py::_classify_factory`) -- pero como el grafo se
     construye una sola vez y lo comparten todas las corridas, nada por
     corrida puede quedar horneado aca, y menos que nada la identidad de quien
-    escribe. Esa identidad viaja por corrida, en el `configurable` que el
-    hook de `app/agent/auth_hook.py` hace que el servidor inyecte, y la leen
-    las herramientas con `user_id_from_config`.
+    escribe. Esa identidad viaja por corrida, en el `configurable` que arma
+    quien invoca el grafo, y la leen las herramientas con
+    `user_id_from_config`.
     """
     global _graph_singleton
     if _graph_singleton is None:
