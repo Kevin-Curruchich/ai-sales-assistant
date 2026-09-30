@@ -10,6 +10,7 @@ from langgraph.types import Command
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.agent.historial import traducir_estado
 from app.agent.streaming import eventos_sse
 from app.api.dependencies import get_db, get_current_user
 from app.models import User
@@ -85,6 +86,78 @@ def delete_thread(
 ):
     service = AgentThreadService(db)
     service.delete_owned(thread_id, current_user.id)
+
+
+@router.get("/threads/{thread_id}/state")
+async def get_thread_state(
+    thread_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """La conversacion guardada de un hilo y las confirmaciones que tiene abiertas.
+
+    ## Para que existe
+
+    El panel recarga la pagina, y hasta que este endpoint existio eso dejaba la
+    conversacion inservible: el panel no sabia que habia una tarjeta de
+    confirmacion pendiente, y sobre todo **no podia aprobarla** -- la huella
+    viajo una sola vez, en el evento `confirmacion` de ese turno, y se fue con el
+    estado del navegador. Recuperarla por aca es lo unico que permite aprobar
+    despues de un refresh.
+
+    Aparte de `GET /threads/{thread_id}` y no metido adentro: el listado y el get
+    de un hilo son consultas a una tabla, y solo este paga la lectura del
+    checkpoint.
+
+    ## La forma
+
+    Cada confirmacion pendiente sale con la MISMA forma que el `data` del evento
+    `confirmacion` del stream -- el `interrupt_id` mezclado con las claves del
+    payload -- para que el panel use un solo renderer para la tarjeta, venga del
+    stream o de un refresh. La traduccion vive en
+    `app/agent/historial.py::traducir_estado`, y un test compara las dos salidas
+    para el mismo contenido: si divergen, el historial que el panel carga tras un
+    refresh no coincide con lo que la persona acababa de ver.
+
+    ## Por que no declara `response_model`
+
+    Un modelo estricto tendria que enumerar las claves del payload de un
+    `interrupt()`, y Pydantic descarta en silencio las que no declara. El dia que
+    una herramienta agregue un campo -- o, peor, si alguien se olvida de la
+    `huella` al escribir el modelo -- el panel recibiria una tarjeta sin lo que
+    necesita para aprobar, que es exactamente la falla que este endpoint vino a
+    arreglar. La forma la fijan los tests, no un modelo que puede mentir por
+    omision.
+
+    ## El `config` no lleva `user_id`
+
+    A diferencia de `/stream`, aca no se corre nada ni se firma nada: `aget_state`
+    solo necesita el `thread_id` para encontrar el checkpoint. Poner un `user_id`
+    que nadie lee sugeriria que cumple un rol. Quien puede leer este hilo ya lo
+    decidio `get_owned`, una linea mas arriba.
+
+    El I/O sincronico de SQLAlchemy va por `run_in_threadpool` por lo mismo que en
+    `stream_agent`: esta funcion es `async def`, corre en el unico event loop del
+    proceso (hypercorn sin `--workers`), y una consulta lenta bloqueando ahi frena
+    todos los pedidos en vuelo.
+    """
+    service = AgentThreadService(db)
+    thread = await run_in_threadpool(service.get_owned, thread_id, current_user.id)
+
+    graph = request.app.state.agent_graph
+    if graph is None:
+        # Igual que en `stream_agent`: el lifespan deja `agent_graph = None` si
+        # falta una variable obligatoria del agente o si Postgres no respondio al
+        # arrancar. Sin este chequeo, `aget_state` sobre `None` seria un
+        # `AttributeError` que el panel veria como un 500 opaco.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="El agente no esta disponible en este momento. Intenta de nuevo en unos minutos.",
+        )
+
+    snapshot = await graph.aget_state({"configurable": {"thread_id": str(thread.id)}})
+    return traducir_estado(snapshot)
 
 
 class AgentStreamRequest(BaseModel):
@@ -343,11 +416,13 @@ async def stream_agent(
             # recibe OTRA `confirmacion` como si nunca hubiera aprobado nada
             # -- verificado contra langgraph 1.0.3.
             #
-            # El `detail` nombra los ids abiertos porque no hay ningun endpoint
-            # que los devuelva (`GET /threads/{id}` trae solo el titulo y las
-            # fechas) y decirle al panel "volve a pedir el estado del hilo"
-            # seria mandarlo a hacer algo que no existe. No son secretos: quien
-            # llega hasta aca ya probo que el hilo es suyo (`get_owned`).
+            # El `detail` nombra los ids abiertos igual que antes de que
+            # `GET /threads/{id}/state` existiera: ahora hay donde pedirlos, pero
+            # tenerlos ya en la respuesta le ahorra al panel un viaje justo en el
+            # momento en que su estado quedo desincronizado. No son secretos:
+            # quien llega hasta aca ya probo que el hilo es suyo (`get_owned`).
+            # El endpoint de estado sigue siendo el camino canonico -- y el unico
+            # que trae la HUELLA, sin la cual el id solo no alcanza para aprobar.
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
@@ -357,7 +432,8 @@ async def stream_agent(
                         "La que sigue abierta es "
                         f"{', '.join(sorted(pendientes))} -- respondé esa (el id es estable, "
                         "y vuelve a viajar en el evento 'confirmacion' cada vez que el hilo "
-                        "se reanuda)."
+                        "se reanuda). Si perdiste la huella, pedila en "
+                        "GET /api/v1/agent/threads/{thread_id}/state."
                         if pendientes
                         else "No queda ninguna abierta: mandá un 'mensaje' para seguir."
                     )

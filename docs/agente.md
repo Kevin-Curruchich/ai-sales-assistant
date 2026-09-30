@@ -242,6 +242,63 @@ filtra por `user_id` -- pero no hay roles distintos dentro del agente: para
 un negocio de un solo dueño con un puñado de usuarios de confianza es
 aceptable.
 
+## El contrato del panel: cargar un hilo
+
+```
+GET /api/v1/agent/threads/{thread_id}/state
+```
+
+Devuelve la conversacion guardada y las confirmaciones que el hilo tiene
+abiertas **ahora**:
+
+```json
+{
+  "mensajes": [
+    {"rol": "usuario", "texto": "vendi dos cartones a Aurita"},
+    {"rol": "herramienta", "nombre": "previsualizar_venta"},
+    {"rol": "asistente", "texto": "Son Q50. Confirmas?"}
+  ],
+  "confirmaciones_pendientes": [
+    {"tipo": "confirmar_venta", "preview": {"...": "..."},
+     "huella": {"datos": "...", "firma": "..."}, "interrupt_id": "05094bc4..."}
+  ]
+}
+```
+
+**Es lo que hace que un refresh no rompa nada.** Hasta que existio, un panel
+que se recargaba con una confirmacion abierta quedaba sin salida: no sabia que
+habia una tarjeta pendiente, y sobre todo no podia aprobarla, porque la huella
+habia viajado una sola vez -- en el evento `confirmacion` de ese turno -- y se
+fue con el estado del navegador. Sin huella la aprobacion cae en
+`aprobacion_sin_huella`.
+
+**Cada confirmacion pendiente tiene la misma forma que el `data` del evento
+`confirmacion`**, incluido el `interrupt_id` mezclado con las claves del
+payload. Es a proposito: el panel usa **un solo renderer** para la tarjeta,
+venga del stream en vivo o de esta carga. Y la huella sale **byte por byte
+igual** a la que se firmo, porque la comparacion del lado de la herramienta es
+exacta -- un servidor que la reformateara aunque sea un poco dejaria al panel
+sin poder aprobar tras un refresh.
+
+Las reglas de que entra en `mensajes`: lo que la persona escribio (`usuario`),
+el texto del agente (`asistente`), y que herramienta corrio y donde
+(`herramienta`, con su `nombre`, en la posicion en que el modelo la pidio). Los
+resultados de las herramientas y el prompt del sistema **no** son conversacion y
+no aparecen. Un `AIMessage` sin texto -- uno que solo pide herramientas --
+tampoco: seria una burbuja vacia, la misma regla que el evento `token`.
+
+Una confirmacion **ya respondida** no aparece, aunque el paso todavia no haya
+terminado. Si apareciera, el panel mostraria al recargar una tarjeta que la
+persona ya aprobo, y aprobarla de nuevo daria 409.
+
+Un hilo recien creado, que nunca corrio, devuelve las dos listas vacias -- no un
+404: es una conversacion sin empezar, y el panel tiene que poder abrirla. Un
+hilo ajeno o inexistente sigue siendo **404**, el mismo de siempre. Si el agente
+no arranco, **503**, igual que `/stream`.
+
+Sin paginado: las conversaciones largas estan declaradas fuera de alcance en el
+spec, y la salida manual es abrir un hilo nuevo.
+
 ## El contrato del panel: los eventos SSE
 
 `app/agent/streaming.py::eventos_sse` traduce `graph.astream(entrada, config,
@@ -381,7 +438,8 @@ verdad", mas abajo). No hay nadie escuchando a quien mandarle un `fin`, y
 convertir la cancelacion en un evento seria dejar la corrida viva gastando
 modelo -- que es justamente lo que esta rama arreglo. Un panel que se reconecta
 no debe esperar el `fin` del turno que abandono: tiene que volver a leer el
-estado del hilo.
+estado del hilo con `GET /threads/{thread_id}/state` (ver "El contrato del
+panel: cargar un hilo").
 
 ### El agente no disponible: `503`
 
