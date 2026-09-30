@@ -8,7 +8,10 @@ from sqlalchemy import create_engine, text
 # las Tasks 4, 5, 7 y 8: `db_session`, `seeded_user`, `seeded_customer`,
 # `seeded_product_with_lot`, `seeded_product_with_one_lot`,
 # `seeded_purchase_draft`.
-pytest_plugins = ["tests.fixtures_domain"]
+#
+# Harness de tests HTTP autenticados (Task 2): `client`, `_auth`,
+# `_create_thread_as`. La Task 6 tambien lo consume.
+pytest_plugins = ["tests.fixtures_domain", "tests.fixtures_http"]
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
