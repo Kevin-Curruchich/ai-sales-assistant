@@ -13,10 +13,27 @@ del endpoint: un espia puesto adentro podria dar verde sin que el endpoint sea
 realmente quien arma el config, que es justo lo que
 `test_the_user_id_comes_from_the_token_and_not_from_the_body` tiene que
 demostrar.
+
+Fix Round 1 (sobre el commit `b8719df`) tiro abajo el mecanismo de
+desconexion que tenia el endpoint (sondeo de `is_disconnected()` + tarea
+propia con `asyncio.ensure_future`): medido contra hypercorn 0.18.0 real, ese
+mecanismo NUNCA detectaba la desconexion y la corrida del grafo seguia viva
+gastando modelo -- peor que no hacer nada. El reemplazo es iterar el
+generador derecho y dejar que la cancelacion de Starlette se propague sola
+(ver el docstring de `stream_agent` en `app/api/v1/endpoints/agent.py`). Los
+dos tests de desconexion de aca abajo (`test_a_disconnected_client_...` y
+`test_a_client_that_disconnects_before_the_first_byte_...`) manejan la app
+por ASGI directo y cancelan la TAREA que corre el pedido -- asi es como
+Starlette entrega una desconexion real (via `listen_for_disconnect`, que
+cancela el task group entero) -- en vez de depender de que
+`httpx.ASGITransport` simule un socket que corta a mitad, cosa que no hace
+(corre la app entera a completo antes de devolver el control; confirmado
+empiricamente y documentado en `task-6-report.md`).
 """
 
 import asyncio
 import contextlib
+import threading
 import uuid
 
 import httpx
@@ -30,6 +47,7 @@ import app.main as main
 from app.api.dependencies import bearer_scheme, get_current_user, get_db
 from app.api.v1.endpoints import agent as agent_endpoints
 from app.models import User
+from app.services.agent_thread_service import AgentThreadService
 from tests.fixtures_http import _auth, _create_thread_as
 from tests.test_agent_graph import FakeToolCallingModel
 
@@ -68,11 +86,11 @@ def _grafo_de_juguete(monkeypatch):
     juguete en `app.state.agent_graph` en vez de uno conectado a Anthropic y
     al schema `agent` real.
 
-    El test de la desconexion (`test_a_disconnected_client_cancels_the_run`)
-    usa la fixture `app`, no `client`, y monkeypatchea `eventos_sse` entero
-    -- nunca llega a tocar este grafo, asi que la sustitucion es inofensiva
-    ahi. El test del 503 pisa `app.state.agent_graph` a `None` en su propio
-    cuerpo, despues de que `client` ya corrio el lifespan.
+    Los tests de desconexion usan la fixture `app`, no `client`, y
+    monkeypatchean `eventos_sse` entero -- nunca llegan a tocar este grafo,
+    asi que la sustitucion es inofensiva ahi. El test del 503 pisa
+    `app.state.agent_graph` a `None` en su propio cuerpo (y lo restaura),
+    despues de que `client` ya corrio el lifespan.
     """
     graph = _construir_grafo_de_juguete()
 
@@ -110,94 +128,22 @@ def _marcar_ocupado(thread_id) -> None:
     agent_endpoints._hilos_en_curso.add(str(thread_id))
 
 
-class _EnvoltorioDesconexionInmediata:
-    """Hace que `httpx.ASGITransport` simule un cliente real que lee UN
-    evento y se va a mitad de un stream -- cosa que, verificado de forma
-    empirica (ver el informe de esta task), `httpx.ASGITransport` NO hace
-    por si solo.
-
-    `ASGITransport.handle_async_request` (httpx 0.28.1) corre la app ASGI
-    ENTERA hasta el final antes de devolverle el control a quien la llamo:
-    `ASGIResponseStream.__aiter__` hace `yield b"".join(self._body)` UNA
-    sola vez, sobre el cuerpo YA COMPLETO. Confirmado con un cronometro: un
-    generador de juguete que tarda 5 segundos en terminar hace que
-    `async with ac.stream(...) as resp:` tarde esos mismos 5 segundos en
-    ENTRAR al bloque -- para cuando el test lee la primera linea y hace
-    `break`, la corrida entera ya paso, sin que nada la haya podido
-    interrumpir. Ninguna forma de escribir el endpoint cambia esto: el
-    cliente de prueba no tiene forma de "irse a mitad" de algo que ya
-    termino.
-
-    Este envoltorio le da a la prueba lo que un servidor ASGI real (como
-    hypercorn) SI provee: corre la app real en una tarea propia, y reenvia
-    los primeros dos mensajes ASGI (`http.response.start` y el PRIMER
-    `http.response.body`) a httpx forzando `more_body=False` en el segundo
-    -- asi httpx da la respuesta por terminada apenas llega el primer
-    evento, exactamente lo que un cliente real veria si cortara la conexion
-    ahi. Como el `receive()` que le pasa a la app real es el MISMO closure
-    de httpx (no uno propio), y ese closure resuelve a `http.disconnect` en
-    cuanto httpx considera la respuesta completa (`response_complete.wait()`
-    en `httpx/_transports/asgi.py`), `request.is_disconnected()` -- que es
-    lo que el endpoint sondea -- empieza a ver la desconexion DE VERDAD
-    apenas se fuerza ese `more_body=False`. Verificado con un probe
-    standalone antes de integrarlo aca: sin este envoltorio, el generador de
-    juguete corre las 5 segundos completas; con el, se cancela en
-    milisegundos.
-
-    No cambia el endpoint ni el cuerpo del test -- es infraestructura de
-    prueba, nada mas: un cliente real (o `client`, el `TestClient` sincrono
-    que usan los otros siete tests de este archivo) nunca pasa por aca.
-    """
-
-    def __init__(self, real_app):
-        self._real_app = real_app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self._real_app(scope, receive, send)
-            return
-
-        salida: asyncio.Queue = asyncio.Queue()
-
-        async def _send_a_la_cola(message):
-            await salida.put(message)
-
-        tarea_app = asyncio.ensure_future(self._real_app(scope, receive, _send_a_la_cola))
-
-        inicio = await salida.get()
-        await send(inicio)
-
-        primer_cuerpo = dict(await salida.get())
-        primer_cuerpo["more_body"] = False
-        await send(primer_cuerpo)
-
-        # httpx ya considera la respuesta terminada -- el mismo `receive()`
-        # que la app real recibio arriba resuelve a `http.disconnect` de
-        # aca en mas. La tarea de la app sigue viva (esta en medio del
-        # SEGUNDO evento): darle tiempo a que su propio sondeo de
-        # `is_disconnected()` la agarre y se cierre sola.
-        try:
-            await asyncio.wait_for(tarea_app, timeout=2)
-        except asyncio.TimeoutError:
-            tarea_app.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await tarea_app
-
-
 @pytest.fixture
 def app(db_session):
-    """Como `client` (`tests/fixtures_http.py`), pero entrega una app ASGI
-    envuelta en `_EnvoltorioDesconexionInmediata` en vez de pasar por
-    `TestClient`: el test de la desconexion necesita manejar el transporte
-    el mismo con `httpx.ASGITransport`, que es directo y asincronico -- por
-    eso el comentario del test dice "va por ASGI directo" -- y ese
-    transporte, sin el envoltorio, no puede simular una desconexion a
-    mitad de un stream (ver el docstring de la clase de arriba).
+    """Como `client` (`tests/fixtures_http.py`), pero entrega la app ASGI
+    cruda en vez de envolverla en `TestClient`: los tests de desconexion
+    necesitan manejar el transporte ellos mismos con `httpx.ASGITransport` y
+    cancelar la tarea que corre el pedido a mano -- `TestClient` no expone
+    esa tarea.
 
-    No dispara el lifespan real (no hace falta: el unico test que usa esta
-    fixture monkeypatchea `eventos_sse` entero, asi que nunca toca
+    No dispara el lifespan real (no hace falta: los tests que usan esta
+    fixture monkeypatchean `eventos_sse` entero, asi que nunca tocan
     `app.state.agent_graph` de verdad) -- solo necesita que no sea `None`
-    para pasar el chequeo de 503.
+    para pasar el chequeo de 503. `getattr(..., None)`, no acceso directo:
+    si esta fixture corre antes que `client` en algun orden de tests, el
+    lifespan real todavia no puso `agent_graph` en `app.state` y el acceso
+    directo tira `KeyError` (Fix Round 1, FIX 5 -- reproducido con
+    `pytest -k disconnected`).
     """
 
     def _override_get_db():
@@ -217,18 +163,18 @@ def app(db_session):
 
     main.app.dependency_overrides[get_db] = _override_get_db
     main.app.dependency_overrides[get_current_user] = _override_get_current_user
-    anterior = main.app.state.agent_graph
+    anterior = getattr(main.app.state, "agent_graph", None)
     main.app.state.agent_graph = object()
     try:
-        yield _EnvoltorioDesconexionInmediata(main.app)
+        yield main.app
     finally:
         main.app.dependency_overrides.clear()
         main.app.state.agent_graph = anterior
 
 
 async def _create_thread_async(app, user: User, title) -> dict:
-    """Equivalente async de `_create_thread_as`, para el unico test que no
-    puede pasar por `TestClient`."""
+    """Equivalente async de `_create_thread_as`, para los tests que no
+    pueden pasar por `TestClient`."""
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
         resp = await ac.post(
@@ -320,6 +266,22 @@ def test_the_first_message_titles_the_thread(client, seeded_user, db_session):
                       headers=_auth(seeded_user)).json()["title"].startswith("vendi dos cartones")
 
 
+def test_streaming_without_mensaje_or_decision_is_a_422(client, seeded_user):
+    """Fix Round 1, FIX 4: comportamiento agregado fuera del brief
+    (`stream_agent` no sabe que `entrada` armar si el cuerpo no trae ninguno
+    de los dos) que no tenia test -- comportamiento sin test es
+    comportamiento que nadie prometio mantener."""
+    hilo = _create_thread_as(client, seeded_user, "mio")
+
+    resp = client.post(
+        "/api/v1/agent/stream",
+        json={"thread_id": hilo["id"]},
+        headers=_auth(seeded_user),
+    )
+
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------
 # El grafo no disponible: 503, no un 500 opaco (decision fuera del brief)
 # ---------------------------------------------------------------------
@@ -333,19 +295,40 @@ def test_streaming_returns_503_when_the_graph_is_not_available(client, seeded_us
     explotaria con un `AttributeError` que el cliente veria como un 500
     opaco."""
     hilo = _create_thread_as(client, seeded_user, "mio")
+    anterior = main.app.state.agent_graph
     main.app.state.agent_graph = None
-
-    resp = client.post(
-        "/api/v1/agent/stream",
-        json={"thread_id": hilo["id"], "mensaje": "hola"},
-        headers=_auth(seeded_user),
-    )
-
-    assert resp.status_code == 503
+    try:
+        resp = client.post(
+            "/api/v1/agent/stream",
+            json={"thread_id": hilo["id"], "mensaje": "hola"},
+            headers=_auth(seeded_user),
+        )
+        assert resp.status_code == 503
+    finally:
+        # Fix Round 1, FIX 7: sin restaurar, este test deja
+        # `app.state.agent_graph` en `None` para lo que corra despues en el
+        # mismo proceso. Hoy es inofensivo porque `client` vuelve a correr
+        # el lifespan en cada test, pero es una dependencia de orden
+        # esperando su turno -- se restaura aca para no depender de eso.
+        main.app.state.agent_graph = anterior
 
 
 # ---------------------------------------------------------------------
 # La desconexion cancela la corrida -- no la deja huerfana
+#
+# Fix Round 1, FIX 1: la version anterior de estos tests usaba
+# `httpx.ASGITransport` + `async with ac.stream(...) as resp: ... break`,
+# confiando en que el cliente "se fuera" a mitad del stream. Eso NUNCA pasa
+# de verdad: `ASGITransport.handle_async_request` corre la app entera hasta
+# el final antes de devolverle el control a quien la llamo, asi que para
+# cuando el test lee la primera linea, la corrida ya termino sin que nada
+# la interrumpiera. El reemplazo -- sugerido en la revision, verificado acá
+# -- es manejar la app por ASGI directo y CANCELAR LA TAREA que corre el
+# pedido: es exactamente el mecanismo que Starlette usa para propagar una
+# desconexion real (`StreamingResponse.__call__` corre `stream_response` y
+# `listen_for_disconnect` en un mismo task group; cancelar la tarea que los
+# contiene a ambos cancela el grupo entero), asi que cancelar la tarea de
+# `ac.post(...)` reproduce ese camino sin necesitar un socket real.
 # ---------------------------------------------------------------------
 
 
@@ -353,9 +336,12 @@ def test_streaming_returns_503_when_the_graph_is_not_available(client, seeded_us
 async def test_a_disconnected_client_cancels_the_run(app, seeded_user, monkeypatch):
     """Falla numero 2 del Review Focus: la corrida no queda huerfana gastando modelo.
 
-    Con TestClient no se puede cortar a mitad, asi que va por ASGI directo: se
-    lee un evento y se cierra el contexto del stream.  El grafo de juguete marca
-    en `cancelado` cuando recibe CancelledError.
+    El grafo de juguete marca en `cancelado` cuando recibe `CancelledError`.
+    Mutacion verificada (evidencia en `task-6-report.md`): con el mecanismo
+    de sondeo que tenia este endpoint antes de Fix Round 1 (una tarea propia
+    con `asyncio.ensure_future` + `is_disconnected()`), este mismo test
+    queda rojo -- la corrida sigue viva. Con la iteracion directa
+    (`async for evento in eventos_sse(...): yield ...`), queda verde.
     """
     cancelado = {"si": False}
 
@@ -373,16 +359,103 @@ async def test_a_disconnected_client_cancels_the_run(app, seeded_user, monkeypat
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
-        async with ac.stream(
-            "POST", "/api/v1/agent/stream",
-            json={"thread_id": hilo["id"], "mensaje": "hola"},
-            headers=_auth(seeded_user),
-        ) as resp:
-            async for _linea in resp.aiter_lines():
-                break  # leimos el primer evento y nos vamos
+        tarea_pedido = asyncio.ensure_future(
+            ac.post(
+                "/api/v1/agent/stream",
+                json={"thread_id": hilo["id"], "mensaje": "hola"},
+                headers=_auth(seeded_user),
+            )
+        )
+        await asyncio.sleep(0.2)  # dejar salir el primer evento ("token")
+        tarea_pedido.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await tarea_pedido
 
-    await asyncio.sleep(0.1)  # dejar que la cancelacion se propague
+    await asyncio.sleep(0.1)  # dejar que la cancelacion termine de propagarse
     assert cancelado["si"], "la corrida siguio despues de que el panel se fue"
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_disconnects_before_the_first_byte_still_frees_the_thread(
+    app, seeded_user, monkeypatch
+):
+    """Fix Round 1, FIX 2 (regresion). `_hilos_en_curso.add(...)` corre en
+    el cuerpo sincronico de `stream_agent`, ANTES de que `generar()` exista
+    siquiera -- todavia queda un `await run_in_threadpool(rename_owned...)`
+    en el medio (el titulo del primer mensaje). Si el pedido se cancela
+    justo ahi -- reservado, pero el generador ni construido -- un `finally`
+    puesto DENTRO del generador (como tenia este codigo antes del fix) no
+    corre nunca, y el hilo queda trabado para siempre.
+
+    Este test fuerza esa ventana exacta con un `threading.Event` en vez de
+    confiar en el timing de una desconexion real: el `rename_owned` de
+    juguete se cuelga adentro del threadpool hasta que el test lo libera,
+    dando una ventana determinista en la que la reserva YA paso pero el
+    `StreamingResponse` (y su generador) todavia no se construyo.
+    """
+    entro_al_rename = threading.Event()
+    seguir = threading.Event()
+    termino_el_rename = threading.Event()
+    rename_real = AgentThreadService.rename_owned
+
+    def rename_que_se_cuelga(self, thread_id, user_id, title):
+        entro_al_rename.set()
+        try:
+            if not seguir.wait(timeout=5):
+                raise AssertionError("el test nunca libero el rename colgado")
+            return rename_real(self, thread_id, user_id, title)
+        finally:
+            termino_el_rename.set()
+
+    monkeypatch.setattr(AgentThreadService, "rename_owned", rename_que_se_cuelga)
+
+    # titulo None -> DEFAULT_TITLE, para que el endpoint dispare el rename
+    hilo = await _create_thread_async(app, seeded_user, None)
+
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+            tarea_pedido = asyncio.ensure_future(
+                ac.post(
+                    "/api/v1/agent/stream",
+                    json={"thread_id": hilo["id"], "mensaje": "hola"},
+                    headers=_auth(seeded_user),
+                )
+            )
+
+            # Esperar (en un hilo aparte, para no bloquear el loop) a que el
+            # rename de juguete confirme que arranco.
+            loop = asyncio.get_running_loop()
+            llego = await loop.run_in_executor(None, entro_al_rename.wait, 5)
+            assert llego, "el rename nunca arranco -- este test no prueba la ventana que dice"
+
+            # Reservado, pero `generar()` ni se definio: la linea textual
+            # `_hilos_en_curso.add(...)` corre antes del `await
+            # run_in_threadpool(rename_owned...)`; el `return
+            # StreamingResponse(generar(), ...)` esta DESPUES.
+            assert hilo["id"] in agent_endpoints._hilos_en_curso
+
+            tarea_pedido.cancel()
+            seguir.set()  # destrabar el hilo de threadpool para que la tarea pueda cerrar
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await tarea_pedido
+
+            # Esperar EXPLICITAMENTE a que el hilo de threadpool termine del
+            # todo -- mas alla de lo que la cancelacion de `tarea_pedido`
+            # ya haya resuelto -- antes de soltar `async with ac` y la
+            # fixture `db_session`. `run_in_threadpool` no mata el hilo real
+            # al cancelar (`abandon_on_cancel=False` es el default de
+            # anyio); sin este `wait` explicito, un teardown de fixture que
+            # cierre la sesion mientras el hilo todavia esta a mitad de su
+            # propio `commit()` sobre la MISMA sesion compartida es una
+            # carrera de verdad -- da igual lo que haga `tarea_pedido`, no
+            # es lo que este assert quiere ejercitar.
+            terminado = await loop.run_in_executor(None, termino_el_rename.wait, 5)
+            assert terminado, "el hilo de threadpool nunca termino"
+    finally:
+        seguir.set()  # por si algo arriba salio antes de llegar a destrabarlo
+
+    assert hilo["id"] not in agent_endpoints._hilos_en_curso, "el hilo quedo trabado para siempre"
 
 
 # ---------------------------------------------------------------------

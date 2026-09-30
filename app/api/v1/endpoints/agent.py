@@ -1,10 +1,10 @@
 import asyncio
-import contextlib
 import json
 import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
 from pydantic import BaseModel
@@ -142,9 +142,22 @@ async def stream_agent(
     con SSE, el `200 OK` sale con el primer byte, y despues de eso el codigo
     de estado ya no se puede cambiar. Un 404 (hilo ajeno o inexistente) tiene
     que salir como codigo HTTP normal, antes de que arranque el stream.
+
+    ## Por que el I/O de SQLAlchemy va por `run_in_threadpool`
+
+    Esta funcion es `async def`, pero `AgentThreadService` usa una `Session`
+    sincronica -- `get_owned`/`rename_owned` son llamadas bloqueantes de
+    verdad. Los otros endpoints del archivo son `def` (no `async def`), asi
+    que Starlette los manda solos al threadpool; este, al ser `async def`,
+    corre en el event loop, y con hypercorn sin `--workers` (ver el
+    docstring de `_hilos_en_curso`) ese es el UNICO event loop del proceso:
+    una consulta lenta a Postgres bloqueando ahi frena TODOS los pedidos en
+    vuelo, incluidos los streams de otros usuarios. `run_in_threadpool` (el
+    mismo mecanismo que Starlette usa por debajo para los endpoints `def`)
+    saca esas llamadas del loop.
     """
     service = AgentThreadService(db)
-    thread = service.get_owned(data.thread_id, current_user.id)
+    thread = await run_in_threadpool(service.get_owned, data.thread_id, current_user.id)
 
     graph = request.app.state.agent_graph
     if graph is None:
@@ -164,6 +177,14 @@ async def stream_agent(
         # escriben checkpoints que se pisan, y el resultado no es el de
         # ninguna de las dos -- rechazar es honesto, encolar seria construir
         # algo que nadie pidio.
+        #
+        # Chequeo y reserva (la linea de `_hilos_en_curso.add` mas abajo) NO
+        # tienen ningun `await` en el medio -- son dos operaciones puramente
+        # en memoria sobre un event loop cooperativo de un solo hilo, asi
+        # que dos pedidos concurrentes para el MISMO `thread_id` no pueden
+        # entrelazarse entre el chequeo y la reserva. El `await
+        # run_in_threadpool(...)` de arriba (para `get_owned`) queda ANTES
+        # de este chequeo a proposito, para no romper esa atomicidad.
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya hay una corrida en curso para este hilo.",
@@ -171,12 +192,6 @@ async def stream_agent(
 
     if data.mensaje is not None:
         entrada = {"messages": [("user", data.mensaje)]}
-        if thread.title == DEFAULT_TITLE:
-            # El titulo sale del primer mensaje, truncado. Se detecta "primer
-            # mensaje" por el titulo seguir siendo el default con el que
-            # `create_thread` lo sembro -- un hilo ya renombrado por el
-            # usuario no se pisa.
-            service.rename_owned(thread.id, current_user.id, data.mensaje[:TITLE_MAX_LENGTH])
     elif data.decision is not None:
         entrada = Command(resume=data.decision)
     else:
@@ -195,45 +210,57 @@ async def stream_agent(
     }
 
     _hilos_en_curso.add(thread_key)
+    # Liberar el hilo NO puede depender de que el generador de mas abajo
+    # llegue a correr ni una sola vez: si el cliente corta la conexion
+    # ANTES de que Starlette pida el primer chunk (un panel que se
+    # refresca, la red que se cae a mitad del POST), el cuerpo de
+    # `generar()` nunca arranca y un `finally` puesto ahi adentro no
+    # sirve de nada -- el `thread_id` quedaria reservado para siempre
+    # (reproducido con hypercorn real). Por eso la reserva se ata al
+    # CICLO DE VIDA DE LA TAREA que procesa este pedido -- la misma tarea
+    # de asyncio corre el endpoint Y despues maneja la `StreamingResponse`
+    # entera -- y no al generador: pase lo que pase (200 completo, error,
+    # cancelacion por desconexion), cuando esa tarea termina, se libera.
+    tarea_del_pedido = asyncio.current_task()
+    if tarea_del_pedido is not None:
+        tarea_del_pedido.add_done_callback(lambda _t: _hilos_en_curso.discard(thread_key))
+
+    if data.mensaje is not None and thread.title == DEFAULT_TITLE:
+        # El titulo sale del primer mensaje, truncado. HEURISTICA, no una
+        # deteccion real de "primer mensaje": se compara el titulo actual
+        # contra el default con el que `create_thread` siembra un hilo sin
+        # titulo (`data.title or DEFAULT_TITLE`, y `title` es NOT NULL, asi
+        # que no hay un estado NULL que preguntar en su lugar). Limite
+        # conocido y aceptado: un hilo renombrado por el usuario a
+        # EXACTAMENTE ese string default se pisa una vez, en su proximo
+        # mensaje. El costo es cosmetico (un titulo, no un dato de negocio)
+        # y no tiene test dedicado.
+        await run_in_threadpool(
+            service.rename_owned, thread.id, current_user.id, data.mensaje[:TITLE_MAX_LENGTH]
+        )
 
     async def generar():
-        # `aclosing`, no un `try/finally` armado a mano sobre `agen`: cubre
-        # los DOS caminos por los que este generador puede terminar. (1) El
-        # sondeo de `is_disconnected()` de abajo lo detecta y hace `return`.
-        # (2) Un servidor ASGI real (hypercorn, nunca este harness de tests
-        # con `httpx.ASGITransport`, que no reporta la desconexion de un
-        # socket que no existe) cancela la tarea que corre este generador
-        # ANTES de que el sondeo alcance a correr -- ahi `agen` queda
-        # suspendido sin que nada lo cierre, hasta que lo junte el
-        # recolector (Fix Round 1 de `eventos_sse`, mismo riesgo). `aclosing`
-        # garantiza `await agen.aclose()` en cualquiera de los dos casos.
-        async with contextlib.aclosing(eventos_sse(graph, entrada, config)) as agen:
-            try:
-                while True:
-                    tarea = asyncio.ensure_future(agen.__anext__())
-                    # Entre eventos (que pueden tardar -- FIFO contra
-                    # Postgres, tokens del modelo) se sondea la desconexion
-                    # del cliente sin bloquear: si el panel se fue, se
-                    # cancela la TAREA del grafo (no solo este generador) y
-                    # se espera esa cancelacion antes de terminar.
-                    while not tarea.done():
-                        if await request.is_disconnected():
-                            tarea.cancel()
-                            with contextlib.suppress(asyncio.CancelledError, StopAsyncIteration):
-                                await tarea
-                            return
-                        await asyncio.sleep(0.01)
-                    try:
-                        evento = tarea.result()
-                    except StopAsyncIteration:
-                        return
-                    yield _sse_line(evento)
-                    # No se atrapa `GeneratorExit`/`CancelledError` en
-                    # ningun lado de este generador: si Starlette decide
-                    # cerrar el stream, esa cancelacion tiene que
-                    # propagarse tal cual hasta `agen` (que `aclosing` va a
-                    # cerrar) y no convertirse en otra cosa.
-            finally:
-                _hilos_en_curso.discard(thread_key)
+        # Iteracion directa, sin tarea propia ni sondeo de
+        # `is_disconnected()`. Medido contra hypercorn 0.18.0 real (no
+        # asumido): con `asyncio.ensure_future(agen.__anext__())` +
+        # `is_disconnected()` en un bucle -- la version anterior de este
+        # codigo -- el sondeo NUNCA ve la desconexion (hay un solo mensaje
+        # `http.disconnect` y Starlette ya esta bloqueado esperandolo en
+        # `listen_for_disconnect`; para cuando este sondeo llama a
+        # `receive()` la cola esta vacia y el `CancelScope` ya cancelado de
+        # `Request.is_disconnected` devuelve `False` para siempre) y la
+        # corrida del grafo -- en OTRA tarea, la que crea `ensure_future`,
+        # fuera del alcance de la cancelacion de Starlette -- sigue viva
+        # gastando modelo despues de que el cliente se fue: 28 iteraciones
+        # de mas en la medicion. Con este `async for` derecho, la
+        # cancelacion que Starlette entrega (via el mismo mecanismo con el
+        # que corta `stream_response`) llega directo a donde este generador
+        # esta suspendido -- adentro de `eventos_sse`, que ya deja pasar
+        # `CancelledError` sin convertirla en un evento `error`
+        # (`tests/test_agent_streaming.py`) -- y la corrida muere ahi: 0
+        # iteraciones de mas, medido. No se atrapa `GeneratorExit` ni
+        # `CancelledError` en ningun lado de esta funcion.
+        async for evento in eventos_sse(graph, entrada, config):
+            yield _sse_line(evento)
 
     return StreamingResponse(generar(), media_type="text/event-stream")
