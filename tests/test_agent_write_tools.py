@@ -26,7 +26,7 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
 from app.agent.auth import AgentAuthError
-from app.agent.session import AUTH_USER_ID_KEY
+from app.agent.signing import firmar
 from app.agent.tools.write import (
     _occurred_at,
     registrar_compra,
@@ -45,13 +45,9 @@ from app.services.purchase_service import PurchaseService
 
 
 def _config(user):
-    """Lo que el servidor LangGraph deja en el `configurable` de la corrida a
-    partir del token de Firebase que valido el hook de
-    `app/agent/auth_hook.py`. La clave esta en
-    `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS`: el servidor
-    rechaza un request que intente mandarla, por eso es una identidad que el
-    servidor afirma y no el llamador."""
-    return {"configurable": {AUTH_USER_ID_KEY: str(user.id)}}
+    """Lo que el endpoint arma en el `configurable` de la corrida a partir
+    de `get_current_user`: el `user_id` que firma la operacion."""
+    return {"configurable": {"user_id": str(user.id)}}
 
 
 def _approve(payload):
@@ -401,7 +397,7 @@ def test_a_real_checkpointer_resume_still_catches_a_stale_approval(
     graph.add_edge("registrar", END)
     app = graph.compile(checkpointer=InMemorySaver())
 
-    thread = {"configurable": {"thread_id": str(uuid.uuid4()), AUTH_USER_ID_KEY: str(seeded_user.id)}}
+    thread = {"configurable": {"thread_id": str(uuid.uuid4()), "user_id": str(seeded_user.id)}}
     initial_state = {
         "cliente_id": str(seeded_customer.id),
         "items": [{"producto_id": str(seeded_product_with_one_lot.id), "cantidad": "3"}],
@@ -903,6 +899,26 @@ def _approve_with(huella):
     return lambda _p: {"accion": "aprobar", "huella": huella}
 
 
+def _config_con_tarea(user):
+    """Como `_config`, pero con un id de tarea de Pregel -- lo que hace que
+    `write_key` (y con ella la identidad que va dentro de la huella) no sea
+    `None`.
+
+    `uuid4` en el `checkpoint_ns`, no una constante: `agent.tool_writes` vive en
+    el schema `agent`, que es COMPARTIDO entre tests y sobrevive a la suite
+    (no es el schema desechable de `db_session`). Una clave literal la reclama
+    el primer test que corra y el segundo recibe `ya_registrado` -- verificado a
+    la mala: estos dos tests pasaban solos y fallaban en la corrida completa.
+    Mismo motivo que `_config` en `tests/test_agent_idempotency.py`."""
+    return {
+        "configurable": {
+            "user_id": str(user.id),
+            "thread_id": f"hilo-{uuid.uuid4()}",
+            "checkpoint_ns": f"tools:{uuid.uuid4()}",
+        }
+    }
+
+
 def test_a_sale_approved_with_a_huella_the_server_did_not_issue_writes_nothing(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
 ):
@@ -944,8 +960,12 @@ def test_tampering_with_the_figures_inside_a_signed_huella_writes_nothing(
 
     def approve_tampered(payload):
         capturada.update(payload["huella"])
+        datos = payload["huella"]["datos"]
         alterada = {
-            "datos": [{**payload["huella"]["datos"][0], "cost_basis_unit": "1.00"}],
+            "datos": {
+                **datos,
+                "cifras": [{**datos["cifras"][0], "cost_basis_unit": "1.00"}],
+            },
             "firma": payload["huella"]["firma"],
         }
         return {"accion": "aprobar", "huella": alterada}
@@ -977,3 +997,47 @@ def test_the_huella_the_panel_receives_is_a_signed_envelope(
 
     assert set(visto["huella"]) == {"datos", "firma"}
     assert len(visto["huella"]["firma"]) == 64  # hexdigest de sha256
+
+
+def test_a_sale_approved_with_a_huella_from_another_operation_says_so(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """Una huella legitima, de otra operacion, no es "el inventario cambio".
+
+    La firma es autentica (la emitio este servidor), asi que `verificar()` da
+    True y antes la comparacion de cifras fallaba y la herramienta contestaba
+    `recalculado`: "El inventario cambio y el costo difiere de lo que
+    aprobaste". Falso, y en la misma direccion que `aprobacion_sin_huella`
+    existe para evitar -- culpa al inventario del negocio por un problema de
+    contrato del panel. La identidad de la operacion va DENTRO de la firma, asi
+    que el motivo ahora es el verdadero.
+    """
+    ajena = firmar({"operacion": "otra-tarea-de-pregel", "cifras": [{"subtotal": "18.00"}]})
+    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve_with(ajena))
+
+    result = registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot),
+        config=_config_con_tarea(seeded_user),
+    )
+
+    assert result["estado"] == "huella_de_otra_operacion"
+    assert "inventario" in result["mensaje"]
+    assert db_session.query(Sale).count() == 0
+
+
+def test_a_sale_approved_with_a_huella_of_this_operation_still_writes(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """El otro lado del test de arriba: la identidad dentro de la firma no
+    puede romper el camino bueno. Sin este, atar la huella a la operacion
+    podria rechazar TODAS las aprobaciones y el test de arriba seguiria
+    verde."""
+    monkeypatch.setattr("app.agent.tools.write.interrupt", _approve)
+
+    result = registrar_venta.invoke(
+        _sale_payload(seeded_customer, seeded_product_with_lot),
+        config=_config_con_tarea(seeded_user),
+    )
+
+    assert result["estado"] == "registrado"
+    assert db_session.query(Sale).count() == 1

@@ -8,7 +8,10 @@ from sqlalchemy import create_engine, text
 # las Tasks 4, 5, 7 y 8: `db_session`, `seeded_user`, `seeded_customer`,
 # `seeded_product_with_lot`, `seeded_product_with_one_lot`,
 # `seeded_purchase_draft`.
-pytest_plugins = ["tests.fixtures_domain"]
+#
+# Harness de tests HTTP autenticados (Task 2): `client`, `_auth`,
+# `_create_thread_as`. La Task 6 tambien lo consume.
+pytest_plugins = ["tests.fixtures_domain", "tests.fixtures_http"]
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -23,6 +26,44 @@ FORBIDDEN_HOST_MARKERS = ("rlwy.net", "railway", "proxy.rlwy")
 # levanta si falta -- a proposito: un control que se apaga solo cuando falta su
 # configuracion no es un control.  Los tests traen el suyo.
 os.environ.setdefault("AGENT_HUELLA_SECRET", "secreto-de-prueba-no-usar-en-produccion")
+
+# Y el lifespan de `app.main` exige `ANTHROPIC_API_KEY` para construir el
+# grafo -- sin ella deja el agente no disponible y `/health` en `degraded`
+# (`app/main.py::AGENT_REQUIRED_ENV`), que es justo lo que los tests del
+# endpoint del agente NO quieren. `.env` no sirve para esto: pydantic-settings
+# lo lee para `Settings` pero no lo exporta a `os.environ`, y `ChatAnthropic`
+# lee de `os.environ`. Una clave de juguete alcanza: ningun test de esta suite
+# llama al modelo de verdad -- los que levantan un grafo usan
+# `FakeToolCallingModel`.
+os.environ.setdefault("ANTHROPIC_API_KEY", "clave-de-prueba-no-usar-en-produccion")
+
+# `app/core/database.py` construye su `engine` EN TIEMPO DE IMPORT
+# (`create_engine(settings.SQLALCHEMY_DATABASE_URI)` a nivel de modulo), y
+# cualquier `Settings()` que se construya de nuevo mas adelante (la propia
+# `app.core.config.settings`, o una instancia fresca como
+# `tests/test_settings_tolerates_agent_env.py`) lee `DATABASE_URL` del
+# entorno en ese momento. Fijarlo aca, a nivel de modulo -- ANTES de que
+# `pytest_plugins` de arriba importe `fixtures_http`, que importa `app.main`,
+# que importa `app.core.database` -- alinea las tres cosas con la base
+# desechable de test.
+#
+# Asignacion INCONDICIONAL, no `setdefault`: un `DATABASE_URL` que ya venga
+# exportado en el shell (por ejemplo, apuntando a Railway) no pasa por el
+# guard de `FORBIDDEN_HOST_MARKERS` de abajo -- ese guard solo mira
+# `TEST_DATABASE_URL`. Con `setdefault`, ese `DATABASE_URL` externo ganaria y
+# la suite correria contra produccion sin que nada lo frenara. La perilla
+# para apuntar los tests a otra base sigue siendo `TEST_DATABASE_URL`, que si
+# esta protegida.
+#
+# Esto NO es, por si solo, lo que impide que los tests toquen el puerto
+# 55433: eso ya lo hacian los overrides por fixture (`get_db` overrideado en
+# la fixture `client` de `fixtures_http.py`, `SessionLocal` monkeypatcheado en
+# `fixtures_domain.py`). Esto alinea el engine de import-time y cualquier
+# `Settings()` nueva con esa misma convencion, para que un codigo que SI use
+# `settings.SQLALCHEMY_DATABASE_URI` directo -- como el lifespan de
+# `app.main` que arma el checkpointer del agente (Task 4) -- caiga del mismo
+# lado.
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 
 def pytest_configure(config):
@@ -46,6 +87,44 @@ def test_engine():
     engine = create_engine(TEST_DATABASE_URL)
     yield engine
     engine.dispose()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _tool_writes_sin_herencia(test_engine):
+    """Vacia `agent.tool_writes` al empezar y al terminar la sesion de tests.
+
+    Esa tabla es la UNICA cosa que los tests dejan en la base y nadie limpiaba:
+    vive en el schema `agent` (compartido, fuera del schema desechable de
+    `db_session`, y fuera del radar de Alembic a proposito -- ver
+    `app/agent/idempotency.py`), y cada escritura del agente le agrega una fila
+    que sobrevive a la corrida. Llegue a medir 550 filas acumuladas.
+
+    Sin esto, la suite dependia de un invariante que nada hacia cumplir --
+    "ninguna `write_key` se repite en toda la historia de esta base" -- con el
+    peor modo de falla posible: un test con una clave literal pasa la primera
+    vez y falla la segunda con `ya_registrado`, que no grita "colision de
+    fixtures" sino "esto ya se registro". Esa trampa ya se cobro una corrida de
+    esta suite.
+
+    Lo que esto NO arregla, y por eso las claves de los tests siguen siendo
+    `uuid4`: dos tests de la MISMA corrida que compartan una clave literal se
+    pisan igual. Una fixture de sesion quita la herencia entre corridas, no el
+    acoplamiento dentro de una.
+
+    `DROP TABLE`, no `DROP SCHEMA agent CASCADE`: el schema tambien aloja las
+    tablas del checkpointer de LangGraph, que las recrea `setup()` al construir
+    el grafo -- y con el grafo parcheado en la mayoria de los tests, ese
+    `setup()` puede no correr. `idempotency.ensure_table()` recrea esta tabla
+    sola, la primera vez que una herramienta escribe.
+    """
+
+    def _borrar():
+        with test_engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS "agent"."tool_writes"'))
+
+    _borrar()
+    yield
+    _borrar()
 
 
 @pytest.fixture

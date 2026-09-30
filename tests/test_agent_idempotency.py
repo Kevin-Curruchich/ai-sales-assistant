@@ -25,7 +25,6 @@ from langgraph.types import Command, interrupt
 from sqlalchemy import text
 
 from app.agent import idempotency
-from app.agent.session import AUTH_USER_ID_KEY
 from app.agent.tools.write import (
     registrar_compra,
     registrar_movimiento_caja,
@@ -37,11 +36,11 @@ from tests.test_agent_graph import FakeToolCallingModel
 
 
 def _config(user, task_id, thread="hilo-1"):
-    """Lo que una tool call ve: la identidad que inyecto el servidor mas el
+    """Lo que una tool call ve: el `user_id` que arma el endpoint mas el
     id de la tarea de Pregel que LangGraph pone en cada corrida."""
     return {
         "configurable": {
-            AUTH_USER_ID_KEY: str(user.id),
+            "user_id": str(user.id),
             "thread_id": thread,
             "checkpoint_ns": f"tools:{task_id}",
         }
@@ -245,7 +244,7 @@ def test_direct_invocations_without_a_task_id_are_never_deduplicated(
     """Sin grafo detras no hay reanudacion, y dos llamadas son dos hechos
     distintos -- la guardia no puede inventarse una equivalencia."""
     monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
-    config = {"configurable": {AUTH_USER_ID_KEY: str(seeded_user.id)}}
+    config = {"configurable": {"user_id": str(seeded_user.id)}}
 
     registrar_movimiento_caja.invoke(_movimiento(), config=config)
     registrar_movimiento_caja.invoke(_movimiento(), config=config)

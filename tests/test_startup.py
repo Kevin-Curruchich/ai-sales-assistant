@@ -46,3 +46,44 @@ def test_health_endpoint_still_responds():
         response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] in {"ok", "degraded"}
+
+
+def _sin_construir_el_grafo(monkeypatch):
+    """Revienta si el lifespan intenta construir el grafo -- es lo que estos
+    tests tienen que demostrar que NO pasa, y una llamada real abriria un pool
+    de Postgres contra el puerto de los tests."""
+
+    def _no(*_args, **_kwargs):
+        raise AssertionError("el lifespan construyo el grafo sin sus variables de entorno")
+
+    monkeypatch.setattr("app.main.build_async_checkpointer", _no)
+    monkeypatch.setattr("app.main.build_graph", _no)
+
+
+def test_a_missing_agent_env_var_leaves_the_agent_unavailable_instead_of_green(monkeypatch):
+    """Sin `ANTHROPIC_API_KEY`, `ChatAnthropic` se construye igual (la
+    validacion es al llamar, no al instanciar): el grafo se armaba,
+    `startup_issues` quedaba vacio, `/health` devolvia `ok`, el despliegue de
+    Railway quedaba verde -- y cada turno del agente moria en el evento
+    `error` generico, con la causa solo en el log. Lo mismo, y mas callado,
+    con `AGENT_HUELLA_SECRET`, que nadie miraba en ninguna parte."""
+    from fastapi.testclient import TestClient
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGENT_HUELLA_SECRET", raising=False)
+    _sin_construir_el_grafo(monkeypatch)
+
+    with TestClient(main.app) as client:
+        cuerpo = client.get("/health").json()
+        assert main.app.state.agent_graph is None
+    assert cuerpo["status"] == "degraded"
+    assert "agent_api_key_missing" in cuerpo["issues"]
+    assert "agent_huella_secret_missing" in cuerpo["issues"]
+
+
+def test_an_empty_agent_env_var_counts_as_missing(monkeypatch):
+    """`ANTHROPIC_API_KEY=` en un panel de Railway es un error de dedo mas
+    probable que la variable sin definir, y las dos fallan igual."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
+
+    assert "ANTHROPIC_API_KEY" in main.missing_agent_env()

@@ -43,7 +43,13 @@ TABLE_ORDER = [
 # convertiria el guard en su propio agujero: el dia que alguien empiece a
 # registrar movimientos de caja, la copia los dejaria atras en silencio y el
 # TOTAL impreso al final seguiria pareciendo completo.
-BORN_EMPTY_TABLES = frozenset({"cash_movements"})
+#
+# agent_threads (revision 07ee91fc2b95) entra por la misma puerta: la
+# migracion la crea vacia y todavia no hay ningun flujo que le escriba filas
+# en db_dev, asi que hoy no hay nada que copiar. El mismo mecanismo de
+# BORN_EMPTY_TABLES se encarga de que, en cuanto empiece a tener hilos, la
+# copia deje de exceptuarla y obligue a sumarla a TABLE_ORDER.
+BORN_EMPTY_TABLES = frozenset({"cash_movements", "agent_threads"})
 
 # db_dev es el schema que .env apunta por defecto y contiene los datos reales
 # de produccion (156 ventas al momento de escribir esto). Igual que el guard

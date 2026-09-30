@@ -39,15 +39,13 @@ escritura con el id de la tarea de Pregel, dentro de la misma transaccion
 que la escritura. Su docstring explica la clave y lo que queda afuera.
 """
 
-import threading
-
 from langchain_anthropic import ChatAnthropic
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.prebuilt import create_react_agent
 
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import ALL_TOOLS
-from app.core.config import settings
 
 MODEL_NAME = "claude-sonnet-5"
 
@@ -82,126 +80,86 @@ def build_graph(model, checkpointer: BaseCheckpointSaver):
     )
 
 
-def _default_model() -> ChatAnthropic:
+def default_model() -> ChatAnthropic:
     return ChatAnthropic(model=MODEL_NAME)
 
 
-def _postgres_checkpointer(conn_string: str, schema: str) -> BaseCheckpointSaver:
-    """`PostgresSaver` apuntado a `schema`. Factorizada aparte de
-    `_default_checkpointer()` (que la llama con la URL/schema de produccion)
-    para poder probarla contra la base de test desechable sin tocar
-    `settings.SQLALCHEMY_DATABASE_URI` -- ver
-    `tests/test_agent_graph.py::test_postgres_checkpointer_creates_its_schema_before_setup`.
+async def build_async_checkpointer(conn_string: str, schema: str) -> AsyncPostgresSaver:
+    """`AsyncPostgresSaver` sobre un `AsyncConnectionPool` apuntado a `schema`,
+    para el grafo servido en proceso por FastAPI.
 
-    `PostgresSaver` no tiene parametro de schema, y `setup()` corre DDL SIN
-    calificar (`CREATE TABLE checkpoints`, no `CREATE TABLE agent.checkpoints`)
-    -- resuelve donde aterriza por el `search_path` de la conexion, igual que
-    `app/core/database.py` hace para el schema del negocio. Y, a diferencia
-    de lo que un borrador anterior de esta spec afirmaba, `setup()` NO crea
-    el schema: sus `MIGRATIONS` no tienen ningun `CREATE SCHEMA` (se puede
-    confirmar leyendo `langgraph.checkpoint.postgres.PostgresSaver.MIGRATIONS`).
-    Contra una base fresca -- un `db_local` nuevo, produccion, CI --
-    `SET search_path TO "agent"` con `agent` inexistente no falla en el
-    `SET` (Postgres lo permite: un schema del `search_path` que no existe
-    simplemente se salta), sino recien en el primer `CREATE TABLE` de
-    `setup()`, con `InvalidSchemaName: no schema has been selected to
-    create in` -- confirmado corriendo ese `SET` + ese `CREATE TABLE`
-    exactos contra una base sin el schema `agent`. Por eso el schema se crea
-    aca, explicito, ANTES de fijar `search_path` y ANTES de `setup()` --el
-    mismo `CREATE SCHEMA IF NOT EXISTS` que `alembic/env.py` corre para el
-    schema del negocio, no algo que LangGraph hace por su cuenta.
+    Se construye UNA VEZ, en el lifespan de la app (ver `app/main.py`), y se
+    guarda en `app.state`: construirlo por pedido abriria una conexion nueva
+    por request y no la cerraria nadie -- la misma fuga que tenia la fabrica
+    de `langgraph-api` (ver historia de este modulo) y que ya se arreglo una
+    vez en esta rama.
+
+    `PostgresSaver` (el saver sincronico) no implementa los metodos
+    asincronos: los hereda de `BaseCheckpointSaver`, que levanta
+    `NotImplementedError`. El grafo servido con `astream`/`ainvoke` necesita
+    `AsyncPostgresSaver`.
+
+    ## Por que un pool y no una conexion suelta
+
+    `AsyncPostgresSaver` acepta tanto una `AsyncConnection` como un
+    `AsyncConnectionPool` (`langgraph/checkpoint/postgres/_ainternal.py::Conn`
+    es la union de ambos). Con una conexion suelta, si esa conexion muere --
+    un reinicio de Postgres, un idle timeout, un blip de red en Railway --
+    nada la reabre: el checkpointer queda roto por el resto de la vida del
+    proceso y la unica salida es un redeploy. Un `AsyncConnectionPool` abre una
+    conexion de reemplazo cuando la anterior se muere, y ademas recicla
+    conexiones SANAS por su cuenta: con los defaults de `psycopg_pool` 3.2.8,
+    `max_lifetime` (3600 s, con jitter de -5%) cierra y reemplaza cada
+    conexion al cumplir ese tiempo, y `max_idle` (600 s) encoge el pool por
+    encima de `min_size`. Las dos cosas significan lo mismo para este codigo:
+    la conexion que el checkpointer usa NO es la misma para siempre -- toda
+    conexion se recicla al menos una vez por hora, sana o no -- asi que el
+    `search_path` tiene que fijarse en CADA conexion que el pool abra (ver
+    `configure`, mas abajo) y no una vez al construirlo. Y sigue siendo una
+    unica cosa construida en el lifespan que se cierra con `.close()`: no
+    reintroduce la fuga de "una conexion nueva por pedido" que este modulo ya
+    arreglo una vez.
+
+    `min_size=1, max_size=3`: nada mas comparte este pool. El
+    `asyncio.Lock` interno de `AsyncPostgresSaver` (`aio.py::_cursor`) ya
+    serializa toda su E/S sobre UNA conexion prestada del pool a la vez, pool
+    o no -- eso no lo resuelve tener mas conexiones disponibles, asi que el
+    pool no elimina el head-of-line blocking del checkpointer. Lo que si
+    resuelve es no quedar con una unica conexion muerta para siempre.
+
+    `configure` fija el `search_path` en CADA conexion que el pool abre --
+    inicial o de reemplazo tras una reconexion -- porque `search_path` es
+    estado de sesion: no viaja con el pool, y sin esto una conexion de
+    reemplazo apuntaria a `public`. Mismo procedimiento que el saver
+    sincronico y por la misma razon (ver `checkpointer_schema`): `setup()`
+    corre DDL sin calificar y no crea el schema, asi que el schema se crea
+    aca, explicito, con una conexion ya abierta, ANTES de `setup()`.
     """
-    from psycopg import Connection
     from psycopg.rows import dict_row
+    from psycopg_pool import AsyncConnectionPool
 
-    from langgraph.checkpoint.postgres import PostgresSaver
+    async def _set_search_path(conn) -> None:
+        await conn.execute(f'SET search_path TO "{schema}"')
 
-    conn = Connection.connect(
+    pool = AsyncConnectionPool(
         conn_string,
-        autocommit=True,
-        prepare_threshold=0,
-        row_factory=dict_row,
+        open=False,
+        min_size=1,
+        max_size=3,
+        configure=_set_search_path,
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
     )
-    # Si algo de aca abajo revienta (el `CREATE SCHEMA` sin permisos, el
-    # `setup()` contra una base a la que le falta una extension), la conexion
-    # quedaba abierta y sin dueño: nadie tiene una referencia para cerrarla y
-    # el pool del servidor de Postgres se la come hasta que muera el proceso.
-    # Un arranque que falla y reintenta las iba acumulando de a una por
-    # intento.
+    # Si el `open()`, el `CREATE SCHEMA` o el `setup()` revientan, el pool no
+    # debe quedar abierto y sin dueño: nadie tendria una referencia para
+    # cerrarlo y el servidor de Postgres se comeria sus conexiones hasta que
+    # muera el proceso.
     try:
-        conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-        conn.execute(f'SET search_path TO "{schema}"')
-        checkpointer = PostgresSaver(conn)
-        checkpointer.setup()
+        await pool.open(wait=True)
+        async with pool.connection() as conn:
+            await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+        checkpointer = AsyncPostgresSaver(pool)
+        await checkpointer.setup()
     except BaseException:
-        conn.close()
+        await pool.close()
         raise
     return checkpointer
-
-
-def _default_checkpointer() -> BaseCheckpointSaver:
-    """`PostgresSaver` de produccion, apuntado al schema `agent` (ver
-    `checkpointer_schema`)."""
-    return _postgres_checkpointer(settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema())
-
-
-_graph_singleton = None
-_graph_lock = threading.Lock()
-
-
-def graph(config: dict | None = None):
-    """Fabrica del grafo de produccion, expuesta a `langgraph.json`.
-
-    Es una funcion, no el grafo ya construido a nivel de modulo: construirlo
-    a nivel de modulo abriria una conexion a Postgres e instanciaria
-    `ChatAnthropic` (que valida que haya una API key) en el momento en que
-    CUALQUIER cosa importe `app.agent.graph` -- incluidos los tests, que no
-    tienen ni la base de desarrollo local levantada ni una API key.
-
-    ## Por que se cachea
-
-    `langgraph-api` llama a esta fabrica **una vez por corrida**, no una vez
-    por proceso. Leido del fuente de langgraph-api 0.15.1, no supuesto:
-    `GRAPHS[graph_id]` guarda la FABRICA (no el grafo); `graph.py:404` hace
-    `value = invoke_factory(value, graph_id, config, factory_runtime)` dentro
-    de `get_graph`, que es un `@asynccontextmanager`; y `stream.py:182-194`
-    lo entra con `stack.enter_async_context(...)` en cada corrida. No hay
-    ningun cache en el medio.
-
-    Sin el cache de abajo, entonces, cada corrida construia un
-    `_default_checkpointer()` nuevo: una `psycopg.Connection` nueva, un
-    `CREATE SCHEMA`, un `PostgresSaver.setup()` completo -- y esa conexion
-    no la cierra nadie, porque nada devuelve un asa para cerrarla. Una
-    conexion de Postgres filtrada por corrida, hasta que el `max_connections`
-    de la base termina el servicio. (`_postgres_checkpointer` cierra la
-    conexion si `setup()` revienta; esta era la fuga del camino de EXITO, que
-    corre siempre.)
-
-    ## Lo que el servidor hace con lo que devolvemos
-
-    Le cambia el checkpointer: `graph.py:416-422` hace
-    `graph_obj.copy(update={"checkpointer": checkpointer, "store": store})`
-    con el suyo. Asi que bajo el servidor completo, el `PostgresSaver` que
-    arma `_default_checkpointer()` **no es el que persiste los checkpoints**
-    -- lo hace el del servidor, con su propia configuracion de Postgres. El
-    nuestro sigue siendo el que usan `langgraph dev` sin ese reemplazo, una
-    construccion directa del grafo, y los tests. La seccion "El schema
-    `agent`" de `docs/agente.md` describe el nuestro y lo dice ahi tambien.
-
-    ## `config`
-
-    Se acepta y se IGNORA. El servidor SI lo pasa -- una fabrica de un solo
-    parametro recibe el `config` de la corrida
-    (`_factory_utils.py::_classify_factory`) -- pero como el grafo se
-    construye una sola vez y lo comparten todas las corridas, nada por
-    corrida puede quedar horneado aca, y menos que nada la identidad de quien
-    escribe. Esa identidad viaja por corrida, en el `configurable` que el
-    hook de `app/agent/auth_hook.py` hace que el servidor inyecte, y la leen
-    las herramientas con `user_id_from_config`.
-    """
-    global _graph_singleton
-    if _graph_singleton is None:
-        with _graph_lock:
-            if _graph_singleton is None:
-                _graph_singleton = build_graph(_default_model(), _default_checkpointer())
-    return _graph_singleton

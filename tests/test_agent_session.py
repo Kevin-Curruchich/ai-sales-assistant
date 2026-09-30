@@ -8,12 +8,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.agent.session import (
-    AUTH_USER_ID_KEY,
-    AUTH_USER_KEY,
     AgentAuthError,
     agent_session,
     user_id_from_config,
 )
+
+UN_UUID = uuid.uuid4()
 
 
 def test_agent_session_yields_a_session_and_closes_it_after():
@@ -44,61 +44,28 @@ def test_agent_session_closes_the_session_even_when_the_body_raises():
     assert captured["db"].get_transaction() is None
 
 
-def test_user_id_from_config_reads_the_identity_the_server_injected():
+def test_reads_the_user_id_the_endpoint_injected():
+    config = {"configurable": {"user_id": str(UN_UUID)}}
+    assert user_id_from_config(config) == UN_UUID
+
+
+def test_accepts_a_uuid_object_directly():
     known_id = uuid.uuid4()
-    config = {"configurable": {AUTH_USER_ID_KEY: str(known_id)}}
+    config = {"configurable": {"user_id": known_id}}
 
     assert user_id_from_config(config) == known_id
 
 
-def test_user_id_from_config_accepts_a_uuid_object_directly():
-    known_id = uuid.uuid4()
-    config = {"configurable": {AUTH_USER_ID_KEY: known_id}}
-
-    assert user_id_from_config(config) == known_id
-
-
-def test_user_id_from_config_falls_back_to_the_user_objects_identity():
-    """El servidor pone las dos claves. Si por lo que sea llega solo el
-    objeto normalizado (`ProxyUser`/`SimpleUser`), su `identity` sirve
-    igual."""
-    known_id = uuid.uuid4()
-
-    class FakeUser:
-        identity = str(known_id)
-
-    config = {"configurable": {AUTH_USER_KEY: FakeUser()}}
-
-    assert user_id_from_config(config) == known_id
-
-
-def test_user_id_from_config_refuses_a_caller_asserted_user_id():
-    """`user_id` a secas NO alcanza, y esa es la correccion central.
-
-    No esta en `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS`, asi que
-    el servidor deja que cualquiera lo mande en el `config` de la corrida:
-    aceptarlo aca era dejar que quien alcanzara el puerto escribiera como
-    quien quisiera. Solo vale la identidad que el servidor derivo del token
-    de Firebase."""
+@pytest.mark.parametrize(
+    "config",
+    [
+        {},
+        {"configurable": {}},
+        {"configurable": {"user_id": None}},
+        {"configurable": {"user_id": ""}},
+        {"configurable": {"user_id": "no-es-un-uuid"}},
+    ],
+)
+def test_refuses_anything_that_is_not_a_user_id(config):
     with pytest.raises(AgentAuthError):
-        user_id_from_config({"configurable": {"user_id": str(uuid.uuid4())}})
-
-
-def test_user_id_from_config_raises_when_configurable_is_missing():
-    with pytest.raises(AgentAuthError):
-        user_id_from_config({})
-
-
-def test_user_id_from_config_raises_when_the_identity_is_missing():
-    with pytest.raises(AgentAuthError):
-        user_id_from_config({"configurable": {}})
-
-
-def test_user_id_from_config_raises_when_the_identity_is_none():
-    with pytest.raises(AgentAuthError):
-        user_id_from_config({"configurable": {AUTH_USER_ID_KEY: None}})
-
-
-def test_user_id_from_config_raises_when_the_identity_is_not_a_valid_uuid():
-    with pytest.raises(AgentAuthError):
-        user_id_from_config({"configurable": {AUTH_USER_ID_KEY: "no-es-un-uuid"}})
+        user_id_from_config(config)

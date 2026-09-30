@@ -94,11 +94,16 @@ disco. Borralo cuando termines, como hace la ultima linea.
 
 ## El agente conversacional
 
-Ademas del backend (`hypercorn app.main:app`), este repo tiene un segundo
-proceso: el grafo de LangGraph en `app/agent/`. Corre aparte, comparte la
-misma base de datos (`db_local` en desarrollo) pero necesita su propia
-variable `ANTHROPIC_API_KEY` (y opcionalmente las tres `LANGSMITH_*`) y una
-herramienta que **no esta instalada en este venv todavia**
-(`langgraph-cli`). Arrancarlo local, el contrato del panel al aprobar una
-escritura, y el checklist antes de desplegarlo estan en
-`docs/agente.md` -- no repetido aca.
+El grafo de LangGraph en `app/agent/` se sirve **en el mismo proceso** que
+el backend (`hypercorn app.main:app`) -- no hay un segundo proceso que
+levantar. Usa la misma base de datos (`db_local` en desarrollo, ademas del
+schema `agent` para su propio estado) pero necesita dos variables propias,
+`ANTHROPIC_API_KEY` y `AGENT_HUELLA_SECRET` (y opcionalmente las tres
+`LANGSMITH_*`), leidas directo de `os.environ` y no de `app/core/config.py`
+-- lo que significa que ponerlas en `.env` NO alcanza: hay que exportarlas
+(`set -a; source .env; set +a`). Si falta alguna, la API arranca igual pero el
+agente queda no disponible y `GET /health` dice cual falta. Arrancarlo local,
+el contrato
+de eventos SSE, el contrato del panel al aprobar una escritura, y el
+checklist antes de desplegarlo estan en `docs/agente.md` -- no repetido
+aca.
