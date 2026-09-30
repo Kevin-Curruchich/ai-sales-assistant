@@ -35,9 +35,12 @@ nadie deberia leer.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from langchain_core.messages import AIMessage
+
+logger = logging.getLogger(__name__)
 
 
 async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
@@ -49,8 +52,22 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
         ):
             if modo == "messages":
                 mensaje, _metadata = chunk
-                if isinstance(mensaje, AIMessage) and mensaje.content:
-                    yield {"event": "token", "data": {"texto": mensaje.content}}
+                # `.text`, no `.content`: el grafo real bindea las siete
+                # herramientas (`app/agent/graph.py`), y con herramientas
+                # bindeadas `langchain_anthropic` NUNCA coerciona `content` a
+                # `str` (`coerce_content_to_string` en
+                # `chat_models.py` es `not _tools_in_params(...) and ...`, y
+                # `_tools_in_params` es siempre verdadero aca) -- `content` es
+                # una lista de bloques (`text`, `tool_use`,
+                # `input_json_delta`, `thinking`). `.text` extrae solo el
+                # texto de esos bloques y da `""` para los que no son texto
+                # (`tool_use`/`input_json_delta`), asi que el filtro de abajo
+                # los descarta solos: sin esto, el JSON parcial de los
+                # argumentos de una tool_call se le escribia al usuario como
+                # si fuera texto del asistente.
+                texto = mensaje.text if isinstance(mensaje, AIMessage) else ""
+                if texto:
+                    yield {"event": "token", "data": {"texto": texto}}
                 continue
 
             if modo != "updates" or not isinstance(chunk, dict):
@@ -66,12 +83,16 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
             for salida in chunk.values():
                 for mensaje in (salida or {}).get("messages", []):
                     for llamada in getattr(mensaje, "tool_calls", None) or []:
+                        # `{"nombre", "estado"}`, no `{"nombre", "argumentos"}`:
+                        # es el contrato que
+                        # `docs/superpowers/specs/2026-09-29-agente-en-proceso-design.md`
+                        # le promete al panel. Los argumentos de una escritura
+                        # ya viajan en la `confirmacion`; mandarlos tambien
+                        # aca es un dato de mas (y para `registrar_venta`, una
+                        # lista de items entera) que nadie pidio.
                         yield {
                             "event": "herramienta",
-                            "data": {
-                                "nombre": llamada.get("name"),
-                                "argumentos": llamada.get("args"),
-                            },
+                            "data": {"nombre": llamada.get("name"), "estado": "llamando"},
                         }
     except Exception as exc:
         # `Exception`, nunca `BaseException`. `asyncio.CancelledError` hereda
@@ -86,7 +107,19 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
         # que nadie la interfiera. Si algun camino de arriba llegara a
         # atraparla igual, hay que re-lanzarla -- nunca convertirla en un
         # evento `error`. No lo cambies a `BaseException`.
-        yield {"event": "error", "data": {"mensaje": str(exc)}}
+        #
+        # `logger.exception` deja el traceback completo en el log del
+        # servidor -- las excepciones reales nacen en herramientas que pegan
+        # contra Postgres via `agent_session()`, y un `str(exc)` crudo de
+        # psycopg/SQLAlchemy arrastra SQL y datos de conexion hasta el panel
+        # ademas de perder el traceback entero. El mensaje que sale al panel
+        # es acotado a proposito: el nombre del tipo de excepcion, sin sus
+        # internos.
+        logger.exception("La corrida del agente termino con una excepcion")
+        yield {
+            "event": "error",
+            "data": {"mensaje": f"Ocurrio un error inesperado ({type(exc).__name__})."},
+        }
         return
 
     yield {"event": "fin", "data": {"estado": "pausado" if interrumpido else "completo"}}
