@@ -26,7 +26,6 @@ from langgraph.graph import END, StateGraph
 from langgraph.types import Command
 
 from app.agent.auth import AgentAuthError
-from app.agent.session import AUTH_USER_ID_KEY
 from app.agent.tools.write import (
     _occurred_at,
     registrar_compra,
@@ -45,13 +44,9 @@ from app.services.purchase_service import PurchaseService
 
 
 def _config(user):
-    """Lo que el servidor LangGraph deja en el `configurable` de la corrida a
-    partir del token de Firebase que valido el hook de
-    `app/agent/auth_hook.py`. La clave esta en
-    `langgraph_api.validation.RESERVED_CONFIGURABLE_KEYS`: el servidor
-    rechaza un request que intente mandarla, por eso es una identidad que el
-    servidor afirma y no el llamador."""
-    return {"configurable": {AUTH_USER_ID_KEY: str(user.id)}}
+    """Lo que el endpoint arma en el `configurable` de la corrida a partir
+    de `get_current_user`: el `user_id` que firma la operacion."""
+    return {"configurable": {"user_id": str(user.id)}}
 
 
 def _approve(payload):
@@ -401,7 +396,7 @@ def test_a_real_checkpointer_resume_still_catches_a_stale_approval(
     graph.add_edge("registrar", END)
     app = graph.compile(checkpointer=InMemorySaver())
 
-    thread = {"configurable": {"thread_id": str(uuid.uuid4()), AUTH_USER_ID_KEY: str(seeded_user.id)}}
+    thread = {"configurable": {"thread_id": str(uuid.uuid4()), "user_id": str(seeded_user.id)}}
     initial_state = {
         "cliente_id": str(seeded_customer.id),
         "items": [{"producto_id": str(seeded_product_with_one_lot.id), "cantidad": "3"}],

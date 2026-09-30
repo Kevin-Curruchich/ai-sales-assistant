@@ -29,7 +29,6 @@ from langgraph.types import Command
 from sqlalchemy import text
 
 from app.agent.graph import _postgres_checkpointer, build_graph, checkpointer_schema
-from app.agent.session import AUTH_USER_ID_KEY
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
 from tests.conftest import TEST_DATABASE_URL
@@ -77,7 +76,7 @@ def test_the_graph_interrupts_before_writing(db_session, seeded_customer, seeded
     """Con un modelo falso que pide registrar una venta, el grafo se detiene."""
     model = FakeToolCallingModel(scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)])
     graph = build_graph(model=model, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "t1", AUTH_USER_ID_KEY: str(seeded_user.id)}}
+    config = {"configurable": {"thread_id": "t1", "user_id": str(seeded_user.id)}}
 
     result = graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
 
@@ -90,7 +89,7 @@ def test_resuming_after_the_interrupt_continues_from_inside_the_tool(
 ):
     model = FakeToolCallingModel(scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)])
     graph = build_graph(model=model, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "t2", AUTH_USER_ID_KEY: str(seeded_user.id)}}
+    config = {"configurable": {"thread_id": "t2", "user_id": str(seeded_user.id)}}
     graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
 
     final = graph.invoke(Command(resume={"accion": "cancelar"}), config)
@@ -136,7 +135,7 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
     el `CashMovement` que la caja escribio en la ronda 1 sigue siendo uno
     solo despues de la ronda 2.
     """
-    config = {"configurable": {"thread_id": "batch-1", AUTH_USER_ID_KEY: str(seeded_user.id)}}
+    config = {"configurable": {"thread_id": "batch-1", "user_id": str(seeded_user.id)}}
 
     model = FakeToolCallingModel(
         scripted_tool_calls=[
