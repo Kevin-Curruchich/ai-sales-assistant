@@ -202,13 +202,17 @@ def app(db_session):
     esa tarea.
 
     No dispara el lifespan real (no hace falta: los tests que usan esta
-    fixture monkeypatchean `eventos_sse` entero, asi que nunca tocan
-    `app.state.agent_graph` de verdad) -- solo necesita que no sea `None`
-    para pasar el chequeo de 503. `getattr(..., None)`, no acceso directo:
-    si esta fixture corre antes que `client` en algun orden de tests, el
-    lifespan real todavia no puso `agent_graph` en `app.state` y el acceso
-    directo tira `KeyError` (Fix Round 1, FIX 5 -- reproducido con
-    `pytest -k disconnected`).
+    fixture monkeypatchean `eventos_sse` entero, asi que nunca corren el grafo).
+    Pero `app.state.agent_graph` no puede ser un `object()` cualquiera, como
+    era antes: ademas del chequeo de 503, el endpoint le pide el estado del
+    hilo (`aget_state`, via `_pausas_pendientes`) para saber si hay una
+    confirmacion abierta, y eso pasa ANTES de que `eventos_sse` entre en juego.
+    Un grafo de juguete vacio con `MemorySaver` contesta eso sin tocar nada.
+
+    `getattr(..., None)`, no acceso directo: si esta fixture corre antes que
+    `client` en algun orden de tests, el lifespan real todavia no puso
+    `agent_graph` en `app.state` y el acceso directo tira `KeyError` (Fix Round
+    1, FIX 5 -- reproducido con `pytest -k disconnected`).
     """
 
     def _override_get_db():
@@ -229,7 +233,7 @@ def app(db_session):
     main.app.dependency_overrides[get_db] = _override_get_db
     main.app.dependency_overrides[get_current_user] = _override_get_current_user
     anterior = getattr(main.app.state, "agent_graph", None)
-    main.app.state.agent_graph = object()
+    main.app.state.agent_graph = _construir_grafo_de_juguete()
     try:
         yield main.app
     finally:
@@ -829,3 +833,65 @@ def test_the_stream_response_tells_proxies_not_to_buffer_it(client, seeded_user)
     assert cabeceras["content-type"].startswith("text/event-stream")
     assert cabeceras["cache-control"] == "no-cache"
     assert cabeceras["x-accel-buffering"] == "no"
+
+
+def test_a_mensaje_while_a_confirmation_is_pending_is_rejected_and_leaves_it_answerable(
+    client, db_session, seeded_user, seeded_customer, seeded_product_with_lot
+):
+    """Es un chat: hay una tarjeta de confirmacion en pantalla y la persona
+    tipea. Medido contra `eventos_sse` real, ese mensaje NO quedaba ignorado ni
+    encolado -- destruia el hilo:
+
+        turno 1 (mensaje):   herramienta | confirmacion | fin(pausado)
+          pendientes:        {'4f73f565dc9f9902c659290130b46d99'}
+        turno 2 (mensaje):   error
+          pendientes:        set()
+        turno 3 (mensaje):   error
+        turno 4 (responder): error
+
+    La excepcion, directo del grafo:
+
+        ValueError: Found AIMessages with tool_calls that do not have a
+        corresponding ToolMessage.
+
+    Sale de `_validate_chat_history` (`langgraph/prebuilt/chat_agent_executor.py`),
+    que `create_react_agent` corre ANTES de llamar al modelo -- no depende del
+    proveedor ni de la clave. El `AIMessage` huerfano queda GRABADO en el
+    checkpoint, asi que la validacion falla en todos los turnos siguientes y
+    ninguna entrada de `/stream` recupera el hilo: la unica salida era borrarlo
+    y perder la conversacion.
+
+    La asercion que importa es la segunda mitad: que despues del rechazo la
+    pausa siga viva y se pueda responder. El hilo tiene que quedar recuperable.
+    """
+    _instalar_grafo(
+        [_sale_tool_call(seeded_customer, seeded_product_with_lot)], [registrar_venta]
+    )
+    hilo = _create_thread_as(client, seeded_user, "mio")
+    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    pausa = _confirmaciones(primero)[0]
+
+    rechazado = client.post(
+        "/api/v1/agent/stream",
+        json={"thread_id": hilo["id"], "mensaje": "no, mejor tres"},
+        headers=_auth(seeded_user),
+    )
+
+    assert rechazado.status_code == 409
+    # El detail tiene que alcanzar para actuar: trae el id de la pausa abierta.
+    assert pausa["interrupt_id"] in rechazado.json()["detail"]
+
+    # El criterio: el hilo quedo recuperable.
+    segundo = _turno(
+        client,
+        seeded_user,
+        {
+            "thread_id": hilo["id"],
+            "decision": {"accion": "aprobar", "huella": pausa["huella"]},
+            "interrupt_id": pausa["interrupt_id"],
+        },
+    )
+    assert [e for e in segundo if e["event"] == "error"] == []
+    assert segundo[-1] == {"event": "fin", "data": {"estado": "completo"}}
+    db_session.expire_all()
+    assert db_session.query(Sale).count() == 1

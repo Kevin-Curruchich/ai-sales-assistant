@@ -208,12 +208,16 @@ defensa entre un cliente y una venta escrita a nombre de otro usuario -- ver
 el docstring de `stream_agent`.
 
 **La huella no firma el `user_id`.** Vale decirlo aca porque es facil de
-suponer y manda a mirar el lugar equivocado: la huella es un HMAC sobre las
-CIFRAS de la operacion (costo unitario, subtotal, lotes FIFO, advertencias) y
-nada mas -- ni `user_id`, ni `thread_id`, ni id de tarea, ni vencimiento (ver
-"El contrato del panel: la huella"). Prueba que las cifras aprobadas son las
-que este servidor mostro, no de quien es la venta. Lo que ata la identidad son
-dos cosas: (1) que este endpoint arme el `configurable` desde el token y solo
+suponer y manda a mirar el lugar equivocado. Lo que el HMAC cubre son dos
+cosas: las CIFRAS de la operacion (costo unitario, subtotal, lotes FIFO,
+advertencias) y la IDENTIDAD DE LA OPERACION -- el hilo y la tarea que la
+emitio (ver "El contrato del panel: la huella" y
+`huella_de_otra_operacion`). Lo que **no** esta adentro: el `user_id`, y ningun
+vencimiento.
+
+Asi que la huella prueba que las cifras aprobadas son las que este servidor
+mostro para ESTA confirmacion -- no de quien es la venta. Eso lo atan dos cosas
+distintas: (1) que este endpoint arme el `configurable` desde el token y solo
 desde el token, y (2) que `sales.user_id` y `purchases.user_id` sean
 `ForeignKey("users.id")` NOT NULL -- un UUID cualquiera no alcanza para
 escribir, revienta el INSERT. La segunda es una red, no la defensa: el UUID de
@@ -393,25 +397,51 @@ primer byte del stream, a diferencia del caso de `error` de arriba. `GET
 saber si el agente nunca arranco -- y por que -- o si fue un fallo puntual de
 esa corrida.
 
-### El hilo ocupado, o la confirmacion que ya no esta pendiente: `409`
+### El estado del hilo no admite este pedido: `409`
 
-Dos casos distintos, los dos **409** y los dos antes del primer byte. Se
-distinguen por el `detail`:
+Tres casos, los tres **409** y los tres antes del primer byte. Se distinguen
+por el `detail`, y los tres nombran en el texto lo que hay que hacer:
 
 - **"Ya hay una corrida en curso para este hilo."** Un segundo pedido sobre un
   `thread_id` que ya tiene una corrida viva -- ver la seccion "Desplegarlo"
   arriba para la restriccion de un solo proceso de la que depende esto.
+- **"Hay una confirmación abierta en este hilo (interrupt_id: ...)"** Llego un
+  `mensaje` mientras una confirmacion estaba pendiente. **Esto no es una
+  formalidad: sin el rechazo, ese mensaje destruia el hilo para siempre** (ver
+  el recuadro de abajo). El `detail` trae el `interrupt_id` de la confirmacion
+  abierta, asi que el panel puede responderla sin pedirle nada mas al servidor:
+  aprobar, corregir, o **cancelar** si lo que la persona quiere es cambiar de
+  tema.
 - **"Esa confirmación no está pendiente en este hilo..."** El `interrupt_id`
   del cuerpo no corresponde a ninguna pausa pendiente de este hilo: inventado,
   de otro hilo, o de una pausa que ya se respondio (un doble click en
   "aprobar", una pestaña vieja). El endpoint lee las pausas pendientes del
   checkpoint antes de arrancar el stream y rechaza la que no esta. **Nada se
-  escribe dos veces por esto.** Lo accionable para el panel: volver a pedir el
-  estado del hilo y responder la confirmacion que siga abierta. Sin este
-  chequeo LangGraph no se queja -- guarda el resume bajo un id que ninguna
-  tarea reclama, la tarea que seguia pausada vuelve a interrumpirse, y el panel
-  recibe otra `confirmacion` como si nunca hubiera aprobado nada (verificado
-  contra langgraph 1.0.3).
+  escribe dos veces por esto.** El `detail` dice tambien que hacer, sin mandar
+  a ningun endpoint que no existe: si queda otra confirmacion abierta, la
+  nombra por id (los ids son estables, y vuelven a viajar en el evento
+  `confirmacion` cada vez que el hilo se reanuda); si no queda ninguna, dice
+  que se puede seguir con un `mensaje`. Sin este chequeo LangGraph no se queja
+  -- guarda el resume bajo un id que ninguna tarea reclama, la tarea que seguia
+  pausada vuelve a interrumpirse, y el panel recibe otra `confirmacion` como si
+  nunca hubiera aprobado nada (verificado contra langgraph 1.0.3).
+
+> **Por que un `mensaje` con una confirmacion abierta tiene que ser un error, y
+> no "gana el mensaje".** Medido contra `eventos_sse` real: el turno emite solo
+> `error`, la pausa **desaparece** del checkpoint, y **todos** los turnos
+> siguientes tambien dan `error`. La causa es
+> `ValueError: Found AIMessages with tool_calls that do not have a
+> corresponding ToolMessage`, que levanta `_validate_chat_history`
+> (`langgraph/prebuilt/chat_agent_executor.py`) -- una validacion que
+> `create_react_agent` corre ANTES de llamar al modelo, asi que no depende del
+> proveedor ni de la clave de API. El `AIMessage` con la tool_call sin respuesta
+> queda **grabado en el checkpoint**, la validacion falla en cada turno
+> posterior, y ninguna entrada de `/stream` recupera la conversacion: la unica
+> salida era borrar el hilo y perderla. Es facilisimo de provocar: es un chat,
+> hay una tarjeta de confirmacion en pantalla, y la persona tipea. Carreado en
+> `tests/test_agent_stream_endpoint.py::test_a_mensaje_while_a_confirmation_is_pending_is_rejected_and_leaves_it_answerable`,
+> cuya asercion central no es el 409 sino que **despues del rechazo la pausa
+> sigue viva y se puede responder**.
 
 ### El cuerpo incompleto: `422`
 
@@ -466,9 +496,15 @@ dos, y tener dos caminos es exactamente lo que dejo pasar el agujero de las
 dos confirmaciones.
 
 Las tres `accion` posibles (`aprobar`, `cancelar`, `corregir`) y lo que cada
-una hace estan en "El contrato del panel: la huella", mas abajo. `mensaje` y
-el par `decision`/`interrupt_id` son mutuamente excluyentes en la practica: si
-vienen los dos, gana `mensaje`.
+una hace estan en "El contrato del panel: la huella", mas abajo.
+
+**Mientras una confirmacion este abierta, el unico pedido que el hilo acepta es
+responderla.** Un `mensaje` en ese momento es un **409** -- no se ignora, no se
+encola, y no "gana": sin ese rechazo destruia el hilo (ver el recuadro en la
+seccion del 409). Para cambiar de tema hay que cancelar la confirmacion
+primero. Si el cuerpo trae `mensaje` y `decision` a la vez, gana `mensaje`, y
+eso hoy es inofensivo justamente porque un `mensaje` solo pasa cuando no hay
+nada pendiente.
 
 **El panel no puede usar `EventSource`.** La API `EventSource` del navegador
 solo hace `GET` y no deja poner cabeceras; `/stream` es `POST` y exige

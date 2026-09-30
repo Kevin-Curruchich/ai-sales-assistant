@@ -89,6 +89,44 @@ def test_engine():
     engine.dispose()
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _tool_writes_sin_herencia(test_engine):
+    """Vacia `agent.tool_writes` al empezar y al terminar la sesion de tests.
+
+    Esa tabla es la UNICA cosa que los tests dejan en la base y nadie limpiaba:
+    vive en el schema `agent` (compartido, fuera del schema desechable de
+    `db_session`, y fuera del radar de Alembic a proposito -- ver
+    `app/agent/idempotency.py`), y cada escritura del agente le agrega una fila
+    que sobrevive a la corrida. Llegue a medir 550 filas acumuladas.
+
+    Sin esto, la suite dependia de un invariante que nada hacia cumplir --
+    "ninguna `write_key` se repite en toda la historia de esta base" -- con el
+    peor modo de falla posible: un test con una clave literal pasa la primera
+    vez y falla la segunda con `ya_registrado`, que no grita "colision de
+    fixtures" sino "esto ya se registro". Esa trampa ya se cobro una corrida de
+    esta suite.
+
+    Lo que esto NO arregla, y por eso las claves de los tests siguen siendo
+    `uuid4`: dos tests de la MISMA corrida que compartan una clave literal se
+    pisan igual. Una fixture de sesion quita la herencia entre corridas, no el
+    acoplamiento dentro de una.
+
+    `DROP TABLE`, no `DROP SCHEMA agent CASCADE`: el schema tambien aloja las
+    tablas del checkpointer de LangGraph, que las recrea `setup()` al construir
+    el grafo -- y con el grafo parcheado en la mayoria de los tests, ese
+    `setup()` puede no correr. `idempotency.ensure_table()` recrea esta tabla
+    sola, la primera vez que una herramienta escribe.
+    """
+
+    def _borrar():
+        with test_engine.begin() as conn:
+            conn.execute(text('DROP TABLE IF EXISTS "agent"."tool_writes"'))
+
+    _borrar()
+    yield
+    _borrar()
+
+
 @pytest.fixture
 def throwaway_schema(test_engine):
     """Un schema vacio, recien creado, que se destruye al terminar el test."""

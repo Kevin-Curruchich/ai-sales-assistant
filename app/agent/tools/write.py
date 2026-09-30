@@ -169,9 +169,9 @@ def _firmar_huella(clave_escritura: str | None, cifras):
     """El sobre firmado que viaja en el payload de `interrupt()`.
 
     Dentro de la firma van las cifras Y la identidad de la operacion
-    (`clave_escritura`: el id de la tarea de Pregel, estable a traves de la
-    reanudacion y distinto por tool_call hermana -- ver
-    `app/agent/idempotency.py`). Sin la identidad adentro, una huella
+    (`clave_escritura`, que es el `thread_id` mas el id de la tarea de Pregel:
+    estable a traves de la reanudacion y distinta por tool_call hermana -- ver
+    `app/agent/idempotency.py::write_key`). Sin la identidad adentro, una huella
     legitimamente emitida por este servidor pero correspondiente a OTRA
     operacion -- otro hilo, otra tool_call del mismo mensaje, un turno
     anterior -- pasaba `verificar()` (la firma es autentica) y despues fallaba

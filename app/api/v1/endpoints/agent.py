@@ -160,17 +160,22 @@ async def stream_agent(
     UNICO que se interpone entre un cliente malicioso y una venta escrita a
     nombre de otro usuario.
 
-    **La huella NO ata la identidad, y creer que si lleva a mirar el lugar
-    equivocado.** `firmar()` (`app/agent/signing.py`) hace HMAC sobre las
-    CIFRAS de la operacion y nada mas -- `cost_basis_unit`, `subtotal`, los
-    lotes FIFO consumidos, las advertencias. Ni `user_id`, ni `thread_id`, ni
-    id de tarea, ni vencimiento. Lo que la huella prueba es que las cifras
-    aprobadas son las que este servidor mostro; de QUIEN es la venta no
-    aparece ahi. Lo que ata la identidad son dos cosas, ninguna de ellas la
-    huella: (1) este endpoint, que arma el `configurable` desde el token, y
+    **La huella NO ata la identidad del USUARIO, y creer que si lleva a mirar
+    el lugar equivocado.** `firmar()` (`app/agent/signing.py`) hace HMAC sobre
+    dos cosas: las CIFRAS de la operacion (`cost_basis_unit`, `subtotal`, los
+    lotes FIFO consumidos, las advertencias) y la IDENTIDAD DE LA OPERACION --
+    la clave de escritura, que es el `thread_id` mas el id de la tarea de
+    Pregel (`idempotency.write_key`, ver `_firmar_huella` en
+    `app/agent/tools/write.py`). Lo que NO esta adentro: el `user_id`, y ningun
+    vencimiento.
+
+    Con eso, la huella prueba dos cosas -- que las cifras aprobadas son las que
+    este servidor mostro, y que son las de ESTA confirmacion y no las de otra
+    -- y ninguna de ellas es de QUIEN es la venta. Eso lo atan dos cosas
+    distintas: (1) este endpoint, que arma el `configurable` desde el token, y
     (2) que `sales.user_id` y `purchases.user_id` son
     `ForeignKey("users.id")` NOT NULL -- un UUID inventado no escribe, revienta
-    el INSERT. Eso ultimo es una red, no la defensa: el UUID de otro usuario
+    el INSERT. Lo segundo es una red, no la defensa: el UUID de otro usuario
     REAL si escribiria, y lo unico que lo impide es (1).
 
     Por eso `config["configurable"]["user_id"]` sale EXCLUSIVAMENTE de
@@ -192,6 +197,11 @@ async def stream_agent(
     pendientes (`_pausas_pendientes`) antes del primer byte, para que un id
     inventado o de una pausa ya respondida sea un 409 claro en vez de una
     `confirmacion` repetida que finge que nada paso.
+
+    Esa misma lectura gobierna el OTRO camino: mientras haya una confirmacion
+    abierta, un `mensaje` tambien es 409. No es simetria por prolijidad -- un
+    `mensaje` ahi rompe el hilo de forma permanente; el comentario en el cuerpo
+    de la funcion tiene la medicion.
 
     ## Orden de las validaciones
 
@@ -277,9 +287,45 @@ async def stream_agent(
         }
     }
 
+    if data.mensaje is None and data.decision is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Mandá 'mensaje' o 'decision'.",
+        )
+
+    # UNA lectura del checkpoint, antes del primer byte, que los dos caminos
+    # necesitan: ninguno de los dos puede decidir si su pedido es valido sin
+    # saber que confirmaciones estan abiertas ahora mismo.
+    pendientes = await _pausas_pendientes(graph, config)
+
     if data.mensaje is not None:
+        if pendientes:
+            # Un `mensaje` con una confirmacion abierta DESTRUYE el hilo, y no
+            # de a poco: medido contra `eventos_sse` real, el turno emite solo
+            # `error`, la pausa DESAPARECE del checkpoint, y todos los turnos
+            # siguientes tambien dan `error`. La causa es
+            # `ValueError: Found AIMessages with tool_calls that do not have a
+            # corresponding ToolMessage`, de `_validate_chat_history`
+            # (`langgraph/prebuilt/chat_agent_executor.py`), que
+            # `create_react_agent` corre ANTES de llamar al modelo -- asi que
+            # no depende del proveedor ni de la clave. El `AIMessage` huerfano
+            # queda grabado en el checkpoint, la validacion falla para siempre,
+            # y ninguna entrada de `/stream` recupera la conversacion: la unica
+            # salida era borrar el hilo.
+            #
+            # Y no hay que construir nada raro para llegar: es un chat, hay una
+            # tarjeta de confirmacion en pantalla, la persona tipea.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Hay una confirmación abierta en este hilo "
+                    f"(interrupt_id: {', '.join(sorted(pendientes))}). Respondela con "
+                    "'decision' -- aprobá, corregí, o cancelá si querés cambiar de tema -- "
+                    "antes de mandar otro mensaje."
+                ),
+            )
         entrada = {"messages": [("user", data.mensaje)]}
-    elif data.decision is not None:
+    else:
         if not data.interrupt_id:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -288,7 +334,6 @@ async def stream_agent(
                     "evento 'confirmacion' que estás respondiendo."
                 ),
             )
-        pendientes = await _pausas_pendientes(graph, config)
         if data.interrupt_id not in pendientes:
             # Un id que no corresponde a ninguna pausa pendiente -- inventado,
             # de otro hilo, o de una pausa que ya se respondio (un doble click
@@ -296,15 +341,26 @@ async def stream_agent(
             # se queja: guarda el resume bajo un id que ninguna tarea reclama,
             # la tarea que seguia pausada vuelve a interrumpirse y el panel
             # recibe OTRA `confirmacion` como si nunca hubiera aprobado nada
-            # -- verificado contra langgraph 1.0.3. Un 409 antes del primer
-            # byte dice la verdad y es accionable: volve a leer las
-            # confirmaciones pendientes de este hilo.
+            # -- verificado contra langgraph 1.0.3.
+            #
+            # El `detail` nombra los ids abiertos porque no hay ningun endpoint
+            # que los devuelva (`GET /threads/{id}` trae solo el titulo y las
+            # fechas) y decirle al panel "volve a pedir el estado del hilo"
+            # seria mandarlo a hacer algo que no existe. No son secretos: quien
+            # llega hasta aca ya probo que el hilo es suyo (`get_owned`).
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
                     "Esa confirmación no está pendiente en este hilo: o ya fue respondida, "
-                    "o el 'interrupt_id' no corresponde. Volvé a pedir el estado del hilo "
-                    "y respondé la confirmación que siga abierta."
+                    "o el 'interrupt_id' no corresponde. "
+                    + (
+                        "La que sigue abierta es "
+                        f"{', '.join(sorted(pendientes))} -- respondé esa (el id es estable, "
+                        "y vuelve a viajar en el evento 'confirmacion' cada vez que el hilo "
+                        "se reanuda)."
+                        if pendientes
+                        else "No queda ninguna abierta: mandá un 'mensaje' para seguir."
+                    )
                 ),
             )
         # SIEMPRE la forma de mapa, tambien con una sola pausa pendiente. Un
@@ -315,11 +371,6 @@ async def stream_agent(
         # aprobar ni cancelar. Un unico camino, en vez de uno que funciona y
         # otro que no.
         entrada = Command(resume={data.interrupt_id: data.decision})
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Mandá 'mensaje' o 'decision'.",
-        )
 
     if data.mensaje is not None and thread.title == DEFAULT_TITLE:
         # El titulo sale del primer mensaje, truncado. HEURISTICA, no una
