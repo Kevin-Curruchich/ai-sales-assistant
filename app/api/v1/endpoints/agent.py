@@ -150,14 +150,28 @@ async def stream_agent(
     ## La identidad es la unica linea de defensa
 
     Las herramientas de escritura leen `user_id` de `config["configurable"]`
-    y firman la huella de aprobacion con ese valor. `user_id_from_config`
-    (ver `app/agent/tools/write.py`) acepta y firma con CUALQUIER UUID
-    sintacticamente valido que reciba -- no puede verificar que corresponda
-    a una sesion autenticada, porque no tiene forma de saberlo. Antes habia
-    un hook de autenticacion en el servidor de LangGraph que garantizaba
-    esto; una task anterior lo borro junto con el servidor. Hoy este
-    endpoint es lo UNICO que se interpone entre un cliente malicioso y una
-    venta firmada a nombre de otro usuario.
+    y escriben la venta o la compra a nombre de ese valor
+    (`create_enriched(data, user_id=...)` -> `sales.user_id`).
+    `user_id_from_config` (ver `app/agent/session.py`) acepta CUALQUIER UUID
+    sintacticamente valido que reciba -- no puede verificar que corresponda a
+    una sesion autenticada, porque no tiene forma de saberlo. Antes habia un
+    hook de autenticacion en el servidor de LangGraph que garantizaba esto;
+    una task anterior lo borro junto con el servidor. Hoy este endpoint es lo
+    UNICO que se interpone entre un cliente malicioso y una venta escrita a
+    nombre de otro usuario.
+
+    **La huella NO ata la identidad, y creer que si lleva a mirar el lugar
+    equivocado.** `firmar()` (`app/agent/signing.py`) hace HMAC sobre las
+    CIFRAS de la operacion y nada mas -- `cost_basis_unit`, `subtotal`, los
+    lotes FIFO consumidos, las advertencias. Ni `user_id`, ni `thread_id`, ni
+    id de tarea, ni vencimiento. Lo que la huella prueba es que las cifras
+    aprobadas son las que este servidor mostro; de QUIEN es la venta no
+    aparece ahi. Lo que ata la identidad son dos cosas, ninguna de ellas la
+    huella: (1) este endpoint, que arma el `configurable` desde el token, y
+    (2) que `sales.user_id` y `purchases.user_id` son
+    `ForeignKey("users.id")` NOT NULL -- un UUID inventado no escribe, revienta
+    el INSERT. Eso ultimo es una red, no la defensa: el UUID de otro usuario
+    REAL si escribiria, y lo unico que lo impide es (1).
 
     Por eso `config["configurable"]["user_id"]` sale EXCLUSIVAMENTE de
     `current_user.id` (la identidad que devolvio `get_current_user`, resuelta

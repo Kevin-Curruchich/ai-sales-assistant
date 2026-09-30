@@ -174,9 +174,22 @@ panel -- para resolver el `User` local a partir de ese token, y arma
 El cuerpo del request (`AgentStreamRequest`) usa `extra="ignore"`: un
 `user_id` o un `configurable` sueltos que un cliente intente colar en el
 body se descartan en silencio, nunca llegan al `config` que arma el
-servidor. Las tres herramientas de escritura firman la huella de aprobacion
-con ese `user_id` -- es la unica linea de defensa entre un cliente y una
-venta firmada a nombre de otro usuario, ver el docstring de `stream_agent`.
+servidor. Ese `user_id` es con el que se escribe la fila
+(`sales.user_id`/`purchases.user_id`), y este endpoint es la unica linea de
+defensa entre un cliente y una venta escrita a nombre de otro usuario -- ver
+el docstring de `stream_agent`.
+
+**La huella no firma el `user_id`.** Vale decirlo aca porque es facil de
+suponer y manda a mirar el lugar equivocado: la huella es un HMAC sobre las
+CIFRAS de la operacion (costo unitario, subtotal, lotes FIFO, advertencias) y
+nada mas -- ni `user_id`, ni `thread_id`, ni id de tarea, ni vencimiento (ver
+"El contrato del panel: la huella"). Prueba que las cifras aprobadas son las
+que este servidor mostro, no de quien es la venta. Lo que ata la identidad son
+dos cosas: (1) que este endpoint arme el `configurable` desde el token y solo
+desde el token, y (2) que `sales.user_id` y `purchases.user_id` sean
+`ForeignKey("users.id")` NOT NULL -- un UUID cualquiera no alcanza para
+escribir, revienta el INSERT. La segunda es una red, no la defensa: el UUID de
+otro usuario **real** si escribiria, y lo unico que lo impide es la primera.
 
 Un token ausente, vacio, vencido o invalido es un **401**, resuelto por
 `get_current_user` antes de que la conversacion llegue a existir -- antes
@@ -458,7 +471,8 @@ y, contra la funcion real (no un doble), en
 > escrito antes -- ver "Idempotencia"), `recalculado` (el inventario
 > cambio entre el preview y la aprobacion), `aprobacion_sin_huella` (la
 > aprobacion no trajo huella utilizable), `huella_no_valida` (vino una
-> huella que este servidor no emitio).
+> huella que este servidor no emitio) y `huella_de_otra_operacion` (vino
+> una huella legitima, pero de otra confirmacion).
 
 Esta es la seccion mas importante de este documento. Un panel que la
 ignora no falla ruidosamente -- deja pasar aprobaciones sin ninguna
@@ -487,8 +501,12 @@ Lo unico que cruza la pausa intacto es el valor que trae el `resume`. Por
 eso cada escritura arma una **huella** -- un digesto de las cifras
 aprobadas (costo unitario, subtotal, que lotes FIFO se consumieron y
 cuanto, advertencias de stock insuficiente para una venta; subtotal por
-item, si el producto sigue activo, total para una compra) -- y la mete
-DENTRO del payload de `interrupt()`. Esa huella viaja al panel, se congela
+item, si el producto sigue activo, total para una compra) **mas la identidad
+de la operacion** (ver `huella_de_otra_operacion`, mas abajo) -- y la mete
+DENTRO del payload de `interrupt()`. Lo que la huella NO contiene: `user_id`
+-- ese viaja aparte y no depende de la huella para nada (ver "El contrato del
+panel: el token de Firebase") -- ni vencimiento: una huella no caduca por
+tiempo, solo por que las cifras cambien. Esa huella viaja al panel, se congela
 en el checkpoint junto con el resto del estado pausado, y es la unica
 evidencia de lo que la persona realmente vio antes de decir que si.
 
@@ -558,6 +576,36 @@ siempre, sin ninguna pista de que el problema es el contrato del panel y no
 el inventario del negocio. `aprobacion_sin_huella` separa ese caso: dice,
 sin ambiguedad, que el panel no devolvio lo que se le mostro, no que algo
 haya cambiado en la base.
+
+### `huella_de_otra_operacion`
+
+La otra mitad de la misma idea. Si la aprobacion trae una huella que este
+servidor **si** emitio, pero para **otra** operacion -- otra confirmacion del
+mismo turno, un turno anterior, otro hilo -- la firma verifica (es autentica) y
+lo que falla despues es la comparacion de cifras. Antes eso caia en
+`recalculado`: "el inventario cambio y el costo difiere de lo que aprobaste".
+Nada se escribia, pero el motivo era falso, y falso en la misma direccion que
+`aprobacion_sin_huella` existe para evitar: culpaba al inventario del negocio
+por un problema de contrato del panel.
+
+```json
+{"estado": "huella_de_otra_operacion", "mensaje": "..."}
+```
+
+Lo que lo hace posible: **la identidad de la operacion viaja adentro de la
+firma**, junto con las cifras (el id de la tarea de LangGraph -- estable a
+traves de la reanudacion, distinto por confirmacion hermana). El panel no ve
+ese dato ni tiene que entenderlo: sigue guardando el sobre opaco y
+devolviendolo tal cual. Solo cambia que ahora devolver el sobre EQUIVOCADO se
+reporta como lo que es. El caso tipico que esto atrapa es un panel que mezcla
+dos confirmaciones del mismo turno: manda el `interrupt_id` de una con la
+`huella` de la otra.
+
+Consecuencia operativa, la misma que rotar `AGENT_HUELLA_SECRET`: las
+aprobaciones que quedaron pendientes desde antes de un despliegue que cambie la
+forma de la huella se rechazan con `huella_no_valida` ("una forma que este
+servidor ya no emite") y hay que volver a aprobarlas. No se escribe nada de
+mas, ni se escribe nada equivocado.
 
 Nota: `registrar_movimiento_caja` no calcula huella -- un movimiento de caja
 no deriva de inventario ni de lotes, es un hecho que la persona afirma

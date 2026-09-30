@@ -38,13 +38,20 @@ con `"estado": "aprobacion_sin_huella"`: sin esta distincion, ese panel viejo
 recibiria "recalculado" ("el inventario cambio") para SIEMPRE, en cada
 aprobacion, sin ninguna pista de que el problema es el contrato y no el
 inventario. Esto cambia el contrato del panel (tiene que guardar y devolver
-`huella` sin tocarla); Task 10 lo documenta. La huella es un valor sin firmar
-que el cliente retiene entre la pausa y el resume: un panel que la
-RECALCULA en vez de echoarla derrota la guardia en silencio (siempre
-"coincide" con lo que el mismo panel acaba de calcular) -- esta herramienta
-no puede distinguir eso de un echo honesto cuando nada cambio en el medio;
-solo puede decir lo que SI puede distinguir, que es la ausencia total de
-huella.
+`huella` sin tocarla); `docs/agente.md` lo documenta.
+
+La huella va FIRMADA (`app/agent/signing.py`), con las cifras y la identidad
+de la operacion adentro de la firma -- ver `_firmar_huella`. Eso da tres
+rechazos con tres motivos distintos, en vez de uno que miente: una huella que
+este servidor no emitio es `huella_no_valida` (un panel que RECALCULA la
+huella en vez de echoarla derrota la guardia en silencio, y la firma es lo
+que vuelve ruidosa esa falla la primera vez); una huella nuestra pero de otra
+operacion es `huella_de_otra_operacion`; y solo si la huella es de ESTA
+operacion se compara contra el recalculo, y ahi `recalculado` significa de
+verdad que el inventario cambio. Lo que sigue sin poder distinguirse: un echo
+honesto de un recalculo del panel que da lo mismo por casualidad -- pero
+recalcular ya no produce una firma valida, asi que el panel no puede fabricar
+uno.
 
 `db.expire_all()` antes de cada recalculo NO es lo que hace funcionar esta
 guardia bajo una reanudacion real -- `agent_session()` abre una sesion NUEVA
@@ -156,6 +163,93 @@ def _huella_ausente(huella) -> bool:
     mensaje que sugiere que algo cambio en la base (ronda 2 de revision)."""
     return not huella
 
+
+
+def _firmar_huella(clave_escritura: str | None, cifras):
+    """El sobre firmado que viaja en el payload de `interrupt()`.
+
+    Dentro de la firma van las cifras Y la identidad de la operacion
+    (`clave_escritura`: el id de la tarea de Pregel, estable a traves de la
+    reanudacion y distinto por tool_call hermana -- ver
+    `app/agent/idempotency.py`). Sin la identidad adentro, una huella
+    legitimamente emitida por este servidor pero correspondiente a OTRA
+    operacion -- otro hilo, otra tool_call del mismo mensaje, un turno
+    anterior -- pasaba `verificar()` (la firma es autentica) y despues fallaba
+    la comparacion de cifras, y esta herramienta contestaba `recalculado`: "el
+    inventario cambio y el costo difiere de lo que aprobaste". Nada se
+    escribia, pero el motivo era falso -- culpaba al inventario del negocio
+    por un problema de contrato del panel, que es exactamente la mentira que
+    `aprobacion_sin_huella` existe para no decir.
+
+    `clave_escritura` es `None` en una invocacion directa, fuera de un grafo:
+    ahi no hay id de tarea, las dos huellas llevan `None` y la distincion se
+    desactiva sola -- igual que la guardia de idempotencia, y por la misma
+    razon (no hay reanudacion que desambiguar).
+    """
+    return firmar({"operacion": clave_escritura, "cifras": cifras})
+
+
+def _cifras_de_la_huella(huella_aprobada, clave_escritura: str | None):
+    """`(problema, cifras)`: el estado a devolver si la huella no sirve, o las
+    cifras que la persona aprobo.
+
+    Tres rechazos distintos, con tres motivos distintos, porque mandan a mirar
+    tres lugares distintos: la firma no es de este servidor
+    (`huella_no_valida` -- un panel que recalcula la huella en vez de
+    guardarla), la firma es nuestra pero de otra operacion
+    (`huella_de_otra_operacion` -- el panel mezclo confirmaciones), o las
+    cifras cambiaron (`recalculado`, que decide quien llama).
+    """
+    firma_ok, datos = verificar(huella_aprobada)
+    if not firma_ok:
+        return (
+            {
+                "estado": "huella_no_valida",
+                "mensaje": (
+                    "La huella de la aprobacion no fue emitida por este "
+                    "servidor. El panel debe devolver TAL CUAL el valor que "
+                    "vino en el payload de interrupt(), sin recalcularlo ni "
+                    "modificarlo. No se escribio nada."
+                ),
+            },
+            None,
+        )
+
+    if not isinstance(datos, dict) or "cifras" not in datos or "operacion" not in datos:
+        # Firma autentica, forma que este codigo no emite: una huella de una
+        # version anterior del servidor, congelada en un checkpoint desde
+        # antes del despliegue. Misma consecuencia que rotar el secreto (ya
+        # documentada): hay que volver a aprobar.
+        return (
+            {
+                "estado": "huella_no_valida",
+                "mensaje": (
+                    "La huella de la aprobacion tiene una forma que este "
+                    "servidor ya no emite -- probablemente quedo pendiente "
+                    "desde antes de un despliegue. No se escribio nada; hay "
+                    "que volver a previsualizar y aprobar."
+                ),
+            },
+            None,
+        )
+
+    if datos["operacion"] != clave_escritura:
+        return (
+            {
+                "estado": "huella_de_otra_operacion",
+                "mensaje": (
+                    "La huella de la aprobacion es de OTRA operacion: la firmo "
+                    "este servidor, pero para una confirmacion distinta de la "
+                    "que se esta respondiendo. Cada confirmacion se responde "
+                    "con la huella que vino en SU evento, y con su "
+                    "'interrupt_id'. No se escribio nada, y el inventario no "
+                    "tiene nada que ver."
+                ),
+            },
+            None,
+        )
+
+    return (None, datos["cifras"])
 
 
 def _ya_escrito(db, clave: str | None, herramienta: str, id_key: str) -> dict | None:
@@ -302,24 +396,27 @@ def registrar_venta(
     se mostro el precio y que se aprobo.
 
     El resultado trae "estado": "registrado" | "cancelado" | "recalculado" |
-    "aprobacion_sin_huella" | "ya_registrado". "registrado" trae la venta
+    "aprobacion_sin_huella" | "huella_no_valida" |
+    "huella_de_otra_operacion" | "ya_registrado". "registrado" trae la venta
     escrita bajo la clave "venta" (no "preview"). "ya_registrado" significa
     que esta misma tarea ya escribio esta venta y el proceso se reanudo
     despues -- no se escribio de nuevo, no hay nada que corregir.
     "recalculado" significa que el inventario cambio entre que se mostro el
     precio y que se aprobo -- nada se escribio, hay que volver a
-    previsualizar. "aprobacion_sin_huella"
-    significa que la aprobacion no trajo la huella que se le mostro -- un
-    problema del panel, no del inventario.
+    previsualizar. "aprobacion_sin_huella" significa que la aprobacion no
+    trajo la huella que se le mostro, "huella_no_valida" que trajo una que
+    este servidor no emitio, y "huella_de_otra_operacion" que trajo una
+    legitima pero de otra confirmacion -- los tres son problemas del panel,
+    no del inventario.
     """
     # Autenticar ANTES de interrumpir: pedirle a una persona que apruebe algo
     # que nunca se iba a poder escribir es el orden equivocado, aunque nada
     # se escriba (no era un bug de correccion, era un orden raro -- ronda 2
     # de revision). El `user_id` viene del `configurable` que arma quien
-    # invoca el grafo -- hoy el endpoint que corre en el mismo proceso
-    # FastAPI (Task 6, todavia no escrito) -- y que esa identidad corresponda
-    # a una sesion autenticada es responsabilidad de ese invocador, no de
-    # esta funcion; `config` lo pasa LangGraph, el modelo no lo ve ni lo
+    # invoca el grafo -- hoy `stream_agent`, en
+    # `app/api/v1/endpoints/agent.py`, que corre en el mismo proceso FastAPI
+    # -- y que esa identidad corresponda a una sesion autenticada es
+    # responsabilidad de ese invocador, no de esta funcion; `config` lo pasa LangGraph, el modelo no lo ve ni lo
     # puede inventar.
     usuario_id = user_id_from_config(config)
     clave_escritura = idempotency.write_key(config)
@@ -350,7 +447,7 @@ def registrar_venta(
         while True:
             data = _build_sale_create(**valores)
             preview = service.preview_sale(data)
-            huella = firmar(_sale_cost_huella(preview))
+            huella = _firmar_huella(clave_escritura, _sale_cost_huella(preview))
 
             decision = interrupt(
                 {
@@ -404,17 +501,11 @@ def registrar_venta(
             # La firma prueba que esta huella la emitio ESTE servidor.  Sin
             # esto, un panel que la recalcule en vez de guardarla apaga la
             # comparacion en silencio y nadie se entera.
-            firma_ok, cifras_aprobadas = verificar(huella_aprobada)
-            if not firma_ok:
-                return {
-                    "estado": "huella_no_valida",
-                    "mensaje": (
-                        "La huella de la aprobacion no fue emitida por este "
-                        "servidor. El panel debe devolver TAL CUAL el valor que "
-                        "vino en el payload de interrupt(), sin recalcularlo ni "
-                        "modificarlo. No se escribio nada."
-                    ),
-                }
+            problema, cifras_aprobadas = _cifras_de_la_huella(
+                huella_aprobada, clave_escritura
+            )
+            if problema is not None:
+                return problema
 
             db.expire_all()
             recalculado = service.preview_sale(data)
@@ -557,7 +648,8 @@ def registrar_compra(
     -- esta herramienta nunca lo hace por su cuenta.
 
     El resultado trae "estado": "registrado" | "cancelado" | "recalculado" |
-    "aprobacion_sin_huella" | "ya_registrado". "registrado" trae la compra
+    "aprobacion_sin_huella" | "huella_no_valida" |
+    "huella_de_otra_operacion" | "ya_registrado". "registrado" trae la compra
     confirmada bajo la clave "compra" (no "preview"). "ya_registrado"
     significa que esta misma tarea ya la escribio y el proceso se reanudo
     despues -- no se escribio de nuevo.
@@ -585,7 +677,7 @@ def registrar_compra(
         while True:
             data = _build_purchase_create(**valores)
             preview = _purchase_preview(db, data)
-            huella = firmar(_purchase_huella(preview))
+            huella = _firmar_huella(clave_escritura, _purchase_huella(preview))
 
             decision = interrupt(
                 {
@@ -621,17 +713,11 @@ def registrar_compra(
                     ),
                 }
 
-            firma_ok, cifras_aprobadas = verificar(huella_aprobada)
-            if not firma_ok:
-                return {
-                    "estado": "huella_no_valida",
-                    "mensaje": (
-                        "La huella de la aprobacion no fue emitida por este "
-                        "servidor. El panel debe devolver TAL CUAL el valor que "
-                        "vino en el payload de interrupt(), sin recalcularlo ni "
-                        "modificarlo. No se escribio nada."
-                    ),
-                }
+            problema, cifras_aprobadas = _cifras_de_la_huella(
+                huella_aprobada, clave_escritura
+            )
+            if problema is not None:
+                return problema
 
             db.expire_all()  # ver la nota identica en registrar_venta (Finding I4)
             recalculado = _purchase_preview(db, data)
