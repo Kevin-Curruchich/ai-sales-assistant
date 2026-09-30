@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.core.security import initialize_firebase
 from app.core.database import engine
 from app.api.v1.router import api_router
+from app.agent.graph import build_async_checkpointer, build_graph, checkpointer_schema, _default_model
 
 # This import is redundant but harmless: app.api.v1.router (above) transitively
 # imports every endpoint/service/repository, each of which imports these model
@@ -30,7 +31,12 @@ async def lifespan(app: FastAPI):
         logger.exception("Firebase initialization failed during startup")
         startup_issues.append("firebase_init_failed")
 
+    checkpointer = await build_async_checkpointer(settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema())
+    app.state.agent_graph = build_graph(_default_model(), checkpointer)
+
     yield
+
+    await checkpointer.conn.close()
     engine.dispose()
 
 

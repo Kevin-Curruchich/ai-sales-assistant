@@ -103,7 +103,7 @@ def ensure_table(db) -> None:
     DDL propio, comiteado aparte y ANTES de que empiece el trabajo del
     negocio: no puede compartir transaccion con la escritura que va a
     proteger. En produccion el schema `agent` ya existe (lo crea
-    `_postgres_checkpointer` al construir el grafo, con las mismas
+    `build_async_checkpointer` al construir el grafo, con las mismas
     credenciales); el `CREATE SCHEMA IF NOT EXISTS` de aca es para que un
     entorno que arranque distinto -- o un test -- no dependa de ese orden.
     """

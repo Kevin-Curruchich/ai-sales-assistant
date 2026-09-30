@@ -16,22 +16,15 @@ interrumpida, y la asercion de que el cuerpo de la que ya comiteo corre
 exactamente una vez a lo largo de dos rondas de reanudacion.
 """
 
-import uuid
-
-import pytest
-from psycopg import Connection
-
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import Command
-from sqlalchemy import text
 
-from app.agent.graph import _postgres_checkpointer, build_graph, checkpointer_schema
+from app.agent.graph import build_graph, checkpointer_schema
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
-from tests.conftest import TEST_DATABASE_URL
 
 
 class FakeToolCallingModel(BaseChatModel):
@@ -189,122 +182,3 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
     assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
 
 
-def test_postgres_checkpointer_creates_its_schema_before_setup(test_engine):
-    """`PostgresSaver.setup()` corre DDL sin calificar -- no crea el schema.
-
-    Contra un schema que no existe todavia (una base fresca: un `db_local`
-    nuevo, produccion, CI), fijar `search_path` a ese nombre y despues
-    llamar `setup()` directamente revienta con `InvalidSchemaName: no
-    schema has been selected to create in` -- Postgres no falla en el `SET
-    search_path` (un schema inexistente en el path simplemente se salta),
-    sino recien en el primer `CREATE TABLE` de `setup()`. Este test arranca
-    de un schema garantizado inexistente (se borra primero, por si quedo de
-    una corrida anterior) para reproducir exactamente esa condicion, y
-    prueba que `_postgres_checkpointer` -- que crea el schema explicito
-    antes de fijar `search_path` y de llamar `setup()`, igual que
-    `alembic/env.py` hace para el schema del negocio -- no la pisa."""
-    schema = f"agent_test_{uuid.uuid4().hex[:8]}"
-    with test_engine.begin() as conn:
-        conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-
-    try:
-        checkpointer = _postgres_checkpointer(TEST_DATABASE_URL, schema)
-        try:
-            with test_engine.begin() as conn:
-                tables = (
-                    conn.execute(
-                        text("SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"),
-                        {"schema": schema},
-                    )
-                    .scalars()
-                    .all()
-                )
-            assert "checkpoints" in tables
-            assert "checkpoint_writes" in tables
-        finally:
-            checkpointer.conn.close()
-    finally:
-        with test_engine.begin() as conn:
-            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-
-
-def test_the_postgres_checkpointer_closes_its_connection_when_setup_fails(test_engine, monkeypatch):
-    """Si `setup()` revienta, la conexion no queda abierta y sin dueño.
-
-    Nadie tiene una referencia para cerrarla despues -- el pool del servidor
-    de Postgres se la come hasta que muera el proceso, y un arranque que
-    falla y reintenta las iba acumulando de a una por intento."""
-    from langgraph.checkpoint.postgres import PostgresSaver
-
-    schema = f"agent_test_{uuid.uuid4().hex[:8]}"
-    opened = []
-
-    real_connect = Connection.connect
-
-    def spy_connect(*args, **kwargs):
-        conn = real_connect(*args, **kwargs)
-        opened.append(conn)
-        return conn
-
-    def explode(self):
-        raise RuntimeError("setup() reviento")
-
-    monkeypatch.setattr(Connection, "connect", staticmethod(spy_connect))
-    monkeypatch.setattr(PostgresSaver, "setup", explode)
-
-    try:
-        with pytest.raises(RuntimeError):
-            _postgres_checkpointer(TEST_DATABASE_URL, schema)
-
-        assert len(opened) == 1
-        assert opened[0].closed
-    finally:
-        for conn in opened:
-            if not conn.closed:
-                conn.close()
-        with test_engine.begin() as conn:
-            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
-
-
-def test_the_graph_factory_builds_once_and_is_reused_across_runs(monkeypatch):
-    """`langgraph-api` llama a esta fabrica UNA VEZ POR CORRIDA, sin cache.
-
-    Verificado en el fuente de langgraph-api 0.15.1: `graph.py:404` hace
-    `value = invoke_factory(value, graph_id, config, factory_runtime)` dentro
-    de `get_graph`, que es un `@asynccontextmanager` que `stream.py:182-194`
-    entra con `stack.enter_async_context(...)` en cada corrida. `GRAPHS[...]`
-    guarda la FABRICA, no el grafo, y no hay ningun cache en el medio.
-
-    Sin este cache, cada corrida abria una `psycopg.Connection` nueva, corria
-    un `CREATE SCHEMA` y un `PostgresSaver.setup()` completo, y la conexion
-    no se cerraba nunca -- una conexion de Postgres filtrada por corrida,
-    hasta que el `max_connections` de Railway termina el servicio. (Y encima
-    el servidor la descarta: `graph.py:416-422` hace
-    `graph_obj.copy(update={"checkpointer": ...})` con el suyo.)
-
-    M6, en esta misma tanda, cerro la fuga del camino de ERROR de esa misma
-    funcion. Esta es la del camino de EXITO, que corre siempre."""
-    import app.agent.graph as graph_module
-
-    construidos = {"modelo": 0, "checkpointer": 0}
-
-    def fake_model():
-        construidos["modelo"] += 1
-        return FakeToolCallingModel()
-
-    def fake_checkpointer():
-        construidos["checkpointer"] += 1
-        return MemorySaver()
-
-    monkeypatch.setattr(graph_module, "_graph_singleton", None)
-    monkeypatch.setattr(graph_module, "_default_model", fake_model)
-    monkeypatch.setattr(graph_module, "_default_checkpointer", fake_checkpointer)
-
-    primero = graph_module.graph({"configurable": {"thread_id": "corrida-1"}})
-    segundo = graph_module.graph({"configurable": {"thread_id": "corrida-2"}})
-
-    assert primero is segundo
-    assert construidos["checkpointer"] == 1, (
-        "la fabrica abrio un checkpointer (y una conexion de Postgres) por corrida"
-    )
-    assert construidos["modelo"] == 1

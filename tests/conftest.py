@@ -43,6 +43,22 @@ def pytest_configure(config):
                 "schemas: usa la base desechable de docker-compose.test.yml."
             )
 
+    # El lifespan de `app.main` (Task 4) construye un checkpointer real de
+    # Postgres -- una conexion de verdad, no perezosa como la de SQLAlchemy --
+    # apenas arranca la app. Cualquier test que instancie `TestClient(main.app)`
+    # (directo, como `tests/test_startup.py`, o via la fixture `client` de
+    # `fixtures_http.py`) dispara ese lifespan. Sin este parche apuntaria a
+    # `settings.SQLALCHEMY_DATABASE_URI` -- la base de desarrollo del `.env`,
+    # puerto 55433 -- violando la regla de "los tests solo tocan el 55432".
+    # `settings` ya existe para cuando corre este hook (los `pytest_plugins`
+    # de arriba importan `fixtures_http`, que importa `app.main`, antes de que
+    # pytest invoque `pytest_configure`), y `SQLALCHEMY_DATABASE_URI` es una
+    # `@property` que se reevalua en cada lifespan -- mutar el atributo una
+    # vez aca alcanza para el resto de la sesion.
+    from app.core.config import settings as _settings
+
+    _settings.DATABASE_URL = TEST_DATABASE_URL
+
 
 @pytest.fixture(scope="session")
 def test_engine():
