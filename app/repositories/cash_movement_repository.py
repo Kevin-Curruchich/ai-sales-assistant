@@ -51,6 +51,47 @@ class CashMovementRepository:
         ).limit(limit).offset(offset)
         return list(self.db.execute(stmt).scalars().all())
 
+    def _range_filters(self, stmt, start: Optional[datetime], end: Optional[datetime]):
+        if start is not None:
+            stmt = stmt.where(CashMovement.occurred_at >= start)
+        if end is not None:
+            stmt = stmt.where(CashMovement.occurred_at <= end)
+        return stmt
+
+    def count(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> int:
+        stmt = self._range_filters(select(func.count()).select_from(CashMovement), start, end)
+        return self.db.execute(stmt).scalar_one()
+
+    def get_recent_with_balance(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[tuple[CashMovement, Decimal]]:
+        """Movimientos del mas reciente al mas antiguo, cada uno con el saldo
+        que dejo en caja.
+
+        El saldo se calcula con una ventana sobre TODO el libro y el rango se
+        filtra despues: filtrar antes haria que el saldo arranque en 0 al
+        inicio del rango en vez de arrastrar lo anterior.  El orden de la
+        ventana es el mismo de `get_all`, para que ambos den el mismo saldo.
+        """
+        running_balance = (
+            func.sum(_signed_amount())
+            .over(order_by=(CashMovement.occurred_at, CashMovement.created_at, CashMovement.id))
+            .label("running_balance")
+        )
+        ledger = select(CashMovement.id.label("movement_id"), running_balance).subquery()
+        stmt = select(CashMovement, ledger.c.running_balance).join(
+            ledger, ledger.c.movement_id == CashMovement.id
+        )
+        stmt = self._range_filters(stmt, start, end)
+        stmt = stmt.order_by(
+            CashMovement.occurred_at.desc(), CashMovement.created_at.desc(), CashMovement.id.desc()
+        ).limit(limit).offset(offset)
+        return [(m, Decimal(str(balance))) for m, balance in self.db.execute(stmt).all()]
+
     def get_running_balance(self, as_of: Optional[datetime] = None) -> Decimal:
         stmt = select(func.coalesce(func.sum(_signed_amount()), 0))
         if as_of is not None:

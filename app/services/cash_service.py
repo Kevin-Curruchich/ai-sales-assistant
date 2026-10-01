@@ -75,3 +75,21 @@ class CashService:
             balance += -m.amount if m.type in CASH_OUTFLOW_TYPES else m.amount
             out.append((m, self._money(balance)))
         return out
+
+    def count(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> int:
+        return self.repo.count(start=start, end=end)
+
+    def recent_movements(
+        self,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[tuple[CashMovement, Decimal]]:
+        """Pagina del libro, del mas reciente al mas antiguo, con el saldo acumulado."""
+        return [
+            (m, self._money(balance))
+            for m, balance in self.repo.get_recent_with_balance(
+                start=start, end=end, limit=limit, offset=offset
+            )
+        ]
