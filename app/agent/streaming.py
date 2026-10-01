@@ -90,7 +90,7 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
         ):
             if modo == "messages":
                 mensaje, _metadata = chunk
-                # `.text`, no `.content`: el grafo real bindea las siete
+                # `.text`, no `.content`: el grafo real bindea las ocho
                 # herramientas (`app/agent/graph.py`), y con herramientas
                 # bindeadas `langchain_anthropic` NUNCA coerciona `content` a
                 # `str` (`coerce_content_to_string` en

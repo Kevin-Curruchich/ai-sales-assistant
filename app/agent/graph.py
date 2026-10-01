@@ -44,7 +44,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.prebuilt import create_react_agent
 
-from app.agent.prompt import SYSTEM_PROMPT
+from app.agent.prompt_runtime import prompt_con_fecha
 from app.agent.tools import ALL_TOOLS
 
 MODEL_NAME = "claude-sonnet-5"
@@ -65,7 +65,7 @@ def checkpointer_schema() -> str:
 
 
 def build_graph(model, checkpointer: BaseCheckpointSaver):
-    """Arma el grafo: el modelo, las siete herramientas del agente, y el
+    """Arma el grafo: el modelo, las ocho herramientas del agente, y el
     checkpointer que persiste el estado entre pausas de `interrupt()`.
 
     `version="v2"` es lo que reparte cada tool_call del mismo mensaje como
@@ -74,7 +74,11 @@ def build_graph(model, checkpointer: BaseCheckpointSaver):
     return create_react_agent(
         model,
         ALL_TOOLS,
-        prompt=SYSTEM_PROMPT,
+        # Callable, no el string: `create_react_agent` lo invoca EN CADA
+        # TURNO, y la fecha de hoy tiene que resolverse ahi. El grafo se
+        # construye una sola vez en el `lifespan`, asi que una fecha
+        # interpolada al construirlo se congela el dia del despliegue.
+        prompt=prompt_con_fecha,
         checkpointer=checkpointer,
         version="v2",
     )

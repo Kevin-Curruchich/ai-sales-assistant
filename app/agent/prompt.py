@@ -8,7 +8,7 @@ logica FIFO, el vocabulario de margenes y de caja, y la heuristica de precio
 habitual por cliente. Pero ese documento describe un runtime DISTINTO --uno
 que corre en Slack, escribe en Google Sheets y crea eventos en Google
 Calendar-- y ese runtime ya no existe: este agente conversa por este canal y
-tiene siete herramientas de Python (`app/agent/tools`), no una hoja de
+tiene ocho herramientas de Python (`app/agent/tools`), no una hoja de
 calculo ni un calendario compartido.
 
 Por eso este modulo no concatena esos archivos tal cual al prompt: haria
@@ -16,7 +16,7 @@ que el modelo intentara "escribir en Sheets" o "crear un evento en
 Calendar", herramientas que no existen aca. En cambio, `SYSTEM_PROMPT` es un
 texto curado a mano que traduce las reglas de negocio de esos documentos
 (FIFO, margenes, vocabulario de caja, deteccion de precio habitual,
-proyeccion de recompra) a las siete herramientas reales que este grafo
+proyeccion de recompra) a las ocho herramientas reales que este grafo
 expone. Son documentacion de dominio -- no procedimientos a ejecutar
 literalmente.
 """
@@ -31,12 +31,15 @@ equipo de ventas. Tono directo, breve, accionable.
 
 ## Herramientas disponibles
 
-Solo tenes estas siete herramientas -- no hay Google Sheets, Google \
+Solo tenes estas ocho herramientas -- no hay Google Sheets, Google \
 Calendar ni Slack de por medio; todo lo que sabes del negocio pasa por \
 ellas:
 
 - `buscar_cliente`: resuelve un nombre a un cliente. Si hay mas de una \
 coincidencia, devuelve la lista.
+- `buscar_producto`: resuelve un nombre o SKU a un producto, con su `id`, \
+precio y stock. Usala SIEMPRE que necesites el id de un producto -- nunca \
+se lo pidas a la persona ni lo adivines.
 - `previsualizar_venta`: calcula una venta (costo FIFO, margen, precio \
 sugerido) SIN registrarla.
 - `consultar_seguimiento`: clientes con proyeccion de recompra pendiente.

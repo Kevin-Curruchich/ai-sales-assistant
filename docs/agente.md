@@ -1,8 +1,8 @@
 # El agente conversacional
 
 `app/agent/` es un grafo de LangGraph (`create_react_agent`, `version="v2"`)
-con siete herramientas -- tres de lectura, tres de escritura que pausan a
-pedir confirmacion humana, y `buscar_cliente`. Se sirve **en el mismo
+con ocho herramientas -- cinco de lectura, tres de escritura que pausan a
+pedir confirmacion humana, y las busquedas de clientes y productos. Se sirve **en el mismo
 proceso** que el backend FastAPI de este repositorio: el grafo se construye
 una vez en el `lifespan` de `app/main.py` y vive en `app.state.agent_graph`
 mientras dure el proceso. No hay un segundo servicio, ni un segundo
@@ -183,6 +183,37 @@ await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
 El mismo patron que `alembic/env.py` usa para el schema del negocio. No hace
 falta ningun paso manual antes de desplegar por esto -- se crea solo, la
 primera vez que se construye el grafo en el proceso (local, produccion, CI).
+
+## El agente sabe que dia es hoy
+
+`previsualizar_venta`, `registrar_venta`, `registrar_compra` y
+`registrar_movimiento_caja` reciben `fecha` como parametro **obligatorio**, y
+hasta el 2026-10-01 nada se la decia al modelo: la inventaba desde su
+entrenamiento, o sea una fecha pasada.
+
+Eso rompia las ventas, no solo las fechaba mal.
+`PurchaseRepository.get_fifo_available_lots` filtra los lotes con
+`purchase.date <= fecha_de_la_venta`, asi que una fecha anterior a la compra
+deja el lote afuera. Medido contra produccion, con todo el inventario abierto el
+2026-09-30 por el corte de mes: con la fecha real el FIFO ve 1 lote con 6
+unidades; con cualquier fecha anterior al 30/09 ve 0 y 0. El agente respondia
+«el producto tiene stock pero esta sin lotes» y no registraba ninguna venta,
+mientras el panel -- que manda la fecha real del navegador -- funcionaba.
+
+`app/agent/prompt_runtime.py::prompt_con_fecha` agrega la fecha de hoy al
+prompt del sistema. Dos decisiones que importan:
+
+**Es un callable, no un string interpolado.** `create_react_agent` acepta en
+`prompt` una funcion que invoca **en cada turno**. El grafo se construye una
+sola vez en el `lifespan` y vive mientras viva el proceso: una fecha calculada
+ahi se congelaria el dia del despliegue y el bug volveria a los pocos dias, mas
+dificil de ver porque «funcionaba cuando lo probamos». Hay un test dedicado a
+esa regresion.
+
+**La fecha sale de la zona del negocio, no de `date.today()`.** Railway corre en
+UTC y Guatemala esta seis horas atras: entre las 18:00 y la medianoche local el
+servidor ya paso al dia siguiente, y una venta de las siete de la tarde quedaria
+fechada manana.
 
 ## El contrato del panel: el token de Firebase
 
@@ -863,7 +894,7 @@ tiempo de ejecucion: un contenedor desplegado no lo va a tener, y de todas
 formas describe herramientas (Sheets, Calendar, Slack) que este agente no
 tiene. En su lugar, `app/agent/prompt.py::SYSTEM_PROMPT` es una traduccion
 escrita a mano de esas mismas reglas de negocio (FIFO, margenes, vocabulario
-de caja, deteccion de precio habitual) a las siete herramientas reales de
+de caja, deteccion de precio habitual) a las ocho herramientas reales de
 este grafo -- ver el docstring de modulo de `prompt.py`.
 
 `AGENTS.md` y las nueve skills estan versionados a proposito, como
