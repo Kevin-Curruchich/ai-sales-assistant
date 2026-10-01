@@ -276,12 +276,14 @@ class SaleService:
         product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        is_payment_pending: Optional[bool] = None,
     ) -> int:
         return self.sale_repo.count(
             customer_id=customer_id,
             product_id=product_id,
             start_date=start_date,
             end_date=end_date,
+            is_payment_pending=is_payment_pending,
         )
 
     def get_all(
@@ -290,6 +292,7 @@ class SaleService:
         product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        is_payment_pending: Optional[bool] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[Sale]:
@@ -298,6 +301,7 @@ class SaleService:
             product_id=product_id,
             start_date=start_date,
             end_date=end_date,
+            is_payment_pending=is_payment_pending,
             limit=limit,
             offset=offset,
         )
@@ -317,6 +321,7 @@ class SaleService:
         product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        is_payment_pending: Optional[bool] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[SaleResponse]:
@@ -325,6 +330,7 @@ class SaleService:
             product_id=product_id,
             start_date=start_date,
             end_date=end_date,
+            is_payment_pending=is_payment_pending,
             limit=limit,
             offset=offset,
         )

@@ -23,6 +23,7 @@ def list_sales(
     product_id: Optional[uuid.UUID] = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    is_payment_pending: Optional[bool] = None,
     limit: int = 10,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -34,6 +35,7 @@ def list_sales(
         product_id=product_id,
         start_date=start_date,
         end_date=end_date,
+        is_payment_pending=is_payment_pending,
         limit=limit,
         offset=offset,
     )
@@ -42,6 +44,7 @@ def list_sales(
         product_id=product_id,
         start_date=start_date,
         end_date=end_date,
+        is_payment_pending=is_payment_pending,
     )
     return {"data": items, "meta": {"total": total}}
 

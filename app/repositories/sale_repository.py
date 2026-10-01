@@ -16,6 +16,7 @@ class SaleRepository:
         product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        is_payment_pending: Optional[bool] = None,
     ) -> int:
         from sqlalchemy import func
         stmt = select(func.count()).select_from(Sale)
@@ -27,6 +28,8 @@ class SaleRepository:
             stmt = stmt.where(Sale.date >= start_date)
         if end_date:
             stmt = stmt.where(Sale.date <= end_date)
+        if is_payment_pending is not None:
+            stmt = stmt.where(Sale.is_payment_pending == is_payment_pending)
         return self.db.execute(stmt).scalar()
     
     def __init__(self, db: Session):
@@ -38,6 +41,7 @@ class SaleRepository:
         product_id: Optional[uuid.UUID] = None,
         start_date: Optional[date] = None,
         end_date: Optional[date] = None,
+        is_payment_pending: Optional[bool] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> list[Sale]:
@@ -57,6 +61,8 @@ class SaleRepository:
             stmt = stmt.where(Sale.date >= start_date)
         if end_date:
             stmt = stmt.where(Sale.date <= end_date)
+        if is_payment_pending is not None:
+            stmt = stmt.where(Sale.is_payment_pending == is_payment_pending)
         stmt = stmt.order_by(Sale.created_at.desc(), Sale.date.desc()).limit(limit).offset(offset)
 
         results = list(self.db.execute(stmt).unique().scalars().all())
