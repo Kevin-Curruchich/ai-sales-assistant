@@ -170,7 +170,7 @@ When a sale is created the backend automatically:
 
 ### `GET /sales`
 
-- **Query Params:** `customer_id` (uuid, optional), `product_id` (uuid, optional), `start_date` (YYYY-MM-DD, optional), `end_date` (YYYY-MM-DD, optional)
+- **Query Params:** `customer_id` (uuid, optional), `product_id` (uuid, optional), `start_date` (YYYY-MM-DD, optional), `end_date` (YYYY-MM-DD, optional), `is_payment_pending` (bool, optional: `true` = pendientes de pago, `false` = pagadas)
 - **Response:** `Sale[]`
 
 ### `GET /sales/{sale_id}`
