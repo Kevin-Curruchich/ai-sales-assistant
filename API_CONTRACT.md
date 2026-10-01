@@ -251,6 +251,40 @@ Counts for metric cards.
 
 ---
 
+## 8. Cash Module
+
+### `GET /cash/summary`
+
+- **Response:**
+  ```json
+  { "balance": "170.00", "owner_balance": "50.00" }
+  ```
+  `balance` es el efectivo operativo de hoy; `owner_balance` lo que el negocio le debe al socio (aportes menos retiros).
+
+### `GET /cash/movements`
+
+- **Query Params:** `start_date` (YYYY-MM-DD, optional), `end_date` (YYYY-MM-DD, optional, incluye el dia completo en la zona del negocio), `limit` (1-100, default 20), `offset` (default 0)
+- **Orden:** del mas reciente al mas antiguo.
+- **Response:** `{ "data": CashMovement[], "meta": { "total": number } }`
+  ```json
+  {
+    "id": "uuid",
+    "occurred_at": "2026-09-07T15:00:00Z",
+    "type": "entrada | salida | aporte_socio | retiro_socio | saldo_inicial",
+    "amount": "20.00",
+    "is_outflow": true,
+    "payment_method": "efectivo | transferencia | null",
+    "sale_id": "uuid | null",
+    "purchase_id": "uuid | null",
+    "note": "string | null",
+    "running_balance": "100.00",
+    "created_at": "..."
+  }
+  ```
+  `amount` siempre es positivo (`is_outflow` indica si resta). `running_balance` es el saldo despues del movimiento, calculado sobre todo el libro aunque se filtre por fechas o se pagine.
+
+---
+
 ## Response Models Reference
 
 ### User
