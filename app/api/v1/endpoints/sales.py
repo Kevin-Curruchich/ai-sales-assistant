@@ -39,14 +39,21 @@ def list_sales(
         limit=limit,
         offset=offset,
     )
-    total = service.count(
+    filters = dict(
         customer_id=customer_id,
         product_id=product_id,
         start_date=start_date,
         end_date=end_date,
         is_payment_pending=is_payment_pending,
     )
-    return {"data": items, "meta": {"total": total}}
+    return {
+        "data": items,
+        "meta": {
+            "total": service.count(**filters),
+            # Monto de todas las ventas del filtro, no solo de esta pagina.
+            "total_amount": service.sum_total(**filters),
+        },
+    }
 
 
 @router.get("/reports/profit", response_model=ProfitReportResponse)

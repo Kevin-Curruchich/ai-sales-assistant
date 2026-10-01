@@ -83,6 +83,8 @@ Aggregated metrics for the main dashboard.
     "salesThisMonth": 0.0,
     "pendingFollowUps": 0,
     "upcomingPurchases7Days": 0,
+    "pendingPaymentsTotal": "85.00",
+    "pendingPaymentsCount": 2,
     "recentSales": [ /* Sale[] */ ],
     "priorityCustomers": [ /* FollowUp[] */ ]
   }
@@ -170,8 +172,13 @@ When a sale is created the backend automatically:
 
 ### `GET /sales`
 
-- **Query Params:** `customer_id` (uuid, optional), `product_id` (uuid, optional), `start_date` (YYYY-MM-DD, optional), `end_date` (YYYY-MM-DD, optional), `is_payment_pending` (bool, optional: `true` = pendientes de pago, `false` = pagadas)
-- **Response:** `Sale[]`
+- **Query Params:** `customer_id` (uuid, optional), `product_id` (uuid, optional), `start_date` (YYYY-MM-DD, optional), `end_date` (YYYY-MM-DD, optional), `is_payment_pending` (bool, optional: `true` = pendientes de pago, `false` = pagadas), `limit`, `offset`
+- **Response:** `{ "data": Sale[], "meta": { "total": number, "total_amount": "decimal" } }`. `total_amount` suma el total de todas las ventas del filtro, no solo de la pagina.
+
+### `GET /sales/reports/profit`
+
+- **Query Params:** `group_by` (`product` | `customer` | `sale`, default `product`), `start_date`, `end_date` (YYYY-MM-DD, optional), `limit` (default 100)
+- **Response:** `{ "data": [{ "key", "label", "quantity", "revenue", "gross_profit" }], "totals": { "quantity", "revenue", "gross_profit" } }`. Filas ordenadas por ganancia descendente; `totals` cubre todas las filas aunque `limit` corte la lista.
 
 ### `GET /sales/{sale_id}`
 

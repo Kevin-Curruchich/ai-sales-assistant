@@ -27,6 +27,8 @@ def get_dashboard_summary(
         salesThisMonth=sales_this_month,
         pendingFollowUps=follow_up_metrics.overdue,
         upcomingPurchases7Days=follow_up_metrics.next7Days,
+        pendingPaymentsTotal=sale_service.sum_total(is_payment_pending=True),
+        pendingPaymentsCount=sale_service.count(is_payment_pending=True),
         recentSales=recent_sales,
         priorityCustomers=priority_customers,
     )

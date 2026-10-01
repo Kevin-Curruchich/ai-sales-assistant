@@ -8,5 +8,8 @@ class DashboardSummary(BaseModel):
     salesThisMonth: Decimal
     pendingFollowUps: int
     upcomingPurchases7Days: int
+    # Cuentas por cobrar: ventas pendientes de pago, de cualquier fecha.
+    pendingPaymentsTotal: Decimal = Decimal("0")
+    pendingPaymentsCount: int = 0
     recentSales: list[SaleResponse] = []
     priorityCustomers: list[FollowUpResponse] = []
