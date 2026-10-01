@@ -7,6 +7,7 @@ import pytest
 
 from app.agent.tools.read import (
     buscar_cliente,
+    buscar_producto,
     consultar_caja,
     consultar_seguimiento,
     previsualizar_venta,
@@ -365,3 +366,91 @@ def test_read_tools_own_source_has_no_write_calls():
 
     for forbidden in ("db.add(", "db.commit(", "db.delete(", ".commit()"):
         assert forbidden not in text, f"{forbidden!r} no deberia aparecer en el texto fuente de read.py"
+
+
+# ---------------------------------------------------------------------
+# buscar_producto
+#
+# Existe porque el agente no tenia con que resolver "carton de huevos" a un
+# UUID: tenia `buscar_cliente` y ninguna busqueda de productos, asi que pedia
+# el id a mano. Visto en produccion el 2026-10-01, con el agente respondiendo
+# "no cuento con una herramienta de busqueda de productos" y el usuario
+# pegando el UUID en el chat.
+# ---------------------------------------------------------------------
+
+
+def test_buscar_producto_devuelve_lo_que_el_agente_necesita_para_vender(
+    db_session, seeded_product_with_lot
+):
+    """Sin `id` la herramienta no sirve -- es el dato que el agente vino a
+    buscar. El resto (precio, stock) le evita una consulta mas antes de
+    previsualizar."""
+    result = buscar_producto.invoke({"nombre": seeded_product_with_lot.name[:6]})
+
+    assert len(result["productos"]) >= 1
+    encontrado = next(p for p in result["productos"] if p["id"] == str(seeded_product_with_lot.id))
+    assert encontrado["nombre"] == seeded_product_with_lot.name
+    assert "stock" in encontrado
+    assert "sku" in encontrado
+
+
+def test_buscar_producto_con_cero_coincidencias_lo_dice(db_session):
+    result = buscar_producto.invoke({"nombre": "no-existe-este-producto"})
+
+    assert result["productos"] == []
+    assert result["total"] == 0
+
+
+def test_buscar_producto_no_elige_por_el_usuario(db_session, seeded_user):
+    """Misma regla que `buscar_cliente`: devolver todas las coincidencias y
+    dejar que la persona elija. Un agente que elige solo entre dos productos
+    parecidos registra la venta del equivocado."""
+    from app.models.product import Product
+
+    for nombre in ("Cartón de huevos (30 U)", "Cartón de huevos (12 U)"):
+        db_session.add(
+            Product(
+                sku=f"SKU-{nombre[-5:-1]}",
+                name=nombre,
+                earning_mode="fee",
+                earning_fee_amount=Decimal("3.50"),
+                stock=Decimal("0"),
+                min_stock=Decimal("0"),
+                status="active",
+            )
+        )
+    # commit, no flush: `agent_session()` abre su PROPIA sesion sobre el mismo
+    # engine (ver `db_session` en fixtures_domain.py), asi que no ve lo que
+    # todavia vive solo en la transaccion de esta.
+    db_session.commit()
+
+    result = buscar_producto.invoke({"nombre": "Cartón de huevos"})
+
+    assert len(result["productos"]) == 2
+
+
+def test_buscar_producto_avisa_cuando_hay_mas_de_los_que_devuelve(db_session):
+    """Igual que `buscar_cliente`: `total` es cuantos hay, no cuantos se
+    devolvieron. Sin `hay_mas`, el agente diria "estos son los productos" sobre
+    una lista truncada."""
+    from app.models.product import Product
+
+    for i in range(12):
+        db_session.add(
+            Product(
+                sku=f"MUCHOS-{i:02d}",
+                name=f"Producto repetido {i:02d}",
+                earning_mode="fee",
+                earning_fee_amount=Decimal("1.00"),
+                stock=Decimal("0"),
+                min_stock=Decimal("0"),
+                status="active",
+            )
+        )
+    db_session.commit()
+
+    result = buscar_producto.invoke({"nombre": "Producto repetido"})
+
+    assert len(result["productos"]) == 10
+    assert result["total"] == 12
+    assert result["hay_mas"] is True

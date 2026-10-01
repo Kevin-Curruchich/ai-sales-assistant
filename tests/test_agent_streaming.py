@@ -193,7 +193,7 @@ class FakeBlockContentModel(BaseChatModel):
 
     `FakeToolCallingModel` no puede exponer H1 de la revision: devuelve
     `content` como `str`, y esa es exactamente la forma que el modelo real
-    NUNCA produce en este grafo -- `app/agent/graph.py` bindea las siete
+    NUNCA produce en este grafo -- `app/agent/graph.py` bindea las ocho
     herramientas de `ALL_TOOLS`, y con herramientas bindeadas
     `langchain_anthropic.chat_models` fija `coerce_content_to_string =
     not _tools_in_params(payload) and ...`, que es siempre `False` ahi. Cada

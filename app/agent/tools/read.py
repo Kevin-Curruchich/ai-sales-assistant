@@ -19,6 +19,7 @@ from app.core.datetime_utils import business_end_of_day, business_midnight, busi
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.services.cash_service import CashService
 from app.services.customer_service import CustomerService
+from app.services.product_service import ProductService
 from app.services.sales import SaleService
 
 
@@ -40,6 +41,44 @@ def buscar_cliente(nombre: str) -> dict:
             "clientes": [
                 {"id": str(c.id), "nombre": c.name, "empresa": c.company, "email": c.email}
                 for c in found
+            ],
+            "total": total,
+            "hay_mas": total > len(found),
+        }
+
+
+@tool
+def buscar_producto(nombre: str) -> dict:
+    """Busca productos por nombre o SKU.
+
+    Devuelve hasta 10 coincidencias con su `id` (el UUID que piden
+    `previsualizar_venta`, `registrar_venta` y `registrar_compra`), `sku`,
+    `nombre`, `precio_sugerido` y `stock`.  Si hay mas de una, pregunta cual
+    antes de seguir: nunca elijas por el usuario -- dos productos parecidos
+    ("carton de 30" y "carton de 12") terminan en la venta equivocada.
+
+    `total` es cuantas coincidencias existen; si es mayor que las devueltas,
+    hay mas sin listar (`hay_mas`), y no digas que `productos` es todo lo que
+    hay.
+
+    El `stock` es el contador del producto, no lo que el FIFO puede costear:
+    puede haber stock sin lote con costo.  Para saber si una venta se puede
+    registrar, usa `previsualizar_venta`.
+    """
+    with agent_session() as db:
+        service = ProductService(db)
+        found = service.get_all(search=nombre, limit=10)
+        total = service.count(search=nombre)
+        return {
+            "productos": [
+                {
+                    "id": str(p.id),
+                    "sku": p.sku,
+                    "nombre": p.name,
+                    "stock": str(p.stock),
+                    "min_stock": str(p.min_stock),
+                }
+                for p in found
             ],
             "total": total,
             "hay_mas": total > len(found),
