@@ -37,6 +37,7 @@ from app.schemas.sale import (
     FollowUpResponse,
     LotAllocationPreview,
     ProfitReportResponse,
+    ProfitReportTotals,
     SaleCreate,
     SaleItemCreate,
     SaleItemLotAllocationResponse,
@@ -279,6 +280,23 @@ class SaleService:
         is_payment_pending: Optional[bool] = None,
     ) -> int:
         return self.sale_repo.count(
+            customer_id=customer_id,
+            product_id=product_id,
+            start_date=start_date,
+            end_date=end_date,
+            is_payment_pending=is_payment_pending,
+        )
+
+    def sum_total(
+        self,
+        customer_id: Optional[uuid.UUID] = None,
+        product_id: Optional[uuid.UUID] = None,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        is_payment_pending: Optional[bool] = None,
+    ) -> Decimal:
+        """Monto total de las ventas que cumplen los filtros del listado."""
+        return self.sale_repo.sum_total(
             customer_id=customer_id,
             product_id=product_id,
             start_date=start_date,
@@ -986,7 +1004,13 @@ class SaleService:
             ) from exc
 
         ordered = sorted(rows, key=lambda r: r.gross_profit, reverse=True)
-        return ProfitReportResponse(data=ordered[:limit])
+        # Los totales cubren todas las filas, no solo las `limit` devueltas.
+        totals = ProfitReportTotals(
+            quantity=sum((r.quantity for r in rows), Decimal("0")),
+            revenue=sum((r.revenue for r in rows), Decimal("0")),
+            gross_profit=sum((r.gross_profit for r in rows), Decimal("0")),
+        )
+        return ProfitReportResponse(data=ordered[:limit], totals=totals)
 
     # ------------------------------------------------------------------
     # Dashboard helpers

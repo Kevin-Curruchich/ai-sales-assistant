@@ -270,5 +270,12 @@ class ProfitReportRow(BaseModel):
     gross_profit: Decimal
 
 
+class ProfitReportTotals(BaseModel):
+    quantity: Decimal
+    revenue: Decimal
+    gross_profit: Decimal
+
+
 class ProfitReportResponse(BaseModel):
     data: list[ProfitReportRow]
+    totals: Optional[ProfitReportTotals] = None
