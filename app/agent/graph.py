@@ -65,7 +65,7 @@ def checkpointer_schema() -> str:
 
 
 def build_graph(model, checkpointer: BaseCheckpointSaver):
-    """Arma el grafo: el modelo, las ocho herramientas del agente, y el
+    """Arma el grafo: el modelo, las diez herramientas del agente, y el
     checkpointer que persiste el estado entre pausas de `interrupt()`.
 
     `version="v2"` es lo que reparte cada tool_call del mismo mensaje como

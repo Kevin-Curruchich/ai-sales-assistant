@@ -115,12 +115,7 @@ def test_a_second_paid_transition_after_a_correction_uses_the_new_payment_date(
     second_payment_date = date(2026, 9, 30)
     upcoming_dates = iter([first_payment_date, second_payment_date])
 
-    class FrozenDate(date):
-        @classmethod
-        def today(cls):
-            return next(upcoming_dates)
-
-    monkeypatch.setattr(orchestrator_module, "date", FrozenDate)
+    monkeypatch.setattr(orchestrator_module, "business_today", lambda: next(upcoming_dates))
 
     service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=False))
     service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=True))
@@ -132,6 +127,23 @@ def test_a_second_paid_transition_after_a_correction_uses_the_new_payment_date(
 
     reloaded = service.get_by_id(sale.id)
     assert reloaded.payment_date == second_payment_date
+
+
+def test_marking_a_sale_paid_dates_it_on_the_business_day_not_the_server_day(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
+    """El panel marca pagada una venta a las 21:30 en Guatemala, cuando el
+    servidor (UTC) ya esta en el dia siguiente: el cobro es de hoy en
+    Guatemala, y la entrada de caja tambien."""
+    service = SaleService(db_session)
+    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+    monkeypatch.setattr(orchestrator_module, "business_today", lambda: date(2026, 10, 1))
+
+    service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=False))
+
+    assert service.get_by_id(sale.id).payment_date == date(2026, 10, 1)
+    movement = db_session.query(CashMovement).filter_by(sale_id=sale.id).one()
+    assert movement.occurred_at == business_midnight(date(2026, 10, 1))
 
 
 def test_the_enriched_response_exposes_the_payment_date_and_method(

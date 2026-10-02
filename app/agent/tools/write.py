@@ -123,6 +123,7 @@ from datetime import date as date_type
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
+from fastapi import HTTPException
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langgraph.types import interrupt
@@ -910,4 +911,148 @@ def registrar_movimiento_caja(
             return {
                 "estado": "registrado",
                 "movimiento_id": str(movement.id),
+            }
+
+
+# ---------------------------------------------------------------------
+# Cobro de una venta a credito
+# ---------------------------------------------------------------------
+
+
+def _venta_a_cobrar(db, venta_id: str) -> tuple[dict | None, object | None]:
+    """`(problema, venta)`: el estado a devolver si no hay nada que cobrar, o
+    la venta pendiente.
+
+    Va antes de cada pausa Y otra vez despues de aprobar: entre la tarjeta y
+    la aprobacion alguien pudo marcarla pagada desde el panel, y cobrarla de
+    nuevo registraria una segunda ENTRADA por la misma plata.
+    """
+    try:
+        venta = SaleService(db).get_by_id(uuid.UUID(venta_id))
+    except HTTPException:
+        return (
+            {
+                "estado": "no_encontrada",
+                "mensaje": f"No existe una venta con id {venta_id}. No se escribio nada.",
+            },
+            None,
+        )
+    if not venta.is_payment_pending:
+        return (
+            {
+                "estado": "ya_pagada",
+                "venta_id": str(venta.id),
+                "fecha_pago": venta.payment_date.isoformat() if venta.payment_date else None,
+                "mensaje": "Esta venta ya estaba pagada. No se escribio nada.",
+            },
+            None,
+        )
+    return (None, venta)
+
+
+def _cobro_dict(venta, valores: dict) -> dict:
+    return {
+        "venta_id": str(venta.id),
+        "cliente": venta.customer.name,
+        "fecha_venta": venta.date.isoformat(),
+        "total": str(venta.total),
+        "fecha_pago": valores["fecha_pago"],
+        "medio_pago": valores["medio_pago"],
+    }
+
+
+@tool
+def registrar_cobro(
+    venta_id: str,
+    fecha_pago: str,
+    config: RunnableConfig,
+    medio_pago: str | None = None,
+) -> dict:
+    """Registra que una venta a credito (pendiente de pago) ya se cobro.
+
+    Marca la venta pagada y registra su ENTRADA de caja por el total, fechada
+    en `fecha_pago` ("AAAA-MM-DD", el dia en que entro la plata -- preguntalo
+    si no lo dijeron, no asumas hoy). `medio_pago` es "efectivo" o
+    "transferencia"; si no se indica, se usa el que ya tenia la venta, o
+    efectivo. Busca el `venta_id` con `consultar_ventas(estado_pago=
+    "pendiente")`; si hay mas de una venta pendiente que podria ser, pregunta
+    cual.
+
+    No uses `registrar_movimiento_caja` para un cobro: esa entrada suelta no
+    marcaria la venta pagada y seguiria contando como cuenta por cobrar.
+
+    Se detiene a pedir confirmacion antes de escribir. El resultado trae
+    "estado": "registrado" | "cancelado" | "ya_pagada" (la venta ya estaba
+    cobrada -- tambien si la cobraron desde el panel mientras esperaba la
+    aprobacion) | "no_encontrada" | "ya_registrado" (esta misma tarea ya lo
+    escribio y el proceso se reanudo despues; no se escribio de nuevo).
+    """
+    # Mismo orden que las otras escrituras: identidad, idempotencia y que
+    # haya algo que cobrar, todo ANTES de pausar a una persona.
+    user_id_from_config(config)
+    clave_escritura = idempotency.write_key(config)
+
+    with agent_session() as db:
+        ya = _ya_escrito(db, clave_escritura, "registrar_cobro", "venta_id")
+        if ya is not None:
+            return ya
+        problema, venta = _venta_a_cobrar(db, venta_id)
+        if problema is not None:
+            return problema
+        valores = {
+            "fecha_pago": fecha_pago,
+            "medio_pago": medio_pago
+            or (venta.payment_method.value if venta.payment_method else PaymentMethod.EFECTIVO.value),
+        }
+
+        while True:
+            # Validar antes de mostrar la tarjeta: aprobar "cheque" o una
+            # fecha ilegible solo para que reviente al escribir es pedir una
+            # decision que no se va a poder cumplir.
+            fecha = date_type.fromisoformat(valores["fecha_pago"])
+            medio = PaymentMethod(valores["medio_pago"])
+
+            # Sin huella, como `registrar_movimiento_caja`: el total de una
+            # venta no se recalcula (sus items no se editan, ver
+            # `SaleService.update`), y lo unico que puede cambiar mientras se
+            # espera -- que ya la hayan cobrado -- se vuelve a mirar abajo.
+            decision = interrupt(
+                {
+                    "tipo": "confirmar_cobro",
+                    "cobro": _cobro_dict(venta, valores),
+                }
+            )
+            accion = decision.get("accion")
+
+            if accion == "cancelar":
+                return {"estado": "cancelado"}
+
+            if accion == "corregir":
+                valores = {**valores, **decision.get("valores", {})}
+                continue
+
+            if accion != "aprobar":
+                return {
+                    "estado": "cancelado",
+                    "mensaje": f"Accion no reconocida: {accion!r}. No se escribio nada.",
+                }
+
+            db.expire_all()
+            problema, venta = _venta_a_cobrar(db, venta_id)
+            if problema is not None:
+                return problema
+
+            # La marca, la venta pagada y la entrada de caja: un solo commit.
+            if clave_escritura is not None:
+                idempotency.claim(db, clave_escritura, "registrar_cobro")
+            SaleService(db).mark_as_paid(venta, fecha, medio)
+            db.commit()
+            if clave_escritura is not None:
+                idempotency.record_entity(db, clave_escritura, str(venta.id))
+            return {
+                "estado": "registrado",
+                "venta_id": str(venta.id),
+                "total": str(venta.total),
+                "fecha_pago": fecha.isoformat(),
+                "medio_pago": medio.value,
             }

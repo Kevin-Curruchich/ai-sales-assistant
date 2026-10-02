@@ -35,8 +35,9 @@ Esto va primero porque son las que no avisan.
    confirmación». Un panel que pide un preview fresco al aprobar y manda *ese*
    como huella desactiva la protección entera y no se nota hasta el día que
    importa.
-2. **No toda `confirmacion` trae huella.** `registrar_movimiento_caja` no manda
-   ninguna. Un panel que exija `huella` se rompe con el primer aporte de caja.
+2. **No toda `confirmacion` trae huella.** `registrar_movimiento_caja` y
+   `registrar_cobro` no mandan ninguna. Un panel que exija `huella` se rompe con
+   el primer aporte de caja o el primer cobro.
 3. **`interrupt_id` es obligatorio para responder**, y va como campo hermano de
    `decision`, no anidado adentro.
 4. **No se puede usar `EventSource`** ni el `useStream` del SDK de LangGraph para
@@ -177,18 +178,20 @@ event: herramienta
 data: {"nombre": "previsualizar_venta", "estado": "llamando"}
 ```
 Para mostrar «consultando lotes…» en vez de una pantalla quieta. Es el tramo
-largo: ahí corre FIFO contra la base. Las siete herramientas son
-`buscar_cliente`, `consultar_caja`, `consultar_seguimiento`,
-`previsualizar_venta`, `registrar_venta`, `registrar_compra` y
-`registrar_movimiento_caja`.
+largo: ahí corre FIFO contra la base. Las diez herramientas son
+`buscar_cliente`, `buscar_producto`, `consultar_caja`, `consultar_seguimiento`,
+`consultar_ventas`, `previsualizar_venta`, `registrar_venta`,
+`registrar_compra`, `registrar_movimiento_caja` y `registrar_cobro`.
 
 ```
 event: confirmacion
 data: {"tipo": "confirmar_venta", "interrupt_id": "c97a81a8...", "preview": {...}, "huella": {"datos": ..., "firma": "..."}}
 ```
-La tarjeta. Los `tipo` son `confirmar_venta`, `confirmar_compra` y
-`confirmar_movimiento_caja`. Este último trae `movimiento` en vez de `preview`
-**y no trae `huella`**.
+La tarjeta. Los `tipo` son `confirmar_venta`, `confirmar_compra`,
+`confirmar_movimiento_caja` y `confirmar_cobro`. Los dos últimos **no traen
+`huella`**: `confirmar_movimiento_caja` trae `movimiento` en vez de `preview`, y
+`confirmar_cobro` trae `cobro` (`venta_id`, `cliente`, `fecha_venta`, `total`,
+`fecha_pago`, `medio_pago`).
 
 ```
 event: fin
@@ -224,7 +227,8 @@ payload que lee la herramienta, `interrupt_id` es transporte.
 Tres acciones:
 
 - `{"accion": "aprobar", "huella": ...}` — escribe. Para
-  `confirmar_movimiento_caja`, `{"accion": "aprobar"}` sin huella.
+  `confirmar_movimiento_caja` y `confirmar_cobro`, `{"accion": "aprobar"}` sin
+  huella.
 - `{"accion": "cancelar"}` — no escribe nada. Nunca lleva huella.
 - `{"accion": "corregir", "valores": {"cantidad": "3"}}` — sólo los campos que
   cambian. **Vuelve a pausar** con una huella nueva, no reanuda la conversación:
