@@ -7,14 +7,22 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from langgraph.types import Command
-from pydantic import BaseModel
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session
 
 from app.agent.historial import traducir_estado
 from app.agent.streaming import eventos_sse
 from app.api.dependencies import get_db, get_current_user
 from app.models import User
-from app.schemas.agent import AgentThreadCreate, AgentThreadRename, AgentThreadResponse
+from app.schemas.agent import (
+    AgentThreadCreate,
+    AgentThreadRename,
+    AgentThreadResponse,
+    Comando,
+    Mencion,
+    validar_menciones,
+)
 from app.services.agent_thread_service import AgentThreadService
 
 router = APIRouter(prefix="/agent", tags=["Agente"])
@@ -178,14 +186,47 @@ class AgentStreamRequest(BaseModel):
     (`decision.get("accion")`, `decision.get("huella")` en
     `app/agent/tools/write.py`) y meterle una clave de transporte adentro
     mezclaria el sobre con la carta.
+
+    `comando` y `menciones` vienen del composer del panel y solo acompañan a
+    un `mensaje`: son la intencion ("quiere registrar una venta") y los ids de
+    lo que la persona menciono con `@`, con su rango dentro del texto. Los dos
+    son opcionales y un pedido sin ellos se comporta como antes. La forma se
+    valida aca (422); que los ids existan, no -- ver `Mencion`.
     """
 
     thread_id: uuid.UUID
     mensaje: Optional[str] = None
     decision: Optional[dict] = None
     interrupt_id: Optional[str] = None
+    comando: Optional[Comando] = None
+    menciones: Optional[list[Mencion]] = None
 
     model_config = {"extra": "ignore"}
+
+    @model_validator(mode="after")
+    def _menciones_dentro_del_mensaje(self):
+        if self.mensaje is None:
+            if self.comando is not None or self.menciones:
+                raise ValueError("'comando' y 'menciones' solo van junto con 'mensaje'")
+            return self
+        validar_menciones(self.mensaje, self.menciones or [])
+        return self
+
+    def mensaje_humano(self) -> HumanMessage:
+        """El `mensaje` como lo guarda el checkpoint.
+
+        El texto queda tal cual lo escribio la persona; `comando` y
+        `menciones` viajan en `additional_kwargs`, que el checkpointer
+        serializa con el mensaje. Asi el historial se los devuelve al panel
+        sin tocar el texto, y `app/agent/referencias.py` los convierte en un
+        bloque legible para el modelo en cada turno.
+        """
+        extra = {}
+        if self.comando is not None:
+            extra["comando"] = self.comando
+        if self.menciones:
+            extra["menciones"] = [m.model_dump(mode="json") for m in self.menciones]
+        return HumanMessage(content=self.mensaje, additional_kwargs=extra)
 
 
 async def _pausas_pendientes(graph, config) -> set[str]:
@@ -397,7 +438,7 @@ async def stream_agent(
                     "antes de mandar otro mensaje."
                 ),
             )
-        entrada = {"messages": [("user", data.mensaje)]}
+        entrada = {"messages": [data.mensaje_humano()]}
     else:
         if not data.interrupt_id:
             raise HTTPException(

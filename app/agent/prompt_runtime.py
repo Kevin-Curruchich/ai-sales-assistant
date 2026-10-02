@@ -41,6 +41,7 @@ from datetime import date, datetime
 from langchain_core.messages import SystemMessage
 
 from app.agent.prompt import SYSTEM_PROMPT
+from app.agent.referencias import con_referencias
 from app.core.datetime_utils import business_tz
 
 _PLANTILLA_FECHA = """
@@ -78,4 +79,7 @@ def prompt_con_fecha(state) -> list:
     """
     mensajes = (state or {}).get("messages") or []
     sistema = SystemMessage(SYSTEM_PROMPT + _PLANTILLA_FECHA.format(hoy=_hoy().isoformat()))
-    return [sistema, *mensajes]
+    # Las menciones y el comando del composer viajan en `additional_kwargs`,
+    # que el modelo no ve: `con_referencias` los vuelve texto en una copia,
+    # sin tocar lo que guarda el checkpoint.
+    return [sistema, *(con_referencias(m) for m in mensajes)]

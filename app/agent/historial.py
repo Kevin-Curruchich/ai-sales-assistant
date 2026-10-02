@@ -50,7 +50,8 @@ def _mensajes(guardados) -> list[dict]:
 
     Reglas, y por que cada una:
 
-    - `HumanMessage` -> `usuario`. Lo que la persona escribio.
+    - `HumanMessage` -> `usuario`. Lo que la persona escribio, con el
+      `comando` y las `menciones` del composer si los trajo.
     - Los `tool_calls` de un `AIMessage` -> un `herramienta` por llamada, en la
       posicion donde el modelo las pidio y en su orden. Van ANTES del texto del
       mismo mensaje porque el modelo pide la herramienta y recien despues, con
@@ -73,7 +74,15 @@ def _mensajes(guardados) -> list[dict]:
     salida: list[dict] = []
     for mensaje in guardados:
         if isinstance(mensaje, HumanMessage):
-            salida.append({"rol": "usuario", "texto": mensaje.text})
+            usuario = {"rol": "usuario", "texto": mensaje.text}
+            # Lo que el composer mando junto al texto (ver
+            # `AgentStreamRequest.mensaje_humano`), para que el panel vuelva a
+            # pintar las etiquetas al recargar. Un mensaje sin ellos -- uno
+            # viejo, o uno escrito sin @ ni / -- conserva la forma de antes.
+            for clave in ("comando", "menciones"):
+                if mensaje.additional_kwargs.get(clave):
+                    usuario[clave] = mensaje.additional_kwargs[clave]
+            salida.append(usuario)
             continue
 
         if not isinstance(mensaje, AIMessage):
