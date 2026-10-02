@@ -12,6 +12,15 @@ def business_tz() -> ZoneInfo:
     return ZoneInfo(settings.BUSINESS_TIMEZONE)
 
 
+def business_today() -> date:
+    """El dia de hoy en la zona del negocio, no en la del servidor.
+
+    Railway corre en UTC y Guatemala esta seis horas atras: entre las 18:00 y
+    la medianoche local, `date.today()` ya devuelve el dia siguiente.
+    """
+    return datetime.now(business_tz()).date()
+
+
 def business_midnight(day: date) -> datetime:
     """El instante en que empieza `day` en la zona del negocio."""
     return datetime.combine(day, time.min, tzinfo=ZoneInfo(settings.BUSINESS_TIMEZONE))

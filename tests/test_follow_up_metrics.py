@@ -7,9 +7,10 @@ tiles marcaban el mismo numero y dejaban de distinguir nada.
 """
 
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 from types import SimpleNamespace
 
+from app.core.datetime_utils import business_today
 from app.services.sales.orchestrator import SaleService
 
 
@@ -18,7 +19,7 @@ def _cycle(days_until):
     return SimpleNamespace(
         customer_id=uuid.uuid4(),
         product_id=uuid.uuid4(),
-        estimated_next_purchase=date.today() + timedelta(days=days_until),
+        estimated_next_purchase=business_today() + timedelta(days=days_until),
     )
 
 

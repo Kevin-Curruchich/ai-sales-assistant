@@ -10,7 +10,7 @@ caja, la detección de precio habitual y la proyección de próxima compra. Sirv
 para contrastar si alguna vez se sospecha que una regla se perdió al traducirla.
 
 **La fuente viva es `app/agent/prompt.py::SYSTEM_PROMPT`**, no estos archivos.
-El prompt traduce estas reglas a las siete herramientas reales y, donde el código
+El prompt traduce estas reglas a las diez herramientas reales y, donde el código
 cambió, sigue al código. Dos diferencias conocidas y deliberadas:
 
 - `registrar-compra` aquí describe un modelo de un paso con `monto_aporte_propio`.

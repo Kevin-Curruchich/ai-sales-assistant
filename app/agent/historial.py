@@ -58,7 +58,7 @@ def _mensajes(guardados) -> list[dict]:
       turno viajan todas en UN `AIMessage`, que es el mismo motivo por el que
       `eventos_sse` las lee del canal `updates`.
     - El texto de un `AIMessage` -> `asistente`, via `.text` y NO `.content`:
-      con las ocho herramientas bindeadas, `langchain_anthropic` nunca
+      con las diez herramientas bindeadas, `langchain_anthropic` nunca
       coerciona `content` a `str`, asi que es una lista de bloques. `.text`
       extrae solo los bloques de texto. Sin eso, el JSON parcial de los
       argumentos de una tool_call terminaria en el campo `texto` como si fuera

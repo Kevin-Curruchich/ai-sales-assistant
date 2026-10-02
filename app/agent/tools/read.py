@@ -8,6 +8,7 @@ seguimiento) convierte cada `Decimal` a `str` explicitamente, para no perder
 precision con un `float`.
 """
 
+import uuid
 from datetime import date as date_type
 from datetime import datetime
 from decimal import Decimal
@@ -15,7 +16,7 @@ from decimal import Decimal
 from langchain_core.tools import tool
 
 from app.agent.session import agent_session
-from app.core.datetime_utils import business_end_of_day, business_midnight, business_tz
+from app.core.datetime_utils import business_end_of_day, business_midnight, business_today, business_tz
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.services.cash_service import CashService
 from app.services.customer_service import CustomerService
@@ -222,4 +223,79 @@ def consultar_caja(desde: str | None = None, hasta: str | None = None, limite: i
                 }
                 for movement, saldo_acumulado in entries
             ],
+        }
+
+
+_ESTADOS_PAGO = {"pendiente": True, "pagada": False}
+
+
+@tool
+def consultar_ventas(
+    cliente_id: str | None = None,
+    producto_id: str | None = None,
+    desde: str | None = None,
+    hasta: str | None = None,
+    estado_pago: str | None = None,
+    limite: int = 10,
+    offset: int = 0,
+) -> dict:
+    """Lista ventas registradas, las mas recientes primero.
+
+    Todos los filtros son opcionales y se combinan. `estado_pago` es
+    "pendiente" (a credito, todavia sin cobrar -- las cuentas por cobrar) o
+    "pagada"; sin el, trae las dos. `desde`/`hasta` ("AAAA-MM-DD") acotan por
+    la fecha de la venta, ambos inclusive. `cliente_id`/`producto_id` son los
+    UUID que devuelven `buscar_cliente`/`buscar_producto`.
+
+    `monto_total` y `total` cubren TODAS las ventas del filtro, no solo las
+    de esta pagina: para "cuanto me deben" usa `monto_total` con
+    `estado_pago="pendiente"`, nunca la suma de las `ventas` listadas.
+    `dias_pendiente` es cuantos dias lleva sin cobrarse (solo en las
+    pendientes). Para cobrar una, pasale su `id` a `registrar_cobro`.
+    """
+    if estado_pago is not None and estado_pago not in _ESTADOS_PAGO:
+        raise ValueError(
+            f"estado_pago debe ser 'pendiente', 'pagada' o vacio, no {estado_pago!r}"
+        )
+    filtros = {
+        "customer_id": uuid.UUID(cliente_id) if cliente_id else None,
+        "product_id": uuid.UUID(producto_id) if producto_id else None,
+        "start_date": date_type.fromisoformat(desde) if desde else None,
+        "end_date": date_type.fromisoformat(hasta) if hasta else None,
+        "is_payment_pending": _ESTADOS_PAGO.get(estado_pago) if estado_pago else None,
+    }
+    hoy = business_today()
+
+    with agent_session() as db:
+        service = SaleService(db)
+        ventas = service.get_all_enriched(**filtros, limit=limite, offset=offset)
+        total = service.count(**filtros)
+        return {
+            "ventas": [
+                {
+                    "id": str(v.id),
+                    "fecha": v.date.isoformat(),
+                    "cliente_id": str(v.customer_id),
+                    "cliente": v.customer_name,
+                    "total": str(v.total),
+                    "pendiente": v.is_payment_pending,
+                    "dias_pendiente": (hoy - v.date).days if v.is_payment_pending else None,
+                    "fecha_pago": v.payment_date.isoformat() if v.payment_date else None,
+                    "medio_pago": v.payment_method.value if v.payment_method else None,
+                    "items": [
+                        {
+                            "producto_id": str(i.product_id),
+                            "producto": i.product_name,
+                            "cantidad": str(i.quantity),
+                            "precio_unitario": str(i.unit_price),
+                            "subtotal": str(i.subtotal),
+                        }
+                        for i in v.items
+                    ],
+                }
+                for v in ventas
+            ],
+            "total": total,
+            "monto_total": str(service.sum_total(**filtros)),
+            "hay_mas": offset + len(ventas) < total,
         }

@@ -12,7 +12,7 @@ from app.agent.tools.read import (
     consultar_seguimiento,
     previsualizar_venta,
 )
-from app.core.datetime_utils import business_tz
+from app.core.datetime_utils import business_today, business_tz
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.customer import Customer
 from app.models.customer_product_cycle import CustomerProductCycle
@@ -151,8 +151,8 @@ def test_consultar_seguimiento_reports_real_status_and_days_until(
         customer_id=seeded_customer.id,
         product_id=seeded_product_with_lot.id,
         avg_interval_days=Decimal("15"),
-        estimated_next_purchase=date.today() + timedelta(days=5),
-        last_purchase_date=date.today() - timedelta(days=10),
+        estimated_next_purchase=business_today() + timedelta(days=5),
+        last_purchase_date=business_today() - timedelta(days=10),
         last_quantity=Decimal("2"),
         total_purchases=3,
     )
@@ -160,8 +160,8 @@ def test_consultar_seguimiento_reports_real_status_and_days_until(
         customer_id=otro_cliente.id,
         product_id=seeded_product_with_one_lot.id,
         avg_interval_days=Decimal("10"),
-        estimated_next_purchase=date.today() - timedelta(days=3),
-        last_purchase_date=date.today() - timedelta(days=13),
+        estimated_next_purchase=business_today() - timedelta(days=3),
+        last_purchase_date=business_today() - timedelta(days=13),
         last_quantity=Decimal("1"),
         total_purchases=2,
     )

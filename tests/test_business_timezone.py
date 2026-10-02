@@ -1,8 +1,10 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 
+import app.core.datetime_utils as datetime_utils_module
 from app.core.config import settings
 from app.core.datetime_utils import (
+    business_today,
     format_business_date,
     format_business_datetime,
     to_business_tz,
@@ -21,6 +23,20 @@ def test_a_late_night_sale_keeps_its_own_day():
     utc = datetime(2026, 4, 7, 3, 48, 44, tzinfo=timezone.utc)
     assert format_business_date(utc) == "06/04/2026"
     assert to_business_tz(utc).date() == date(2026, 4, 6)
+
+
+def test_business_today_is_the_day_in_guatemala_not_on_the_server(monkeypatch):
+    """Railway corre en UTC: a las 21:30 del 1 de octubre en Guatemala el
+    servidor ya esta en el 2. Un cobro marcado a esa hora es del dia 1."""
+
+    class FrozenDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 2, 3, 30, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr(datetime_utils_module, "datetime", FrozenDatetime)
+
+    assert business_today() == date(2026, 10, 1)
 
 
 def test_a_midday_timestamp_is_unaffected():

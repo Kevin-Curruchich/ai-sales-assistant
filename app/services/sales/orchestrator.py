@@ -11,6 +11,7 @@ from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import PurchaseItem
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
+from app.models.payment_method import PaymentMethod
 from app.models.sale_item_lot_allocation import SaleItemLotAllocation
 from app.repositories.customer_product_cycle_repository import CustomerProductCycleRepository
 from app.repositories.customer_repository import CustomerRepository
@@ -26,7 +27,7 @@ from app.services.sales.pricing import (
 )
 from app.services.sales.projection import project
 from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
-from app.core.datetime_utils import business_midnight, format_business_date, format_business_datetime
+from app.core.datetime_utils import business_midnight, business_today, format_business_date, format_business_datetime
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -709,8 +710,10 @@ class SaleService:
             # todavia no tenia una y registra la entrada de caja, compuesta
             # con commit=False para que la venta y el movimiento sean una
             # sola transaccion (mismo patron que SaleService.create, Task 4).
+            # "Ahora" es hoy en Guatemala: con `date.today()` un cobro
+            # marcado despues de las 18:00 quedaba fechado manana.
             if sale.payment_date is None:
-                sale.payment_date = date.today()
+                sale.payment_date = business_today()
             self._record_sale_cash_entry(sale)
         elif not was_pending and is_payment_pending:
             # Pagada -> pendiente: se esta corrigiendo que el cobro no era
@@ -760,6 +763,31 @@ class SaleService:
             note=None,
             commit=False,
         )
+
+    def mark_as_paid(
+        self,
+        sale: Sale,
+        payment_date: date,
+        payment_method: Optional[PaymentMethod],
+    ) -> None:
+        """Cobra una venta pendiente en la fecha y el medio que se indican.
+
+        A diferencia del PATCH del panel, la fecha la decide quien cobra: el
+        cobro de ayer se anota ayer, no el dia del servidor. Fija la fecha y
+        el medio ANTES de la transicion para que `_record_sale_cash_entry`
+        feche y etiquete la ENTRADA con ellos. `payment_method=None` conserva
+        el medio que ya tenia la venta.
+
+        No comitea, igual que `_apply_payment_status_transition`: quien llama
+        cierra la venta, la entrada de caja y lo que haya anotado en la misma
+        sesion con un solo commit.
+        """
+        if not sale.is_payment_pending:
+            raise ValueError(f"La venta {sale.id} ya esta pagada")
+        sale.payment_date = payment_date
+        if payment_method is not None:
+            sale.payment_method = payment_method
+        self._apply_payment_status_transition(sale, False)
 
     def update_payment_status_enriched(
         self,
@@ -829,7 +857,7 @@ class SaleService:
     # ------------------------------------------------------------------
 
     def get_follow_ups(self, filter_type: str = "all", limit: int = 10, offset: int = 0) -> tuple[list[FollowUpResponse], int]:
-        today = date.today()
+        today = business_today()
         cycles = self.cycle_repo.get_all_for_follow_ups()
 
         customer_cycles: dict[uuid.UUID, list[CustomerProductCycle]] = {}
@@ -909,7 +937,7 @@ class SaleService:
         return follow_ups[offset:offset + limit], total
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
-        today = date.today()
+        today = business_today()
         # Deliberately get_all_with_estimation(), not get_all_for_follow_ups():
         # all four tiles below are defined by days_until, which a
         # needs_estimate customer (no estimated_next_purchase) does not have.
@@ -942,7 +970,7 @@ class SaleService:
     # ------------------------------------------------------------------
 
     def get_calendar_events(self, start_date: date, end_date: date) -> CalendarResponse:
-        today = date.today()
+        today = business_today()
         cycles = self.cycle_repo.get_all_with_estimation()
 
         all_events: list[CalendarEvent] = []

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
 from app.models.customer import Customer
+from app.core.datetime_utils import business_today
 import logging
 
 
@@ -129,7 +130,7 @@ class SaleRepository:
 
     def get_sales_this_month(self) -> float:
         """Return total sales amount for the current month."""
-        today = date.today()
+        today = business_today()
         first_day = today.replace(day=1)
         stmt = select(func.coalesce(func.sum(Sale.total), 0.0)).where(
             Sale.date >= first_day, Sale.date <= today

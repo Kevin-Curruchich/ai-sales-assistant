@@ -10,7 +10,7 @@ from app.models.product import Product
 from app.repositories.product_repository import ProductRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.schemas.product import ProductCreate, ProductUpdate, ProductForSaleResponse, AvailableLotInfo, LotsAvailabilityResponse
-from app.core.datetime_utils import format_business_datetime
+from app.core.datetime_utils import business_today, format_business_datetime
 
 
 class ProductService:
@@ -35,7 +35,7 @@ class ProductService:
         for product in products:
             lots = self.purchase_repo.get_fifo_available_lots(
                 product_id=product.id,
-                as_of_date=date.today(),
+                as_of_date=business_today(),
                 lock_for_update=False,
             )
 
@@ -85,7 +85,7 @@ class ProductService:
             HTTPException 404 if product not found
         """
         if as_of_date is None:
-            as_of_date = date.today()
+            as_of_date = business_today()
 
         product = self.repo.get_by_id(product_id)
         if not product:

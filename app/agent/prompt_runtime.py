@@ -51,7 +51,7 @@ Hoy es {hoy} (zona horaria del negocio).
 
 Las herramientas que registran algo -- `previsualizar_venta`, `registrar_venta`,
 `registrar_compra`, `registrar_movimiento_caja` -- piden `fecha` en formato
-YYYY-MM-DD. Usa {hoy} salvo que la persona diga otra cosa ("la vendi ayer", "fue
+YYYY-MM-DD, y `registrar_cobro` pide `fecha_pago` en el mismo formato. Usa {hoy} salvo que la persona diga otra cosa ("la vendi ayer", "fue
 el lunes"), y en ese caso calcula la fecha a partir de hoy.
 
 No inventes la fecha ni la deduzcas de la conversacion: una fecha anterior a la

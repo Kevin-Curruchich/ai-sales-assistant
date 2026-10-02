@@ -29,6 +29,7 @@ from app.agent.auth import AgentAuthError
 from app.agent.signing import firmar
 from app.agent.tools.write import (
     _occurred_at,
+    registrar_cobro,
     registrar_compra,
     registrar_movimiento_caja,
     registrar_venta,
@@ -843,9 +844,9 @@ def test_write_tools_never_write_before_interrupt_in_their_source():
     `create(`/`confirm(`/`record(` de su cuerpo. No reemplaza los tests de
     comportamiento de arriba -- es una red adicional contra un futuro
     refactor que mueva la escritura antes de la pausa."""
-    write_calls = ("create", "create_enriched", "confirm", "record")
+    write_calls = ("create", "create_enriched", "confirm", "record", "mark_as_paid")
 
-    for fn in (registrar_venta, registrar_compra, registrar_movimiento_caja):
+    for fn in (registrar_venta, registrar_compra, registrar_movimiento_caja, registrar_cobro):
         first = _first_call_positions(fn)
         assert "interrupt" in first, f"{fn.name}: no llama a interrupt() en su cuerpo"
         interrupt_pos = first["interrupt"]

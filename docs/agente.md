@@ -1,8 +1,9 @@
 # El agente conversacional
 
 `app/agent/` es un grafo de LangGraph (`create_react_agent`, `version="v2"`)
-con ocho herramientas -- cinco de lectura, tres de escritura que pausan a
-pedir confirmacion humana, y las busquedas de clientes y productos. Se sirve **en el mismo
+con diez herramientas -- seis de lectura (entre ellas las busquedas de
+clientes y productos) y cuatro de escritura que pausan a pedir confirmacion
+humana. Se sirve **en el mismo
 proceso** que el backend FastAPI de este repositorio: el grafo se construye
 una vez en el `lifespan` de `app/main.py` y vive en `app.state.agent_graph`
 mientras dure el proceso. No hay un segundo servicio, ni un segundo
@@ -187,7 +188,8 @@ primera vez que se construye el grafo en el proceso (local, produccion, CI).
 ## El agente sabe que dia es hoy
 
 `previsualizar_venta`, `registrar_venta`, `registrar_compra` y
-`registrar_movimiento_caja` reciben `fecha` como parametro **obligatorio**, y
+`registrar_movimiento_caja` reciben `fecha` como parametro **obligatorio**
+(`registrar_cobro`, `fecha_pago`), y
 hasta el 2026-10-01 nada se la decia al modelo: la inventaba desde su
 entrenamiento, o sea una fecha pasada.
 
@@ -377,11 +379,18 @@ el cuerpo de `POST /stream` (ver "Responder una confirmacion" mas abajo). Es
 lo unico que dice a CUAL pausa responde una decision, y un turno puede dejar
 dos pausas abiertas a la vez.
 
-`registrar_movimiento_caja` **no manda `huella`** (no deriva de inventario --
-ver la nota al final de "El contrato del panel: la huella"): su `data` es
-`{"tipo": "confirmar_movimiento_caja", "movimiento": {...}, "interrupt_id":
-"..."}`. Un panel que exija `huella` en toda `confirmacion` se rompe con el
-primer aporte del socio. `interrupt_id`, en cambio, viene siempre.
+`registrar_movimiento_caja` y `registrar_cobro` **no mandan `huella`** (no
+derivan de inventario -- ver la nota al final de "El contrato del panel: la
+huella"). El `data` del primero es `{"tipo": "confirmar_movimiento_caja",
+"movimiento": {...}, "interrupt_id": "..."}`; el del segundo:
+
+```
+event: confirmacion
+data: {"tipo": "confirmar_cobro", "interrupt_id": "...", "cobro": {"venta_id": "<uuid>", "cliente": "Juan Gonzalez", "fecha_venta": "2026-09-24", "total": "33.33", "fecha_pago": "2026-09-30", "medio_pago": "efectivo"}}
+```
+
+Un panel que exija `huella` en toda `confirmacion` se rompe con el primer
+aporte del socio o el primer cobro. `interrupt_id`, en cambio, viene siempre.
 
 **Dos herramientas hermanas que interrumpen en el mismo turno producen DOS
 eventos `confirmacion`** -- una por cada `interrupt()`, en el orden en que
@@ -774,9 +783,16 @@ no deriva de inventario ni de lotes, es un hecho que la persona afirma
 preview y la aprobacion. Sus resumes son solo `aprobar` (sin `huella`),
 `cancelar` y `corregir`.
 
+`registrar_cobro` tampoco: el total de una venta no se recalcula (sus items
+no se editan), y lo unico que puede cambiar mientras espera la aprobacion
+-- que alguien la cobre desde el panel -- se vuelve a mirar despues de
+aprobar: si ya esta pagada contesta `{"estado": "ya_pagada"}` y no escribe
+una segunda entrada. Mismos resumes que el movimiento de caja; `corregir`
+acepta `fecha_pago` y `medio_pago`.
+
 ## Idempotencia: una escritura por tarea, y lo que queda afuera
 
-Las tres herramientas de escritura comitean a Postgres **fuera** de la
+Las cuatro herramientas de escritura comitean a Postgres **fuera** de la
 transaccion de LangGraph. Entre ese commit y el momento en que LangGraph
 anota en el checkpoint que la tarea termino hay una ventana: si el proceso
 muere ahi, el checkpoint no sabe que la escritura ocurrio, y reanudar el
@@ -894,7 +910,7 @@ tiempo de ejecucion: un contenedor desplegado no lo va a tener, y de todas
 formas describe herramientas (Sheets, Calendar, Slack) que este agente no
 tiene. En su lugar, `app/agent/prompt.py::SYSTEM_PROMPT` es una traduccion
 escrita a mano de esas mismas reglas de negocio (FIFO, margenes, vocabulario
-de caja, deteccion de precio habitual) a las ocho herramientas reales de
+de caja, deteccion de precio habitual) a las diez herramientas reales de
 este grafo -- ver el docstring de modulo de `prompt.py`.
 
 `AGENTS.md` y las nueve skills estan versionados a proposito, como
