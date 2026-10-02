@@ -574,6 +574,70 @@ escuchando. Probado con una cancelacion real de la tarea ASGI en
 y, contra la funcion real (no un doble), en
 `tests/test_agent_streaming.py::test_a_cancelled_run_dies_instead_of_becoming_an_error_event`.
 
+## Menciones y comandos: `comando` y `menciones` en `POST /stream`
+
+El composer del panel deja mencionar clientes, productos y ventas con `@` y
+marcar la intencion con un comando (`/venta`, `/compra`, `/cobro`, `/caja`).
+Viajan como dos campos **opcionales**, hermanos de `mensaje` (que sigue siendo
+el texto legible, con cada mencion escrita como `@<nombre>`):
+
+```json
+{
+  "thread_id": "…",
+  "mensaje": "Vendí 2 @Cartón de huevos a @Aurita, no pagado",
+  "comando": "venta",
+  "menciones": [
+    {"tipo": "producto", "id": "<uuid>", "nombre": "Cartón de huevos", "inicio": 8, "fin": 25},
+    {"tipo": "cliente", "id": "<uuid>", "nombre": "Aurita", "inicio": 28, "fin": 35}
+  ]
+}
+```
+
+- `comando`: `venta` | `compra` | `cobro` | `caja`.
+- `menciones[].tipo`: `cliente` | `producto` | `venta`. Para una venta,
+  `nombre` es un resumen legible ("Venta 24/09 · Q33.33").
+- `inicio`/`fin`: rango `[inicio, fin)` dentro de `mensaje`, incluida la `@`,
+  **en code points** (lo que da `len` en Python), no en unidades UTF-16 como
+  `String.length` en JavaScript. Un emoji antes de una mencion es la diferencia.
+
+Un pedido sin estos campos se comporta igual que antes.
+
+**422** (`app/schemas/agent.py`, `AgentStreamRequest`) si `comando` o `tipo`
+no son validos, si `id` no es un UUID, si un rango es vacio (`fin <= inicio`),
+empieza antes de 0 o termina despues del texto, si dos rangos se superponen, o
+si vienen sin `mensaje` (con una `decision` no hay texto al que apuntar). **No**
+se valida que los ids existan: si no existen, la herramienta que los use
+contesta `no_encontrada`.
+
+**Donde viven.** El endpoint arma un `HumanMessage` con el texto tal cual y
+pone `comando`/`menciones` en `additional_kwargs`, que el checkpointer guarda
+con el mensaje. El modelo no ve `additional_kwargs`, asi que
+`prompt_con_fecha` pasa cada mensaje por `app/agent/referencias.py`, que le
+agrega al final una copia de un bloque como este:
+
+```
+---
+Referencias del panel -- ids exactos de lo que la persona menciono con @. Usalos tal cual, sin buscarlos de nuevo:
+- "@Cartón de huevos" = producto, producto_id <uuid>
+- "@Aurita" = cliente, cliente_id <uuid>
+Comando /venta: la persona quiere registrar una venta. Es una pista de intencion; si el mensaje pide otra cosa, segui el mensaje.
+```
+
+Cada id se nombra con el parametro que espera la herramienta; una venta lleva
+ademas "(el venta_id de registrar_cobro)". El bloque se arma en cada turno y no
+se guarda: el historial sigue teniendo el texto de la persona.
+
+**Historial.** `GET /threads/{id}/state` devuelve los campos en el mensaje de
+usuario que los trajo:
+`{"rol": "usuario", "texto": "...", "comando": "venta", "menciones": [...]}`.
+Un mensaje sin ellos, viejo o nuevo, conserva la forma
+`{"rol": "usuario", "texto": "..."}`.
+
+**Orden de despliegue.** Este backend tiene que estar desplegado antes que el
+panel que manda los campos. El backend anterior los descartaba en silencio
+(`extra="ignore"`), sin 422: el mensaje llegaba, pero sin ids, y el agente
+volvia a buscar por nombre.
+
 ## Responder una confirmacion: el cuerpo de `POST /stream`
 
 ```json

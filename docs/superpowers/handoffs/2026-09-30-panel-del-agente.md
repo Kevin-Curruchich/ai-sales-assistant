@@ -211,6 +211,14 @@ el último evento del stream: no viene un `fin` después.
 los dos. La única excepción es deliberada: si el cliente se desconecta no recibe
 ninguno, porque no hay nadie escuchando.
 
+## Menciones y comandos
+
+`POST /stream` acepta `comando` (`venta` | `compra` | `cobro` | `caja`) y
+`menciones` (`[{tipo, id, nombre, inicio, fin}]`, rangos en code points), los
+dos opcionales y hermanos de `mensaje`. `GET /threads/{id}/state` los devuelve
+en el mensaje de usuario. Contrato y 422 en `docs/agente.md`, sección
+«Menciones y comandos».
+
 ## Responder una confirmación
 
 ```json
