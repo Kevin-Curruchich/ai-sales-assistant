@@ -1,21 +1,19 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
-from app.api.dependencies import get_db, get_current_user
+from app.api.dependencies import CustomerServiceDep, SaleServiceDep, get_current_user
 from app.schemas.dashboard import DashboardSummary
-from app.services.customer_service import CustomerService
-from app.services.sales import SaleService
 
-router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
+router = APIRouter(
+    prefix="/dashboard",
+    tags=["Dashboard"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("/summary", response_model=DashboardSummary)
 def get_dashboard_summary(
-    db: Session = Depends(get_db),
-    _current_user: dict = Depends(get_current_user),
+    customer_service: CustomerServiceDep,
+    sale_service: SaleServiceDep,
 ):
-    customer_service = CustomerService(db)
-    sale_service = SaleService(db)
-
     total_customers = customer_service.count()
     sales_this_month = sale_service.get_sales_this_month()
     follow_up_metrics = sale_service.get_follow_up_metrics()
