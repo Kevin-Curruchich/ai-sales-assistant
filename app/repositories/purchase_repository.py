@@ -66,6 +66,37 @@ class PurchaseRepository:
         )
         return self.db.execute(stmt).unique().scalar_one_or_none()
 
+    def get_by_id_for_update(self, purchase_id: uuid.UUID) -> Optional[Purchase]:
+        """Como get_by_id, pero bloquea la compra y sus items hasta que termine
+        la transaccion.
+
+        Confirmar, cancelar o editar deciden segun el estado leido ("si sigue en
+        draft..."). Sin el bloqueo, dos requests simultaneas leen el mismo
+        "draft" y las dos actuan: doble salida de caja. Con el bloqueo, la
+        segunda espera y lee el estado que dejo la primera. Los items tambien se
+        bloquean porque una venta toma sus lotes con FOR UPDATE: cancelar y
+        vender el mismo lote quedan en fila.
+
+        Los locks van en consultas aparte: FOR UPDATE no se puede aplicar al lado
+        opcional del LEFT OUTER JOIN que arma el joinedload de get_by_id.
+        """
+        locked = select(Purchase.id).where(Purchase.id == purchase_id).with_for_update()
+        if self.db.execute(locked).scalar_one_or_none() is None:
+            return None
+        self.db.execute(
+            select(PurchaseItem.id).where(PurchaseItem.purchase_id == purchase_id).with_for_update()
+        )
+        stmt = (
+            select(Purchase)
+            .options(
+                joinedload(Purchase.items).joinedload(PurchaseItem.product),
+                joinedload(Purchase.user),
+            )
+            .where(Purchase.id == purchase_id)
+            .execution_options(populate_existing=True)
+        )
+        return self.db.execute(stmt).unique().scalar_one()
+
     def get_by_reference_number(self, reference_number: str) -> Optional[Purchase]:
         stmt = select(Purchase).where(Purchase.reference_number == reference_number)
         return self.db.execute(stmt).scalar_one_or_none()

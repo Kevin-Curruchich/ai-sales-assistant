@@ -152,6 +152,20 @@ class PurchaseService:
             )
         return purchase
 
+    def _get_for_update(self, purchase_id: uuid.UUID) -> Purchase:
+        """get_by_id con la compra y sus items bloqueados hasta el commit.
+
+        Toda mutacion que decide segun el estado leido entra por aca: ver
+        PurchaseRepository.get_by_id_for_update.
+        """
+        purchase = self.repo.get_by_id_for_update(purchase_id)
+        if not purchase:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Purchase with id {purchase_id} not found",
+            )
+        return purchase
+
     def get_by_id_enriched(self, purchase_id: uuid.UUID) -> PurchaseResponse:
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
@@ -198,7 +212,7 @@ class PurchaseService:
         return self._to_purchase_response(self.get_by_id(purchase.id))
 
     def update(self, purchase_id: uuid.UUID, data: PurchaseUpdate) -> PurchaseResponse:
-        purchase = self.get_by_id(purchase_id)
+        purchase = self._get_for_update(purchase_id)
 
         if purchase.status != "draft":
             raise HTTPException(
@@ -244,7 +258,7 @@ class PurchaseService:
 
     def confirm(self, purchase_id: uuid.UUID) -> PurchaseResponse:
         """Confirm a draft purchase: increment stock and recalculate dependent sale profit snapshots."""
-        purchase = self.get_by_id(purchase_id)
+        purchase = self._get_for_update(purchase_id)
 
         if purchase.status == "confirmed":
             # Idempotent — return as-is
@@ -265,7 +279,7 @@ class PurchaseService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Product {item.product_id} no longer exists",
                 )
-            product.stock += item.quantity
+            self.product_repo.add_to_stock(item.product_id, item.quantity)
             item.remaining_quantity = item.quantity
             affected_product_ids.add(item.product_id)
 
@@ -304,7 +318,7 @@ class PurchaseService:
     def cancel(self, purchase_id: uuid.UUID) -> PurchaseResponse:
         """Cancel a purchase. If it was confirmed, reverse the stock adjustments
         and the cash exit that confirming it created."""
-        purchase = self.get_by_id(purchase_id)
+        purchase = self._get_for_update(purchase_id)
         affected_product_ids: set[uuid.UUID] = set()
 
         if purchase.status == "cancelled":
@@ -321,7 +335,8 @@ class PurchaseService:
                             f"'{item.product.name if item.product else item.product_id}' were already sold"
                         ),
                     )
-                product = self.product_repo.get_by_id(item.product_id)
+                # Bloqueado: el chequeo de "no queda negativo" vale hasta el commit.
+                product = self.product_repo.get_by_id_for_update(item.product_id)
                 if not product:
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
@@ -337,7 +352,7 @@ class PurchaseService:
                             f"(current={product.stock}, to remove={item.remaining_quantity})"
                         ),
                     )
-                product.stock = new_stock
+                self.product_repo.add_to_stock(item.product_id, -item.remaining_quantity)
                 item.remaining_quantity = 0
                 affected_product_ids.add(item.product_id)
 
@@ -367,7 +382,7 @@ class PurchaseService:
         return self._to_purchase_response(self.get_by_id(purchase_id))
 
     def delete(self, purchase_id: uuid.UUID) -> None:
-        purchase = self.get_by_id(purchase_id)
+        purchase = self._get_for_update(purchase_id)
         if purchase.status == "confirmed":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,

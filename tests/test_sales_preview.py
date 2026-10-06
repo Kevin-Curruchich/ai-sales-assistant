@@ -46,6 +46,7 @@ def _service(lots, product):
     service = SaleService(db=None)
     service.customer_repo.get_by_id = lambda cid: SimpleNamespace(id=cid, name="Ana")
     service.product_repo.get_by_id = lambda pid: product
+    service.product_repo.add_to_stock = lambda pid, delta: setattr(product, "stock", product.stock + delta)
     service.purchase_repo.get_fifo_available_lots = lambda **kwargs: lots
     service.sale_repo.get_recent_items_for_customer_product = lambda **kwargs: []
     service.sale_repo.create = lambda sale: sale
