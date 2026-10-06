@@ -1,0 +1,24 @@
+# Configuracion de herramientas del repo. Las dependencias siguen en
+# requirements.txt / requirements-dev.txt.
+
+[tool.ruff]
+line-length = 88
+# La version de produccion (Dockerfile): Ruff no sugiere sintaxis que ahi
+# no existe.
+target-version = "py311"
+# Ruff tambien formatea bloques de codigo dentro de Markdown; los docs y planes
+# se escriben a mano y no se reformatean.
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+# Defaults de Ruff (E4, E7, E9, F) + I: orden de imports, como isort.
+select = ["E4", "E7", "E9", "F", "I"]
+
+[tool.ruff.lint.per-file-ignores]
+# Las relaciones de SQLAlchemy nombran el otro modelo como texto
+# (`Mapped[list["Sale"]]`) y SQLAlchemy lo resuelve en su registro: importarlo
+# de verdad crearia imports circulares entre modelos.
+"app/models/*.py" = ["F821"]
+# Las migraciones son historia: salen de la plantilla de Alembic y no se
+# reescriben para limpiar imports.
+"alembic/versions/*.py" = ["F401"]

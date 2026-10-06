@@ -1,0 +1,11 @@
+{
+  // VS Code ofrece instalarlas al abrir el repo.
+  "recommendations": [
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "charliermarsh.ruff"
+  ],
+  // Formateaba Python antes de Ruff; con las dos activas, el formato depende
+  // de cual gane.
+  "unwantedRecommendations": ["ms-python.autopep8"]
+}
