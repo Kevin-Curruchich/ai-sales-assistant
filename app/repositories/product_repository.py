@@ -1,6 +1,7 @@
 import uuid
+from decimal import Decimal
 from typing import Optional
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 from app.models.product import Product
 
@@ -41,6 +42,37 @@ class ProductRepository:
 
     def get_by_id(self, product_id: uuid.UUID) -> Optional[Product]:
         return self.db.get(Product, product_id)
+
+    def get_by_id_for_update(self, product_id: uuid.UUID) -> Optional[Product]:
+        """Como get_by_id, pero bloquea la fila hasta que termine la transaccion.
+
+        Para leer el stock y decidir algo con el (p. ej. "no puede quedar
+        negativo") sin que otra request lo cambie entre la lectura y la
+        escritura.
+        """
+        stmt = (
+            select(Product)
+            .where(Product.id == product_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        return self.db.execute(stmt).scalar_one_or_none()
+
+    def add_to_stock(self, product_id: uuid.UUID, delta: Decimal) -> None:
+        """Suma `delta` al stock (negativo resta) en la base: SET stock = stock + delta.
+
+        No `product.stock += delta` en Python: eso escribe un valor ya calculado
+        (`SET stock = 6`) a partir de una lectura que otra request puede haber
+        dejado vieja, y una de las dos sumas se pierde. Aca la suma la hace
+        Postgres sobre el valor vigente, con la fila bloqueada mientras tanto.
+        `synchronize_session="fetch"` trae el valor nuevo al objeto en memoria.
+        """
+        self.db.execute(
+            update(Product)
+            .where(Product.id == product_id)
+            .values(stock=Product.stock + delta)
+            .execution_options(synchronize_session="fetch")
+        )
 
     def get_by_sku(self, sku: str) -> Optional[Product]:
         stmt = select(Product).where(Product.sku == sku)

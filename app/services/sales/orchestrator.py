@@ -606,7 +606,9 @@ class SaleService:
             for lot, lot_quantity in allocations:
                 lot.remaining_quantity -= lot_quantity
 
-            product.stock -= item_data.quantity
+            # En la base, no en Python: una compra confirmada al mismo tiempo
+            # tambien escribe este stock (ver ProductRepository.add_to_stock).
+            self.product_repo.add_to_stock(product.id, -item_data.quantity)
 
         sale = Sale(
             customer_id=data.customerId,
