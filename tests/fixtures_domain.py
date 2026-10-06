@@ -74,7 +74,9 @@ def two_similar_customers(db_session):
 
 @pytest.fixture
 def seeded_user(db_session):
-    user = User(email="vendedor@example.com", display_name="Vendedor de prueba", role="admin")
+    user = User(
+        email="vendedor@example.com", display_name="Vendedor de prueba", role="admin"
+    )
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -85,7 +87,9 @@ def seeded_user(db_session):
 def second_user(db_session):
     """Un segundo usuario, distinto de `seeded_user`.  Sin este, "solo el
     dueno puede..." no se puede probar: hace falta a alguien mas."""
-    user = User(email="otro-vendedor@example.com", display_name="Otro vendedor", role="admin")
+    user = User(
+        email="otro-vendedor@example.com", display_name="Otro vendedor", role="admin"
+    )
     db_session.add(user)
     db_session.commit()
     db_session.refresh(user)
@@ -102,7 +106,12 @@ def seeded_customer(db_session):
 
 
 def _seed_product_with_one_confirmed_lot(
-    db_session, user: User, *, quantity: Decimal, unit_cost: Decimal, purchase_date: date
+    db_session,
+    user: User,
+    *,
+    quantity: Decimal,
+    unit_cost: Decimal,
+    purchase_date: date,
 ) -> Product:
     """Crea un producto con exactamente un lote FIFO disponible (compra confirmada)."""
     sku = f"SKU-{uuid.uuid4().hex[:10]}"
@@ -168,7 +177,9 @@ def seeded_purchase_draft(db_session, seeded_user):
     PurchaseRepository.get_fifo_available_lots, que solo mira status='confirmed').
     """
     sku = f"SKU-{uuid.uuid4().hex[:10]}"
-    product = Product(sku=sku, name=f"Producto para compra draft {sku}", stock=Decimal("0"))
+    product = Product(
+        sku=sku, name=f"Producto para compra draft {sku}", stock=Decimal("0")
+    )
     db_session.add(product)
     db_session.flush()
 

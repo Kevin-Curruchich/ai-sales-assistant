@@ -1,19 +1,24 @@
 import uuid
-from typing import Optional
 from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Optional
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+
+from app.core.datetime_utils import business_midnight, format_business_datetime
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import Purchase, PurchaseItem
-from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.product_repository import ProductRepository
+from app.repositories.purchase_repository import PurchaseRepository
+from app.schemas.purchase import (
+    PurchaseCreate,
+    PurchaseItemResponse,
+    PurchaseResponse,
+    PurchaseUpdate,
+)
 from app.services.cash_service import CashService
 from app.services.sales import SaleService
-from app.schemas.purchase import (
-    PurchaseCreate, PurchaseUpdate, PurchaseItemResponse, PurchaseResponse,
-)
-from app.core.datetime_utils import business_midnight, format_business_datetime
 
 
 class PurchaseService:
@@ -33,7 +38,9 @@ class PurchaseService:
     # Helpers
     # ------------------------------------------------------------------ #
 
-    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[datetime], Optional[str]]:
+    def _format_datetime(
+        self, value: datetime | str | None
+    ) -> tuple[Optional[datetime], Optional[str]]:
         if value is None:
             return None, None
         if isinstance(value, str):
@@ -48,19 +55,25 @@ class PurchaseService:
         items = []
         for item in purchase.items:
             product = item.product
-            items.append(PurchaseItemResponse(
-                id=item.id,
-                product_id=item.product_id,
-                quantity=item.quantity,
-                unit_cost=self._money(item.unit_cost),
-                subtotal=self._money(item.subtotal),
-                product_name=product.name if product else "",
-                product_sku=product.sku if product else "",
-                product_earning_mode=product.earning_mode if product else "percent",
-                product_earning_percent=product.earning_percent if product else None,
-                product_earning_fee_amount=product.earning_fee_amount if product else None,
-                product_status=product.status if product else "",
-            ))
+            items.append(
+                PurchaseItemResponse(
+                    id=item.id,
+                    product_id=item.product_id,
+                    quantity=item.quantity,
+                    unit_cost=self._money(item.unit_cost),
+                    subtotal=self._money(item.subtotal),
+                    product_name=product.name if product else "",
+                    product_sku=product.sku if product else "",
+                    product_earning_mode=product.earning_mode if product else "percent",
+                    product_earning_percent=product.earning_percent
+                    if product
+                    else None,
+                    product_earning_fee_amount=product.earning_fee_amount
+                    if product
+                    else None,
+                    product_status=product.status if product else "",
+                )
+            )
 
         return PurchaseResponse(
             id=purchase.id,
@@ -96,7 +109,9 @@ class PurchaseService:
                     detail=f"Product '{product.name}' (id={item.productId}) is not active",
                 )
 
-    def _check_duplicate_reference(self, reference_number: Optional[str], exclude_id: Optional[uuid.UUID] = None) -> None:
+    def _check_duplicate_reference(
+        self, reference_number: Optional[str], exclude_id: Optional[uuid.UUID] = None
+    ) -> None:
         if not reference_number:
             return
         existing = self.repo.get_by_reference_number(reference_number)
@@ -221,7 +236,9 @@ class PurchaseService:
             )
 
         if data.referenceNumber is not None:
-            self._check_duplicate_reference(data.referenceNumber, exclude_id=purchase_id)
+            self._check_duplicate_reference(
+                data.referenceNumber, exclude_id=purchase_id
+            )
             purchase.reference_number = data.referenceNumber
 
         if data.supplierName is not None:
@@ -352,7 +369,9 @@ class PurchaseService:
                             f"(current={product.stock}, to remove={item.remaining_quantity})"
                         ),
                     )
-                self.product_repo.add_to_stock(item.product_id, -item.remaining_quantity)
+                self.product_repo.add_to_stock(
+                    item.product_id, -item.remaining_quantity
+                )
                 item.remaining_quantity = 0
                 affected_product_ids.add(item.product_id)
 

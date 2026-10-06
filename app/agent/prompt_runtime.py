@@ -78,7 +78,9 @@ def prompt_con_fecha(state) -> list:
     tiene que reenviarse: omitirla la borraria en cada turno.
     """
     mensajes = (state or {}).get("messages") or []
-    sistema = SystemMessage(SYSTEM_PROMPT + _PLANTILLA_FECHA.format(hoy=_hoy().isoformat()))
+    sistema = SystemMessage(
+        SYSTEM_PROMPT + _PLANTILLA_FECHA.format(hoy=_hoy().isoformat())
+    )
     # Las menciones y el comando del composer viajan en `additional_kwargs`,
     # que el modelo no ve: `con_referencias` los vuelve texto en una copia,
     # sin tocar lo que guarda el checkpoint.

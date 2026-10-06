@@ -1,16 +1,23 @@
 from pathlib import Path
 
-from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import text
 
-from app.core.database import Base
 import app.models  # noqa: F401
+from alembic import command
+from app.core.database import Base
 
 EXPECTED_TABLES = {
-    "users", "customers", "products", "purchases", "purchase_items",
-    "sales", "sale_items", "sale_item_lot_allocations", "customer_product_cycles",
+    "users",
+    "customers",
+    "products",
+    "purchases",
+    "purchase_items",
+    "sales",
+    "sale_items",
+    "sale_item_lot_allocations",
+    "customer_product_cycles",
     "cash_movements",
 }
 
@@ -59,7 +66,9 @@ def test_downgrade_removes_everything(test_engine, alembic_config):
 
     with test_engine.connect() as conn:
         tables = _tables_in(conn, schema)
-    assert EXPECTED_TABLES & tables == set(), f"Quedaron tablas tras downgrade: {tables}"
+    assert EXPECTED_TABLES & tables == set(), (
+        f"Quedaron tablas tras downgrade: {tables}"
+    )
 
 
 def _normalized_defaults(conn, schema: str) -> dict[tuple[str, str], str]:

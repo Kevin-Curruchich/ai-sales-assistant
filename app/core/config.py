@@ -1,5 +1,7 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Revenew API"
@@ -8,7 +10,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "production"
     FRONTEND_PRODUCTION_ORIGIN: str = "https://revenew-95e3a.web.app"
     BACKEND_CORS_ORIGINS: Optional[list[str]] = None
-    
+
     # Database Configuration
     POSTGRES_SERVER: str = "localhost"
     POSTGRES_USER: str = "postgres"
@@ -22,7 +24,7 @@ class Settings(BaseSettings):
     PGPASSWORD: Optional[str] = None
     PGDATABASE: Optional[str] = None
     PGPORT: Optional[str] = None
-    
+
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         if self.DATABASE_URL:
@@ -33,7 +35,10 @@ class Settings(BaseSettings):
             pgport = self.PGPORT or "5432"
             return f"postgresql://{self.PGUSER}:{self.PGPASSWORD}@{self.PGHOST}:{pgport}/{self.PGDATABASE}"
 
-        if self.ENVIRONMENT.lower() == "production" and self.POSTGRES_SERVER in {"localhost", "127.0.0.1"}:
+        if self.ENVIRONMENT.lower() == "production" and self.POSTGRES_SERVER in {
+            "localhost",
+            "127.0.0.1",
+        }:
             raise ValueError(
                 "Database is not configured for production. Set DATABASE_URL or PGHOST/PGUSER/PGPASSWORD/PGDATABASE."
             )
@@ -55,9 +60,11 @@ class Settings(BaseSettings):
             ]
 
         return [self.FRONTEND_PRODUCTION_ORIGIN]
-    
+
     # Firebase Configuration
-    FIREBASE_CREDENTIALS_PATH: Optional[str] = None # Path to the firebase-adminsdk.json file
+    FIREBASE_CREDENTIALS_PATH: Optional[str] = (
+        None  # Path to the firebase-adminsdk.json file
+    )
 
     # Zona del negocio.  Los reportes agrupan por dia de negocio y las fechas se
     # muestran en esta zona para todo el mundo: una venta ocurrio en Guatemala,
@@ -72,5 +79,6 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env", case_sensitive=True, extra="ignore"
     )
+
 
 settings = Settings()

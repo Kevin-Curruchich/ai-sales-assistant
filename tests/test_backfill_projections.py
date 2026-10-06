@@ -8,7 +8,10 @@ from sqlalchemy.orm import sessionmaker
 
 from app.models import Customer, CustomerProductCycle, Product, Sale, SaleItem, User
 from app.services.sales.projection import project
-from scripts.backfill_projections import _guard_against_protected_schema, backfill_projections
+from scripts.backfill_projections import (
+    _guard_against_protected_schema,
+    backfill_projections,
+)
 from tests.conftest import TEST_DATABASE_URL
 
 
@@ -39,21 +42,28 @@ def _seed_pair(session, sale_dates: list[date], **cycle_overrides):
     session.flush()
 
     for d in sale_dates:
-        sale = Sale(customer_id=customer.id, user_id=user.id, date=d, total=Decimal("115.00"))
+        sale = Sale(
+            customer_id=customer.id, user_id=user.id, date=d, total=Decimal("115.00")
+        )
         session.add(sale)
         session.flush()
         session.add(
             SaleItem(
-                sale_id=sale.id, product_id=product.id, quantity=Decimal("1"),
-                unit_price=Decimal("115.00"), subtotal=Decimal("115.00"),
+                sale_id=sale.id,
+                product_id=product.id,
+                quantity=Decimal("1"),
+                unit_price=Decimal("115.00"),
+                subtotal=Decimal("115.00"),
             )
         )
 
     fields = dict(
-        customer_id=customer.id, product_id=product.id,
-        avg_interval_days=Decimal("30"),          # el valor inventado que hay que corregir
+        customer_id=customer.id,
+        product_id=product.id,
+        avg_interval_days=Decimal("30"),  # el valor inventado que hay que corregir
         estimated_next_purchase=date(2099, 1, 1),
-        last_purchase_date=sale_dates[-1], last_quantity=Decimal("1"),
+        last_purchase_date=sale_dates[-1],
+        last_quantity=Decimal("1"),
         total_purchases=len(sale_dates),
     )
     fields.update(cycle_overrides)
@@ -74,7 +84,9 @@ def session(migrated_schema):
 
 
 def test_recomputes_the_interval_from_history(session):
-    cycle = _seed_pair(session, [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)])
+    cycle = _seed_pair(
+        session, [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)]
+    )
     backfill_projections(session)
     session.refresh(cycle)
     assert cycle.avg_interval_days == Decimal("10.0000")
@@ -94,7 +106,9 @@ def test_clears_the_invented_date_for_a_single_purchase(session):
 
 
 def test_is_idempotent(session):
-    cycle = _seed_pair(session, [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)])
+    cycle = _seed_pair(
+        session, [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)]
+    )
     backfill_projections(session)
     session.refresh(cycle)
     first = (cycle.avg_interval_days, cycle.estimated_next_purchase)
@@ -105,7 +119,9 @@ def test_is_idempotent(session):
 
 
 def test_dry_run_writes_nothing(session):
-    cycle = _seed_pair(session, [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)])
+    cycle = _seed_pair(
+        session, [date(2026, 8, 1), date(2026, 8, 11), date(2026, 8, 21)]
+    )
     before = cycle.avg_interval_days
 
     result = backfill_projections(session, dry_run=True)
@@ -151,7 +167,7 @@ def test_all_three_counters_in_a_single_run(session):
         estimated_next_purchase=next_date,
         projection_method=method,
         projection_confidence=confidence,
-        total_purchases=5,          # desactualizado; el correcto es 3
+        total_purchases=5,  # desactualizado; el correcto es 3
     )
 
     result = backfill_projections(session)

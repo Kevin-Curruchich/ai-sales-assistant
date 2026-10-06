@@ -17,7 +17,9 @@ def _item(product_id, name, quantity, subtotal, gross_profit_total):
 def test_groups_by_product_and_sums_fractional_quantities():
     """Medio carton mas un carton son 1.5 unidades, no un error."""
     sales = [
-        SimpleNamespace(items=[_item("p1", "Carton de huevos", "0.5", "18.00", "0.92")]),
+        SimpleNamespace(
+            items=[_item("p1", "Carton de huevos", "0.5", "18.00", "0.92")]
+        ),
         SimpleNamespace(items=[_item("p1", "Carton de huevos", "1", "37.00", "3.50")]),
     ]
     rows = build_profit_rows(sales, group_by="product")
@@ -29,10 +31,12 @@ def test_groups_by_product_and_sums_fractional_quantities():
 
 def test_separate_products_get_separate_rows():
     sales = [
-        SimpleNamespace(items=[
-            _item("p1", "Carton de huevos", "1", "37.00", "3.50"),
-            _item("p2", "Cilindro de gas", "1", "115.00", "20.00"),
-        ])
+        SimpleNamespace(
+            items=[
+                _item("p1", "Carton de huevos", "1", "37.00", "3.50"),
+                _item("p2", "Cilindro de gas", "1", "115.00", "20.00"),
+            ]
+        )
     ]
     rows = build_profit_rows(sales, group_by="product")
     assert {r.quantity for r in rows} == {Decimal("1")}

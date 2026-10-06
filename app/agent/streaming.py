@@ -117,7 +117,10 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
                 for interrupcion in interrupciones:
                     yield {
                         "event": "confirmacion",
-                        "data": {**_payload(interrupcion.value), "interrupt_id": interrupcion.id},
+                        "data": {
+                            **_payload(interrupcion.value),
+                            "interrupt_id": interrupcion.id,
+                        },
                     }
                 continue
 
@@ -133,7 +136,10 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
                         # lista de items entera) que nadie pidio.
                         yield {
                             "event": "herramienta",
-                            "data": {"nombre": llamada.get("name"), "estado": "llamando"},
+                            "data": {
+                                "nombre": llamada.get("name"),
+                                "estado": "llamando",
+                            },
                         }
     except Exception as exc:
         # `Exception`, nunca `BaseException`. `asyncio.CancelledError` hereda
@@ -161,8 +167,13 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
         logger.exception("La corrida del agente termino con una excepcion")
         yield {
             "event": "error",
-            "data": {"mensaje": "Hubo un problema y no se registro nada. Intenta de nuevo."},
+            "data": {
+                "mensaje": "Hubo un problema y no se registro nada. Intenta de nuevo."
+            },
         }
         return
 
-    yield {"event": "fin", "data": {"estado": "pausado" if interrumpido else "completo"}}
+    yield {
+        "event": "fin",
+        "data": {"estado": "pausado" if interrumpido else "completo"},
+    }

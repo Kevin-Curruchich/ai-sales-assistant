@@ -1,10 +1,12 @@
-import uuid
 import logging
+import uuid
 from typing import Optional
-from fastapi import APIRouter, Depends, status, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException, status
+
 from app.api.dependencies import CustomerServiceDep, get_current_user
-from app.schemas.customer import CustomerCreate, CustomerUpdate, CustomerResponse
 from app.models.sale import Sale
+from app.schemas.customer import CustomerCreate, CustomerResponse, CustomerUpdate
 
 logger = logging.getLogger("customers")
 
@@ -23,7 +25,9 @@ def list_customers(
     limit: int = 10,
     offset: int = 0,
 ):
-    formatted_items = service.get_all_with_formatted_dates(search=search, limit=limit, offset=offset)
+    formatted_items = service.get_all_with_formatted_dates(
+        search=search, limit=limit, offset=offset
+    )
     total = service.count(search=search)
     return {"data": formatted_items, "meta": {"total": total}}
 
@@ -39,5 +43,7 @@ def create_customer(data: CustomerCreate, service: CustomerServiceDep):
 
 
 @router.put("/{customer_id}", response_model=CustomerResponse)
-def update_customer(customer_id: uuid.UUID, data: CustomerUpdate, service: CustomerServiceDep):
+def update_customer(
+    customer_id: uuid.UUID, data: CustomerUpdate, service: CustomerServiceDep
+):
     return service.update(customer_id, data)

@@ -26,7 +26,9 @@ from app.models.sale import Sale
 GT = business_tz()
 
 
-def test_buscar_cliente_returns_every_match_without_choosing(db_session, two_similar_customers):
+def test_buscar_cliente_returns_every_match_without_choosing(
+    db_session, two_similar_customers
+):
     result = buscar_cliente.invoke({"nombre": "Gonzalez"})
     assert len(result["clientes"]) == 2
     # No hay campo que elija uno: la desambiguacion es del agente, hablando.
@@ -61,12 +63,18 @@ def test_buscar_cliente_writes_nothing(db_session, two_similar_customers):
     assert db_session.query(Customer).count() == before
 
 
-def test_previsualizar_venta_returns_lots_and_cost(db_session, seeded_customer, seeded_product_with_lot):
-    result = previsualizar_venta.invoke({
-        "cliente_id": str(seeded_customer.id),
-        "items": [{"producto_id": str(seeded_product_with_lot.id), "cantidad": "0.5"}],
-        "fecha": "2026-09-24",
-    })
+def test_previsualizar_venta_returns_lots_and_cost(
+    db_session, seeded_customer, seeded_product_with_lot
+):
+    result = previsualizar_venta.invoke(
+        {
+            "cliente_id": str(seeded_customer.id),
+            "items": [
+                {"producto_id": str(seeded_product_with_lot.id), "cantidad": "0.5"}
+            ],
+            "fecha": "2026-09-24",
+        }
+    )
     item = result["items"][0]
     assert item["cost_basis_unit"] is not None
     assert item["lotes"]
@@ -91,17 +99,19 @@ def test_previsualizar_venta_honours_a_price_of_zero(
     los dos primeros (`"0"` es una cadena no vacia y por lo tanto truthy),
     asi que un test escrito solo con la forma de cadena -- la que el
     docstring de la herramienta documenta -- pasaria con el bug puesto."""
-    result = previsualizar_venta.invoke({
-        "cliente_id": str(seeded_customer.id),
-        "items": [
-            {
-                "producto_id": str(seeded_product_with_lot.id),
-                "cantidad": "1",
-                "precio_unitario": precio_cero,
-            }
-        ],
-        "fecha": "2026-09-24",
-    })
+    result = previsualizar_venta.invoke(
+        {
+            "cliente_id": str(seeded_customer.id),
+            "items": [
+                {
+                    "producto_id": str(seeded_product_with_lot.id),
+                    "cantidad": "1",
+                    "precio_unitario": precio_cero,
+                }
+            ],
+            "fecha": "2026-09-24",
+        }
+    )
     item = result["items"][0]
 
     assert Decimal(str(item["final_unit_price"])) == Decimal("0")
@@ -112,23 +122,35 @@ def test_previsualizar_venta_honours_a_price_of_zero(
     assert Decimal(str(item["suggested_unit_price"])) > 0
 
 
-def test_previsualizar_venta_writes_nothing(db_session, seeded_customer, seeded_product_with_lot):
+def test_previsualizar_venta_writes_nothing(
+    db_session, seeded_customer, seeded_product_with_lot
+):
     before = db_session.query(Sale).count()
-    previsualizar_venta.invoke({
-        "cliente_id": str(seeded_customer.id),
-        "items": [{"producto_id": str(seeded_product_with_lot.id), "cantidad": "0.5"}],
-        "fecha": "2026-09-24",
-    })
+    previsualizar_venta.invoke(
+        {
+            "cliente_id": str(seeded_customer.id),
+            "items": [
+                {"producto_id": str(seeded_product_with_lot.id), "cantidad": "0.5"}
+            ],
+            "fecha": "2026-09-24",
+        }
+    )
     assert db_session.query(Sale).count() == before
 
 
-def test_previsualizar_venta_reports_insufficient_lots(db_session, seeded_customer, seeded_product_with_one_lot):
+def test_previsualizar_venta_reports_insufficient_lots(
+    db_session, seeded_customer, seeded_product_with_one_lot
+):
     # El lote solo tiene 3 unidades; pedir 5 debe volver con advertencia, no reventar.
-    result = previsualizar_venta.invoke({
-        "cliente_id": str(seeded_customer.id),
-        "items": [{"producto_id": str(seeded_product_with_one_lot.id), "cantidad": "5"}],
-        "fecha": "2026-09-24",
-    })
+    result = previsualizar_venta.invoke(
+        {
+            "cliente_id": str(seeded_customer.id),
+            "items": [
+                {"producto_id": str(seeded_product_with_one_lot.id), "cantidad": "5"}
+            ],
+            "fecha": "2026-09-24",
+        }
+    )
     item = result["items"][0]
     assert item["warnings"]
 
@@ -171,7 +193,9 @@ def test_consultar_seguimiento_reports_real_status_and_days_until(
     todos = consultar_seguimiento.invoke({})
     assert todos["total"] == 2
     status_por_cliente = {s["customer_id"]: s["status"] for s in todos["seguimientos"]}
-    dias_por_cliente = {s["customer_id"]: s["items"][0]["days_until"] for s in todos["seguimientos"]}
+    dias_por_cliente = {
+        s["customer_id"]: s["items"][0]["days_until"] for s in todos["seguimientos"]
+    }
     assert status_por_cliente[str(seeded_customer.id)] == "urgent"
     assert status_por_cliente[str(otro_cliente.id)] == "overdue"
     assert dias_por_cliente[str(seeded_customer.id)] == 5
@@ -255,11 +279,13 @@ def test_consultar_caja_reports_real_balance_ordering_and_field_mapping(db_sessi
 
 
 def test_consultar_caja_limite_caps_to_the_most_recent(db_session):
-    for i, (type_, amount) in enumerate([
-        (CashMovementType.ENTRADA, Decimal("10.00")),
-        (CashMovementType.ENTRADA, Decimal("20.00")),
-        (CashMovementType.ENTRADA, Decimal("30.00")),
-    ]):
+    for i, (type_, amount) in enumerate(
+        [
+            (CashMovementType.ENTRADA, Decimal("10.00")),
+            (CashMovementType.ENTRADA, Decimal("20.00")),
+            (CashMovementType.ENTRADA, Decimal("30.00")),
+        ]
+    ):
         _seed_movement(
             db_session,
             occurred_at=datetime(2026, 9, 1 + i, 12, 0, tzinfo=GT),
@@ -365,7 +391,9 @@ def test_read_tools_own_source_has_no_write_calls():
         text = f.read()
 
     for forbidden in ("db.add(", "db.commit(", "db.delete(", ".commit()"):
-        assert forbidden not in text, f"{forbidden!r} no deberia aparecer en el texto fuente de read.py"
+        assert forbidden not in text, (
+            f"{forbidden!r} no deberia aparecer en el texto fuente de read.py"
+        )
 
 
 # ---------------------------------------------------------------------
@@ -388,7 +416,9 @@ def test_buscar_producto_devuelve_lo_que_el_agente_necesita_para_vender(
     result = buscar_producto.invoke({"nombre": seeded_product_with_lot.name[:6]})
 
     assert len(result["productos"]) >= 1
-    encontrado = next(p for p in result["productos"] if p["id"] == str(seeded_product_with_lot.id))
+    encontrado = next(
+        p for p in result["productos"] if p["id"] == str(seeded_product_with_lot.id)
+    )
     assert encontrado["nombre"] == seeded_product_with_lot.name
     assert "stock" in encontrado
     assert "sku" in encontrado

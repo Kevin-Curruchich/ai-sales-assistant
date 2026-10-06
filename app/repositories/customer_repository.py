@@ -1,7 +1,9 @@
 import uuid
 from typing import Optional
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.models.customer import Customer
 
 
@@ -9,7 +11,9 @@ class CustomerRepository:
     def __init__(self, db: Session):
         self.db = db
 
-    def get_all(self, search: Optional[str] = None, limit: int = 10, offset: int = 0) -> list[Customer]:
+    def get_all(
+        self, search: Optional[str] = None, limit: int = 10, offset: int = 0
+    ) -> list[Customer]:
         stmt = select(Customer)
         if search:
             stmt = stmt.where(
@@ -40,6 +44,7 @@ class CustomerRepository:
 
     def count(self, search: Optional[str] = None) -> int:
         from sqlalchemy import func
+
         stmt = select(func.count()).select_from(Customer)
         if search:
             stmt = stmt.where(

@@ -20,9 +20,13 @@ def _sale(customer, product, pending=False):
     )
 
 
-def test_a_paid_sale_records_one_cash_entry(db_session, seeded_customer, seeded_product_with_lot, seeded_user):
+def test_a_paid_sale_records_one_cash_entry(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user
+):
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot), user_id=seeded_user.id
+    )
 
     movements = db_session.query(CashMovement).filter_by(sale_id=sale.id).all()
     assert len(movements) == 1
@@ -30,15 +34,20 @@ def test_a_paid_sale_records_one_cash_entry(db_session, seeded_customer, seeded_
     assert movements[0].amount == sale.total
 
 
-def test_a_pending_sale_records_no_cash_entry(db_session, seeded_customer, seeded_product_with_lot, seeded_user):
+def test_a_pending_sale_records_no_cash_entry(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user
+):
     service = SaleService(db_session)
     sale = service.create(
-        _sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id
+        _sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
     )
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 0
 
 
-def test_the_cash_entry_shares_the_sale_transaction(db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch):
+def test_the_cash_entry_shares_the_sale_transaction(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, monkeypatch
+):
     """Si la caja falla, la venta no queda escrita a medias."""
     service = SaleService(db_session)
 
@@ -48,7 +57,9 @@ def test_the_cash_entry_shares_the_sale_transaction(db_session, seeded_customer,
     monkeypatch.setattr(service.cash_service, "record", explode)
 
     with pytest.raises(RuntimeError):
-        service.create(_sale(seeded_customer, seeded_product_with_lot), user_id=seeded_user.id)
+        service.create(
+            _sale(seeded_customer, seeded_product_with_lot), user_id=seeded_user.id
+        )
 
     db_session.rollback()
     assert db_session.query(Sale).count() == 0

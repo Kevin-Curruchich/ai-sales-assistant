@@ -11,10 +11,10 @@ ningun rastro que explicara la diferencia.
 from datetime import date
 from decimal import Decimal
 
+from app.core.datetime_utils import business_midnight
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.schemas.sale import SaleCreate, SaleItemCreate, SaleUpdate
 from app.services.cash_service import CashService
-from app.core.datetime_utils import business_midnight
 from app.services.sales import SaleService
 
 
@@ -31,7 +31,10 @@ def test_update_marking_a_pending_sale_as_paid_records_one_cash_entry(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user
 ):
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 0
 
     service.update(sale.id, SaleUpdate(isPaymentPending=False))
@@ -46,7 +49,10 @@ def test_update_marking_a_pending_sale_as_paid_sets_the_payment_date(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user
 ):
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
 
     service.update(sale.id, SaleUpdate(isPaymentPending=False))
 
@@ -57,7 +63,10 @@ def test_update_marking_a_paid_sale_as_pending_removes_the_cash_entry(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user
 ):
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=False),
+        user_id=seeded_user.id,
+    )
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 1
 
     service.update(sale.id, SaleUpdate(isPaymentPending=True))
@@ -74,7 +83,10 @@ def test_update_without_the_payment_field_leaves_the_cash_book_alone(
     (No usa `date=`: `SaleUpdate.date` es hoy un campo que solo acepta
     `None` -- ver el concern del reporte final. No es esta pieza.)"""
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=False),
+        user_id=seeded_user.id,
+    )
 
     service.update(sale.id, SaleUpdate(customerId=seeded_customer.id))
 
@@ -87,7 +99,10 @@ def test_update_repeating_the_same_payment_status_does_not_duplicate_the_entry(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user
 ):
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
 
     service.update(sale.id, SaleUpdate(isPaymentPending=False))
     service.update(sale.id, SaleUpdate(isPaymentPending=False))
@@ -101,7 +116,10 @@ def test_update_to_pending_does_not_remove_an_aporte_socio_on_the_same_sale(
     """El mismo filtro de tipo que `update_payment_status_enriched`: esta
     ruta comparte el codigo, asi que comparte la garantia."""
     service = SaleService(db_session)
-    sale = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
+    sale = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=False),
+        user_id=seeded_user.id,
+    )
     contribution = CashService(db_session).record(
         occurred_at=business_midnight(date(2026, 9, 24)),
         type=CashMovementType.APORTE_SOCIO,

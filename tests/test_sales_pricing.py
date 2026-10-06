@@ -51,7 +51,10 @@ def test_margins_equal_to_the_standard_are_not_a_pattern():
 
 
 def test_fewer_than_three_sales_is_not_enough_history():
-    assert detect_habitual_margin([Decimal("2.50"), Decimal("2.50")], Decimal("3.50")) is None
+    assert (
+        detect_habitual_margin([Decimal("2.50"), Decimal("2.50")], Decimal("3.50"))
+        is None
+    )
     assert detect_habitual_margin([], Decimal("3.50")) is None
 
 

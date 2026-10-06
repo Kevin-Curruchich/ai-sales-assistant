@@ -81,7 +81,10 @@ class SchemaMismatch(Exception):
 
 
 def _guard_against_protected_target(target: str) -> None:
-    if target == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+    if (
+        target == PROTECTED_SCHEMA
+        and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1"
+    ):
         raise RuntimeError(
             f"El destino pedido es {target!r}. Ese schema tiene los datos reales "
             "de produccion y este script no debe escribirle silenciosamente.\n"
@@ -253,9 +256,7 @@ def _copy_all(conn, source: str, target: str) -> dict[str, int]:
             f'"{col}": {source} tiene {_describe_type(src_info[col])}, '
             f"{target} tiene {_describe_type(dst_info[col])}"
             for col in src_cols
-            if any(
-                src_info[col][k] != dst_info[col][k] for k in _TYPE_COMPARISON_KEYS
-            )
+            if any(src_info[col][k] != dst_info[col][k] for k in _TYPE_COMPARISON_KEYS)
         ]
         if mismatched:
             raise SchemaMismatch(

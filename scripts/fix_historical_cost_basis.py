@@ -48,7 +48,10 @@ def _money(value: Decimal) -> Decimal:
 
 
 def _guard_against_protected_schema(schema: str) -> None:
-    if schema == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+    if (
+        schema == PROTECTED_SCHEMA
+        and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1"
+    ):
         raise RuntimeError(
             f"El schema resuelto es {schema!r}, que guarda el respaldo vivo de "
             "produccion. Este script escribe. Me niego a correr.\n"
@@ -59,9 +62,10 @@ def _guard_against_protected_schema(schema: str) -> None:
 
 def _discrepancias(db: Session) -> list[dict]:
     """Items cuyo costo guardado no coincide con el que dicen sus lotes."""
-    filas = db.execute(
-        text(
-            """
+    filas = (
+        db.execute(
+            text(
+                """
             SELECT si.id,
                    s.date               AS fecha,
                    c.name               AS cliente,
@@ -80,8 +84,11 @@ def _discrepancias(db: Session) -> list[dict]:
                    si.cost_basis_unit, si.gross_profit_total
           ORDER BY s.date
             """
+            )
         )
-    ).mappings().all()
+        .mappings()
+        .all()
+    )
 
     pendientes = []
     for f in filas:
@@ -125,7 +132,11 @@ def corregir(db: Session, dry_run: bool = False) -> list[dict]:
                     "   SET cost_basis_unit = :costo, gross_profit_total = :ganancia "
                     " WHERE id = :id"
                 ),
-                {"costo": p["costo_correcto"], "ganancia": p["ganancia_correcta"], "id": p["id"]},
+                {
+                    "costo": p["costo_correcto"],
+                    "ganancia": p["ganancia_correcta"],
+                    "id": p["id"],
+                },
             )
         db.commit()
     return pendientes

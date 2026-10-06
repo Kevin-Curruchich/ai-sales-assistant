@@ -25,7 +25,9 @@ def test_format_sale_dates_uses_the_guatemala_calendar_day():
     el dia calendario difiere entre UTC y hora del negocio."""
     service = CustomerService(db=None)
     utc_instant = datetime(2026, 9, 22, 3, 30, 0, tzinfo=timezone.utc)
-    sale = _sale(created_at=utc_instant, updated_at=utc_instant, sale_date=date(2026, 9, 21))
+    sale = _sale(
+        created_at=utc_instant, updated_at=utc_instant, sale_date=date(2026, 9, 21)
+    )
 
     result = service.format_sale_dates(sale)
 

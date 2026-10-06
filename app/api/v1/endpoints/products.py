@@ -1,8 +1,17 @@
 import uuid
 from typing import Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
+
 from app.api.dependencies import ProductServiceDep, get_current_user
-from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse, PaginatedProductResponse, ProductForSaleResponse, LotsAvailabilityResponse
+from app.schemas.product import (
+    LotsAvailabilityResponse,
+    PaginatedProductResponse,
+    ProductCreate,
+    ProductForSaleResponse,
+    ProductResponse,
+    ProductUpdate,
+)
 
 router = APIRouter(
     prefix="/products",
@@ -107,7 +116,9 @@ def create_product(data: ProductCreate, service: ProductServiceDep):
 
 
 @router.put("/{product_id}", response_model=ProductResponse)
-def update_product(product_id: uuid.UUID, data: ProductUpdate, service: ProductServiceDep):
+def update_product(
+    product_id: uuid.UUID, data: ProductUpdate, service: ProductServiceDep
+):
     try:
         return service.format_product_dates(service.update(product_id, data))
     except Exception as e:

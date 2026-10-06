@@ -1,5 +1,17 @@
 from fastapi import APIRouter
-from app.api.v1.endpoints import auth, dashboard, products, customers, sales, follow_ups, calendar, purchases, agent, cash
+
+from app.api.v1.endpoints import (
+    agent,
+    auth,
+    calendar,
+    cash,
+    customers,
+    dashboard,
+    follow_ups,
+    products,
+    purchases,
+    sales,
+)
 
 api_router = APIRouter()
 

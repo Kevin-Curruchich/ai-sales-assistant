@@ -1,14 +1,16 @@
+import logging
 import uuid
-from typing import Optional
 from datetime import date
 from decimal import Decimal
-from sqlalchemy import select, func
+from typing import Optional
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
+
+from app.core.datetime_utils import business_today
+from app.models.customer import Customer
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
-from app.models.customer import Customer
-from app.core.datetime_utils import business_today
-import logging
 
 
 class SaleRepository:
@@ -40,7 +42,9 @@ class SaleRepository:
 
     def sum_total(self, **filters) -> Decimal:
         """Suma de `Sale.total` de las ventas que cumplen los filtros."""
-        stmt = self._apply_filters(select(func.coalesce(func.sum(Sale.total), 0)), **filters)
+        stmt = self._apply_filters(
+            select(func.coalesce(func.sum(Sale.total), 0)), **filters
+        )
         return Decimal(str(self.db.execute(stmt).scalar_one()))
 
     def __init__(self, db: Session):
@@ -56,13 +60,10 @@ class SaleRepository:
         limit: int = 10,
         offset: int = 0,
     ) -> list[Sale]:
-        stmt = (
-            select(Sale)
-            .options(
-                joinedload(Sale.items).joinedload(SaleItem.product),
-                joinedload(Sale.user),
-                joinedload(Sale.customer)
-            )
+        stmt = select(Sale).options(
+            joinedload(Sale.items).joinedload(SaleItem.product),
+            joinedload(Sale.user),
+            joinedload(Sale.customer),
         )
         stmt = self._apply_filters(
             stmt,
@@ -72,7 +73,11 @@ class SaleRepository:
             end_date=end_date,
             is_payment_pending=is_payment_pending,
         )
-        stmt = stmt.order_by(Sale.created_at.desc(), Sale.date.desc()).limit(limit).offset(offset)
+        stmt = (
+            stmt.order_by(Sale.created_at.desc(), Sale.date.desc())
+            .limit(limit)
+            .offset(offset)
+        )
 
         results = list(self.db.execute(stmt).unique().scalars().all())
         return results
@@ -83,7 +88,7 @@ class SaleRepository:
             .options(
                 joinedload(Sale.items).joinedload(SaleItem.product),
                 joinedload(Sale.user),
-                joinedload(Sale.customer)
+                joinedload(Sale.customer),
             )
             .where(Sale.id == sale_id)
         )

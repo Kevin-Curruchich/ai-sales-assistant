@@ -1,7 +1,9 @@
 from typing import Annotated, Generator
+
 from fastapi import Depends, HTTPException, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
+
 from app.core.database import SessionLocal
 from app.core.security import verify_firebase_token
 from app.models.user import User
@@ -18,7 +20,7 @@ bearer_scheme = HTTPBearer()
 
 def get_db() -> Generator[Session, None, None]:
     """Dependency that provides a SQLAlchemy database session per request.
-    
+
     Yields a session and ensures it is closed after the request completes.
     """
     db = SessionLocal()
@@ -33,7 +35,7 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """Validate Firebase token and return the local User row.
-    
+
     On first call for a given Firebase user, a local DB record is created
     with the default role 'viewer'.
     """
@@ -51,10 +53,11 @@ def get_current_user(
 
 def require_role(*allowed_roles: str):
     """Dependency factory that restricts access to specific roles.
-    
+
     Usage:
         @router.get("/admin-only", dependencies=[Depends(require_role("admin"))])
     """
+
     def role_checker(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in allowed_roles:
             raise HTTPException(
@@ -62,6 +65,7 @@ def require_role(*allowed_roles: str):
                 detail=f"Role '{current_user.role}' is not allowed. Required: {', '.join(allowed_roles)}",
             )
         return current_user
+
     return role_checker
 
 
@@ -75,6 +79,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 # Services por request, todos sobre la misma sesion de `get_db`: dos services
 # en un endpoint comparten transaccion. Alias para la firma del endpoint:
 # `service: CustomerServiceDep`.
+
 
 def get_customer_service(db: Session = Depends(get_db)) -> CustomerService:
     """Dependency that builds a CustomerService on the request's session."""

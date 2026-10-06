@@ -1,22 +1,26 @@
 import uuid
 from typing import Optional
+
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
-from app.api.dependencies import get_db, get_current_user, require_role
+
+from app.api.dependencies import get_current_user, get_db, require_role
 from app.models.user import User
-from app.schemas.user import UserResponse, UserUpdate, UserUpdateRole, UserSignUp
+from app.schemas.user import UserResponse, UserSignUp, UserUpdate, UserUpdateRole
 from app.services.user_service import UserService
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
 
-@router.post("/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/signup", response_model=UserResponse, status_code=status.HTTP_201_CREATED
+)
 def signup(
     data: UserSignUp,
     db: Session = Depends(get_db),
 ):
     """Register a new user.
-    
+
     Creates a Firebase Authentication user with custom claims (role, is_active)
     and a corresponding record in the local database.
     """

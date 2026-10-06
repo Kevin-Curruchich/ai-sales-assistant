@@ -2,13 +2,14 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
+
 from pydantic import BaseModel, field_validator, model_validator
 
 from app.core.datetime_utils import business_midnight
 from app.models.payment_method import PaymentMethod
 
-
 # --- Request schemas ---
+
 
 class SaleItemCreate(BaseModel):
     productId: uuid.UUID
@@ -41,7 +42,9 @@ class SaleItemCreate(BaseModel):
 
     @field_validator("discountAmount")
     @classmethod
-    def discount_amount_must_be_non_negative(cls, v: Optional[Decimal]) -> Optional[Decimal]:
+    def discount_amount_must_be_non_negative(
+        cls, v: Optional[Decimal]
+    ) -> Optional[Decimal]:
         if v is not None and v < 0:
             raise ValueError("discountAmount must be >= 0")
         return v
@@ -85,6 +88,7 @@ class SalePaymentStatusUpdate(BaseModel):
 
 
 # --- Preview schemas (pre-sale FIFO audit, no DB write) ---
+
 
 class LotAllocationPreview(BaseModel):
     purchase_item_id: uuid.UUID
@@ -130,6 +134,7 @@ class SalePreviewResponse(BaseModel):
 
 
 # --- Response schemas ---
+
 
 class SaleItemLotAllocationResponse(BaseModel):
     id: uuid.UUID
@@ -195,8 +200,10 @@ class SaleResponse(BaseModel):
 
 # --- Follow-up schemas (per customer+product) ---
 
+
 class FollowUpItemResponse(BaseModel):
     """A single product that a customer is expected to need."""
+
     product_id: uuid.UUID
     product_name: str
     avg_interval_days: Optional[Decimal] = None
@@ -235,6 +242,7 @@ class FollowUpMetrics(BaseModel):
 
 # --- Calendar schemas ---
 
+
 class CalendarEvent(BaseModel):
     date: date
     customerId: uuid.UUID
@@ -246,18 +254,21 @@ class CalendarEvent(BaseModel):
 
 class CalendarDateEvents(BaseModel):
     """Events for a single date"""
+
     date: date
     events: list[CalendarEvent] = []
 
 
 class CalendarSummary(BaseModel):
     """Summary of calendar events in the date range"""
+
     upcoming: int = 0
     overdue: int = 0
 
 
 class CalendarResponse(BaseModel):
     """Complete calendar response with events by date and summary"""
+
     dates: list[CalendarDateEvents]
     summary: CalendarSummary
 

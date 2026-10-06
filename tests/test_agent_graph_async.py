@@ -3,11 +3,10 @@
 import uuid
 
 import pytest
-from sqlalchemy import text
-
 from langchain_core.tools import tool
 from langgraph.prebuilt import create_react_agent
 from langgraph.types import Command, interrupt
+from sqlalchemy import text
 
 from app.agent.graph import build_async_checkpointer
 from tests.conftest import TEST_DATABASE_URL
@@ -22,7 +21,9 @@ def _drop_schema(test_engine, schema: str) -> None:
 def _tables_in(test_engine, schema: str) -> set[str]:
     with test_engine.begin() as conn:
         rows = conn.execute(
-            text("SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"),
+            text(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"
+            ),
             {"schema": schema},
         )
         return {r[0] for r in rows}
@@ -70,7 +71,9 @@ async def test_an_interrupt_survives_and_resumes_on_the_async_saver(test_engine)
         return f"dijiste {respuesta}"
 
     primer_grafo = create_react_agent(
-        FakeToolCallingModel(scripted_tool_calls=[{"name": "pregunta", "args": {}, "id": "1"}]),
+        FakeToolCallingModel(
+            scripted_tool_calls=[{"name": "pregunta", "args": {}, "id": "1"}]
+        ),
         [pregunta],
         checkpointer=primer_saver,
         version="v2",

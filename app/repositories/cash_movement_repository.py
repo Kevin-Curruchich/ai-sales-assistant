@@ -46,9 +46,13 @@ class CashMovementRepository:
         # created_at e id desempatan.  Con occurred_at los empates son raros,
         # pero una carga en lote los produce, y sin desempate el orden queda
         # indefinido y el saldo acumulado deja de ser reproducible.
-        stmt = stmt.order_by(
-            CashMovement.occurred_at, CashMovement.created_at, CashMovement.id
-        ).limit(limit).offset(offset)
+        stmt = (
+            stmt.order_by(
+                CashMovement.occurred_at, CashMovement.created_at, CashMovement.id
+            )
+            .limit(limit)
+            .offset(offset)
+        )
         return list(self.db.execute(stmt).scalars().all())
 
     def _range_filters(self, stmt, start: Optional[datetime], end: Optional[datetime]):
@@ -58,8 +62,12 @@ class CashMovementRepository:
             stmt = stmt.where(CashMovement.occurred_at <= end)
         return stmt
 
-    def count(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> int:
-        stmt = self._range_filters(select(func.count()).select_from(CashMovement), start, end)
+    def count(
+        self, start: Optional[datetime] = None, end: Optional[datetime] = None
+    ) -> int:
+        stmt = self._range_filters(
+            select(func.count()).select_from(CashMovement), start, end
+        )
         return self.db.execute(stmt).scalar_one()
 
     def get_recent_with_balance(
@@ -79,18 +87,34 @@ class CashMovementRepository:
         """
         running_balance = (
             func.sum(_signed_amount())
-            .over(order_by=(CashMovement.occurred_at, CashMovement.created_at, CashMovement.id))
+            .over(
+                order_by=(
+                    CashMovement.occurred_at,
+                    CashMovement.created_at,
+                    CashMovement.id,
+                )
+            )
             .label("running_balance")
         )
-        ledger = select(CashMovement.id.label("movement_id"), running_balance).subquery()
+        ledger = select(
+            CashMovement.id.label("movement_id"), running_balance
+        ).subquery()
         stmt = select(CashMovement, ledger.c.running_balance).join(
             ledger, ledger.c.movement_id == CashMovement.id
         )
         stmt = self._range_filters(stmt, start, end)
-        stmt = stmt.order_by(
-            CashMovement.occurred_at.desc(), CashMovement.created_at.desc(), CashMovement.id.desc()
-        ).limit(limit).offset(offset)
-        return [(m, Decimal(str(balance))) for m, balance in self.db.execute(stmt).all()]
+        stmt = (
+            stmt.order_by(
+                CashMovement.occurred_at.desc(),
+                CashMovement.created_at.desc(),
+                CashMovement.id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+        return [
+            (m, Decimal(str(balance))) for m, balance in self.db.execute(stmt).all()
+        ]
 
     def get_running_balance(self, as_of: Optional[datetime] = None) -> Decimal:
         stmt = select(func.coalesce(func.sum(_signed_amount()), 0))
@@ -102,7 +126,10 @@ class CashMovementRepository:
         contributed = func.coalesce(
             func.sum(
                 case(
-                    (CashMovement.type == CashMovementType.APORTE_SOCIO, CashMovement.amount),
+                    (
+                        CashMovement.type == CashMovementType.APORTE_SOCIO,
+                        CashMovement.amount,
+                    ),
                     else_=0,
                 )
             ),
@@ -111,10 +138,15 @@ class CashMovementRepository:
         withdrawn = func.coalesce(
             func.sum(
                 case(
-                    (CashMovement.type == CashMovementType.RETIRO_SOCIO, CashMovement.amount),
+                    (
+                        CashMovement.type == CashMovementType.RETIRO_SOCIO,
+                        CashMovement.amount,
+                    ),
                     else_=0,
                 )
             ),
             0,
         )
-        return Decimal(str(self.db.execute(select(contributed - withdrawn)).scalar_one()))
+        return Decimal(
+            str(self.db.execute(select(contributed - withdrawn)).scalar_one())
+        )

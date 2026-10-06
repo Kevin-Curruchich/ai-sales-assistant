@@ -41,15 +41,16 @@ destino (se resuelve por el search_path que fija env.py), y no aparece
 `CREATE TYPE` ni `ALTER TYPE` en ningun lado: si aparecieran, seria señal de
 que `native_enum=False` no tomo efecto.
 """
+
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
-revision: str = '9bd1cde470ea'
-down_revision: Union[str, None] = '2208c8e60855'
+revision: str = "9bd1cde470ea"
+down_revision: Union[str, None] = "2208c8e60855"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
