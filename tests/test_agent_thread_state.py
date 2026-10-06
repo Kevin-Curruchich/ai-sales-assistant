@@ -20,8 +20,6 @@ viviera en un plugin compartido parchearia el grafo de todos los tests, incluido
 `test_startup.py`.
 """
 
-import pytest
-
 import app.main as main
 from app.agent.tools.write import registrar_venta
 from app.models.sale import Sale
@@ -68,7 +66,9 @@ def test_the_owner_sees_the_conversation_with_the_tool_activity(
 
     assert estado["mensajes"][0] == {"rol": "usuario", "texto": "vendi un carton"}
     assert {"rol": "herramienta", "nombre": "registrar_venta"} in estado["mensajes"]
-    assert all(m["rol"] in {"usuario", "asistente", "herramienta"} for m in estado["mensajes"])
+    assert all(
+        m["rol"] in {"usuario", "asistente", "herramienta"} for m in estado["mensajes"]
+    )
 
 
 def test_a_pending_confirmation_survives_a_reload_with_its_huella_intact(
@@ -112,7 +112,9 @@ def test_the_state_lets_a_reloaded_panel_actually_approve(
     assert db_session.query(Sale).count() == 0
 
     # El panel se recargo: lo unico que tiene es lo que devuelve el endpoint.
-    recuperado = _estado(client, seeded_user, hilo["id"])["confirmaciones_pendientes"][0]
+    recuperado = _estado(client, seeded_user, hilo["id"])["confirmaciones_pendientes"][
+        0
+    ]
 
     segundo = _turno(
         client,
@@ -173,7 +175,9 @@ def test_reading_another_users_thread_state_is_a_404(client, seeded_user, second
     mio = _create_thread_as(client, seeded_user, "mio")
     ajeno = _create_thread_as(client, second_user, "del otro")
 
-    propio = client.get(f"/api/v1/agent/threads/{mio['id']}/state", headers=_auth(seeded_user))
+    propio = client.get(
+        f"/api/v1/agent/threads/{mio['id']}/state", headers=_auth(seeded_user)
+    )
     assert propio.status_code == 200
 
     resp = client.get(

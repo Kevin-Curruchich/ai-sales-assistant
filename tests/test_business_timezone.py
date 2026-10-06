@@ -1,5 +1,4 @@
 from datetime import date, datetime, timezone
-from decimal import Decimal
 
 import app.core.datetime_utils as datetime_utils_module
 from app.core.config import settings

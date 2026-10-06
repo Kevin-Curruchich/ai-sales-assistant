@@ -77,7 +77,13 @@ def grafo_simple():
 @pytest.fixture
 def grafo_con_herramienta():
     return _grafo_de_juguete(
-        [{"name": "previsualizar_venta", "args": {"cliente_id": "cli-1"}, "id": "call_1"}],
+        [
+            {
+                "name": "previsualizar_venta",
+                "args": {"cliente_id": "cli-1"},
+                "id": "call_1",
+            }
+        ],
         [previsualizar_venta],
     )
 
@@ -117,7 +123,9 @@ async def test_a_tool_call_announces_itself(grafo_con_herramienta):
 
 
 @pytest.mark.asyncio
-async def test_an_interrupt_becomes_a_confirmacion_carrying_its_huella(grafo_que_interrumpe):
+async def test_an_interrupt_becomes_a_confirmacion_carrying_its_huella(
+    grafo_que_interrumpe,
+):
     eventos = [e async for e in eventos_sse(grafo_que_interrumpe, ENTRADA, CONFIG)]
     conf = [e for e in eventos if e["event"] == "confirmacion"][0]
 
@@ -175,7 +183,9 @@ async def test_an_interrupt_payload_that_is_not_a_dict_still_carries_its_id():
 
 
 @pytest.mark.asyncio
-async def test_an_exception_inside_a_tool_becomes_an_error_event_and_closes(grafo_que_revienta):
+async def test_an_exception_inside_a_tool_becomes_an_error_event_and_closes(
+    grafo_que_revienta,
+):
     """Falla numero 3 del Review Focus: ni excepcion colgada ni stream infinito."""
     eventos = [e async for e in eventos_sse(grafo_que_revienta, ENTRADA, CONFIG)]
 
@@ -248,7 +258,11 @@ async def test_token_events_carry_plain_text_even_when_content_is_a_block_list()
     parcial de una tool_call disfrazado de respuesta del asistente."""
     model = FakeBlockContentModel(
         scripted_tool_calls=[
-            {"name": "previsualizar_venta", "args": {"cliente_id": "cli-1"}, "id": "call_x"}
+            {
+                "name": "previsualizar_venta",
+                "args": {"cliente_id": "cli-1"},
+                "id": "call_x",
+            }
         ]
     )
     grafo = create_react_agent(

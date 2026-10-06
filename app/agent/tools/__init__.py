@@ -28,7 +28,12 @@ READ_TOOLS = [
     consultar_caja,
     consultar_ventas,
 ]
-WRITE_TOOLS = [registrar_venta, registrar_compra, registrar_movimiento_caja, registrar_cobro]
+WRITE_TOOLS = [
+    registrar_venta,
+    registrar_compra,
+    registrar_movimiento_caja,
+    registrar_cobro,
+]
 ALL_TOOLS = READ_TOOLS + WRITE_TOOLS
 
 __all__ = [

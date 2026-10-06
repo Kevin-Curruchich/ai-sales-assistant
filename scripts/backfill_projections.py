@@ -79,7 +79,10 @@ def backfill_projections(session: Session, dry_run: bool = False) -> dict[str, i
 def _guard_against_protected_schema(schema: str, *, dry_run: bool) -> None:
     if dry_run:
         return
-    if schema == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+    if (
+        schema == PROTECTED_SCHEMA
+        and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1"
+    ):
         raise RuntimeError(
             f"POSTGRES_SCHEMA resolvio a {schema!r}. Ese schema tiene los datos "
             "reales de produccion y este script no debe escribirle "

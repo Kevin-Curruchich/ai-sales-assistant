@@ -165,7 +165,6 @@ def _huella_ausente(huella) -> bool:
     return not huella
 
 
-
 def _firmar_huella(clave_escritura: str | None, cifras):
     """El sobre firmado que viaja en el payload de `interrupt()`.
 
@@ -304,7 +303,9 @@ def _build_sale_create(
                 # secas ese cero se leeria como "no vino precio", usando el
                 # sugerido a precio completo en vez del cero que se pidio
                 # (Minor de la revision).
-                unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") is not None else None,
+                unitPrice=Decimal(str(i["precio_unitario"]))
+                if i.get("precio_unitario") is not None
+                else None,
             )
             for i in items
         ],
@@ -851,7 +852,9 @@ def registrar_movimiento_caja(
         # nada que recalcular). Ver la nota de registrar_venta sobre por que
         # el chequeo va ANTES de interrumpir.
         with agent_session() as db:
-            ya = _ya_escrito(db, clave_escritura, "registrar_movimiento_caja", "movimiento_id")
+            ya = _ya_escrito(
+                db, clave_escritura, "registrar_movimiento_caja", "movimiento_id"
+            )
         if ya is not None:
             return ya
 
@@ -900,9 +903,13 @@ def registrar_movimiento_caja(
                 occurred_at=_occurred_at(valores["fecha"]),
                 type=CashMovementType(valores["tipo"]),
                 amount=Decimal(str(valores["monto"])),
-                payment_method=PaymentMethod(valores["medio_pago"]) if valores["medio_pago"] else None,
+                payment_method=PaymentMethod(valores["medio_pago"])
+                if valores["medio_pago"]
+                else None,
                 sale_id=uuid.UUID(valores["venta_id"]) if valores["venta_id"] else None,
-                purchase_id=uuid.UUID(valores["compra_id"]) if valores["compra_id"] else None,
+                purchase_id=uuid.UUID(valores["compra_id"])
+                if valores["compra_id"]
+                else None,
                 note=valores["nota"],
                 commit=True,
             )
@@ -942,7 +949,9 @@ def _venta_a_cobrar(db, venta_id: str) -> tuple[dict | None, object | None]:
             {
                 "estado": "ya_pagada",
                 "venta_id": str(venta.id),
-                "fecha_pago": venta.payment_date.isoformat() if venta.payment_date else None,
+                "fecha_pago": venta.payment_date.isoformat()
+                if venta.payment_date
+                else None,
                 "mensaje": "Esta venta ya estaba pagada. No se escribio nada.",
             },
             None,
@@ -1002,7 +1011,11 @@ def registrar_cobro(
         valores = {
             "fecha_pago": fecha_pago,
             "medio_pago": medio_pago
-            or (venta.payment_method.value if venta.payment_method else PaymentMethod.EFECTIVO.value),
+            or (
+                venta.payment_method.value
+                if venta.payment_method
+                else PaymentMethod.EFECTIVO.value
+            ),
         }
 
         while True:

@@ -47,7 +47,9 @@ def test_a_created_sale_stores_its_payment_method(
     data = SaleCreate(
         customerId=seeded_customer.id,
         date=date(2026, 9, 24),
-        items=[SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"))],
+        items=[
+            SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"))
+        ],
         medioPago=PaymentMethod.TRANSFERENCIA,
     )
     # NOTA: el brief de la task escribia `user_id=seeded_customer.id`, que

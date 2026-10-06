@@ -46,14 +46,14 @@ vocabulario de cuatro valores, reapunta la columna con USING, y borra el tipo
 viejo. Ninguna operacion cualifica el schema destino: se resuelve por el
 search_path que fija env.py, igual que el resto de las revisiones.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
-revision: str = '559bd2d61ba6'
-down_revision: Union[str, None] = 'a21d7bd9293c'
+revision: str = "559bd2d61ba6"
+down_revision: Union[str, None] = "a21d7bd9293c"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -68,7 +68,9 @@ def downgrade() -> None:
     op.execute("DELETE FROM cash_movements WHERE type = 'saldo_inicial'")
     # Postgres no soporta "ALTER TYPE ... DROP VALUE": hay que recrear el tipo
     # sin el valor y reapuntar la columna.
-    op.execute("ALTER TYPE cash_movement_type_enum RENAME TO cash_movement_type_enum_old")
+    op.execute(
+        "ALTER TYPE cash_movement_type_enum RENAME TO cash_movement_type_enum_old"
+    )
     op.execute(
         "CREATE TYPE cash_movement_type_enum AS ENUM "
         "('entrada', 'salida', 'aporte_socio', 'retiro_socio')"

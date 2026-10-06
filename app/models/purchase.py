@@ -2,8 +2,20 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
-from sqlalchemy import Date, DateTime, ForeignKey, Numeric, String, Text, Uuid, func, text
+
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Numeric,
+    String,
+    Text,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.core.database import Base
 from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
@@ -12,17 +24,24 @@ class Purchase(Base):
     __tablename__ = "purchases"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+        Uuid,
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     supplier_name: Mapped[Optional[str]] = mapped_column(String(255))
-    reference_number: Mapped[Optional[str]] = mapped_column(String(100), unique=True, nullable=True, index=True)
+    reference_number: Mapped[Optional[str]] = mapped_column(
+        String(100), unique=True, nullable=True, index=True
+    )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text)
     total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")  # "draft" | "confirmed" | "cancelled"
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft"
+    )  # "draft" | "confirmed" | "cancelled"
     payment_method: Mapped[Optional[PaymentMethod]] = mapped_column(
         PAYMENT_METHOD_COLUMN, nullable=True
     )
@@ -53,7 +72,10 @@ class PurchaseItem(Base):
     __tablename__ = "purchase_items"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+        Uuid,
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
     )
     purchase_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("purchases.id", ondelete="CASCADE"), nullable=False, index=True

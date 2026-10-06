@@ -1,16 +1,24 @@
 import uuid
-from datetime import datetime, date
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import date, datetime
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
+
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from app.models.purchase import Purchase, PurchaseItem
+
+from app.core.datetime_utils import business_today, format_business_datetime
 from app.models.product import Product
+from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.product_repository import ProductRepository
 from app.repositories.purchase_repository import PurchaseRepository
-from app.schemas.product import ProductCreate, ProductUpdate, ProductForSaleResponse, AvailableLotInfo, LotsAvailabilityResponse
-from app.core.datetime_utils import business_today, format_business_datetime
+from app.schemas.product import (
+    AvailableLotInfo,
+    LotsAvailabilityResponse,
+    ProductCreate,
+    ProductForSaleResponse,
+    ProductUpdate,
+)
 
 
 class ProductService:
@@ -20,7 +28,9 @@ class ProductService:
     def _format_stock(self, value: Decimal) -> Decimal:
         return Decimal(str(value)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
 
-    def count(self, search: Optional[str] = None, status_filter: Optional[str] = None) -> int:
+    def count(
+        self, search: Optional[str] = None, status_filter: Optional[str] = None
+    ) -> int:
         return self.repo.count(search=search, status=status_filter)
 
     def get_all_active_with_first_lot(self) -> list[ProductForSaleResponse]:
@@ -42,7 +52,9 @@ class ProductService:
             first_lot = None
             if lots:
                 lot = lots[0]
-                cost_basis = Decimal(str(lot.unit_cost)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+                cost_basis = Decimal(str(lot.unit_cost)).quantize(
+                    self._MONEY, rounding=ROUND_HALF_UP
+                )
                 suggested_price = self._compute_suggested_price(product, cost_basis)
 
                 first_lot = AvailableLotInfo(
@@ -60,7 +72,9 @@ class ProductService:
                     sku=product.sku,
                     name=product.name,
                     stock=self._format_stock(product.stock),
-                    earning_mode=getattr(product.earning_mode, "value", product.earning_mode),
+                    earning_mode=getattr(
+                        product.earning_mode, "value", product.earning_mode
+                    ),
                     earning_percent=product.earning_percent,
                     earning_fee_amount=product.earning_fee_amount,
                     status=product.status,
@@ -71,7 +85,9 @@ class ProductService:
 
         return result
 
-    def get_lots_availability(self, product_id: uuid.UUID, as_of_date: Optional[date] = None) -> LotsAvailabilityResponse:
+    def get_lots_availability(
+        self, product_id: uuid.UUID, as_of_date: Optional[date] = None
+    ) -> LotsAvailabilityResponse:
         """Get all available FIFO lots for a product.
 
         Args:
@@ -102,7 +118,9 @@ class ProductService:
 
         lot_infos: list[AvailableLotInfo] = []
         for lot in lots:
-            cost_basis = Decimal(str(lot.unit_cost)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+            cost_basis = Decimal(str(lot.unit_cost)).quantize(
+                self._MONEY, rounding=ROUND_HALF_UP
+            )
             suggested_price = self._compute_suggested_price(product, cost_basis)
 
             lot_infos.append(
@@ -133,11 +151,19 @@ class ProductService:
         self.purchase_repo = PurchaseRepository(db)
 
     def get_all(
-        self, search: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 10, offset: int = 0
+        self,
+        search: Optional[str] = None,
+        status_filter: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
     ) -> list[Product]:
-        return self.repo.get_all(search=search, status=status_filter, limit=limit, offset=offset)
+        return self.repo.get_all(
+            search=search, status=status_filter, limit=limit, offset=offset
+        )
 
-    def _format_datetime(self, value: datetime | str | None) -> tuple[Optional[datetime], Optional[str]]:
+    def _format_datetime(
+        self, value: datetime | str | None
+    ) -> tuple[Optional[datetime], Optional[str]]:
         if value is None:
             return None, None
         if isinstance(value, str):
@@ -151,7 +177,9 @@ class ProductService:
             return "low_stock", True
         return "in_stock", False
 
-    def _compute_suggested_price(self, product: Product, cost_basis: Decimal) -> Decimal:
+    def _compute_suggested_price(
+        self, product: Product, cost_basis: Decimal
+    ) -> Decimal:
         mode = getattr(product.earning_mode, "value", product.earning_mode)
         if mode == "percent":
             percent = Decimal(str(product.earning_percent or 0))
@@ -163,7 +191,9 @@ class ProductService:
         fee_amount = Decimal(str(product.earning_fee_amount or 0))
         return (cost_basis + fee_amount).quantize(self._MONEY, rounding=ROUND_HALF_UP)
 
-    def _get_highest_available_lot_cost(self, product_id: uuid.UUID) -> Optional[Decimal]:
+    def _get_highest_available_lot_cost(
+        self, product_id: uuid.UUID
+    ) -> Optional[Decimal]:
         stmt = (
             select(func.max(PurchaseItem.unit_cost))
             .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
@@ -176,7 +206,9 @@ class ProductService:
             return None
         return Decimal(str(result)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
 
-    def _get_highest_available_lot_costs_bulk(self, product_ids: list[uuid.UUID]) -> dict[uuid.UUID, Decimal]:
+    def _get_highest_available_lot_costs_bulk(
+        self, product_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, Decimal]:
         if not product_ids:
             return {}
 
@@ -193,16 +225,26 @@ class ProductService:
         )
         rows = self.db.execute(stmt).all()
         return {
-            row.product_id: Decimal(str(row.max_cost)).quantize(self._MONEY, rounding=ROUND_HALF_UP)
+            row.product_id: Decimal(str(row.max_cost)).quantize(
+                self._MONEY, rounding=ROUND_HALF_UP
+            )
             for row in rows
             if row.max_cost is not None
         }
 
-    def format_product_dates(self, product: Product, highest_cost: Optional[Decimal] = None) -> dict:
+    def format_product_dates(
+        self, product: Product, highest_cost: Optional[Decimal] = None
+    ) -> dict:
         created_at, created_at_formatted = self._format_datetime(product.created_at)
         updated_at, updated_at_formatted = self._format_datetime(product.updated_at)
-        stock_alert_status, should_reorder = self._get_stock_alert(product.stock, product.min_stock)
-        suggested_price = self._compute_suggested_price(product, highest_cost) if highest_cost is not None else None
+        stock_alert_status, should_reorder = self._get_stock_alert(
+            product.stock, product.min_stock
+        )
+        suggested_price = (
+            self._compute_suggested_price(product, highest_cost)
+            if highest_cost is not None
+            else None
+        )
 
         return {
             "id": product.id,
@@ -225,11 +267,22 @@ class ProductService:
         }
 
     def get_all_with_formatted_dates(
-        self, search: Optional[str] = None, status_filter: Optional[str] = None, limit: int = 10, offset: int = 0
+        self,
+        search: Optional[str] = None,
+        status_filter: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
     ) -> list[dict]:
-        items = self.get_all(search=search, status_filter=status_filter, limit=limit, offset=offset)
-        highest_costs = self._get_highest_available_lot_costs_bulk([item.id for item in items])
-        return [self.format_product_dates(item, highest_cost=highest_costs.get(item.id)) for item in items]
+        items = self.get_all(
+            search=search, status_filter=status_filter, limit=limit, offset=offset
+        )
+        highest_costs = self._get_highest_available_lot_costs_bulk(
+            [item.id for item in items]
+        )
+        return [
+            self.format_product_dates(item, highest_cost=highest_costs.get(item.id))
+            for item in items
+        ]
 
     def get_by_id_with_formatted_dates(self, product_id: uuid.UUID) -> dict:
         product = self.get_by_id(product_id)
@@ -289,7 +342,9 @@ class ProductService:
         for key, value in update_data.items():
             setattr(product, key, value)
 
-        earning_mode_value = getattr(product.earning_mode, "value", product.earning_mode)
+        earning_mode_value = getattr(
+            product.earning_mode, "value", product.earning_mode
+        )
 
         if earning_mode_value == "percent" and product.earning_percent is None:
             raise HTTPException(

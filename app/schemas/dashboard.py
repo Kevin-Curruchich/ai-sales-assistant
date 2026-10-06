@@ -1,6 +1,8 @@
-from pydantic import BaseModel
 from decimal import Decimal
-from app.schemas.sale import SaleResponse, FollowUpResponse
+
+from pydantic import BaseModel
+
+from app.schemas.sale import FollowUpResponse, SaleResponse
 
 
 class DashboardSummary(BaseModel):

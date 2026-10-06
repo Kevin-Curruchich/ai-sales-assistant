@@ -83,7 +83,9 @@ def _construir_grafo_de_juguete(scripted_tool_calls=(), tools=()):
     HTTP termina en una fila escrita, y un doble de la herramienta no puede
     demostrar eso."""
     model = FakeToolCallingModel(scripted_tool_calls=list(scripted_tool_calls))
-    graph = create_react_agent(model, list(tools), checkpointer=MemorySaver(), version="v2")
+    graph = create_react_agent(
+        model, list(tools), checkpointer=MemorySaver(), version="v2"
+    )
 
     original_astream = graph.astream
 
@@ -121,7 +123,9 @@ def _grafo_de_juguete(monkeypatch):
     def _fake_build_graph(*_args, **_kwargs):
         return graph
 
-    monkeypatch.setattr("app.main.build_async_checkpointer", _fake_build_async_checkpointer)
+    monkeypatch.setattr(
+        "app.main.build_async_checkpointer", _fake_build_async_checkpointer
+    )
     monkeypatch.setattr("app.main.build_graph", _fake_build_graph)
     yield graph
     _ultimo_config["valor"] = None
@@ -267,7 +271,11 @@ def test_the_user_id_comes_from_the_token_and_not_from_the_body(
     with client.stream(
         "POST",
         "/api/v1/agent/stream",
-        json={"thread_id": hilo["id"], "mensaje": "hola", "user_id": str(second_user.id)},
+        json={
+            "thread_id": hilo["id"],
+            "mensaje": "hola",
+            "user_id": str(second_user.id),
+        },
         headers=_auth(seeded_user),
     ) as resp:
         _consume(resp)
@@ -317,9 +325,12 @@ def test_streaming_on_someone_elses_thread_is_a_404(client, seeded_user, second_
 def test_the_first_message_titles_the_thread(client, seeded_user, db_session):
     hilo = _create_thread_as(client, seeded_user, None)
 
-    with client.stream("POST", "/api/v1/agent/stream",
-                       json={"thread_id": hilo["id"], "mensaje": "vendi dos cartones a Aurita"},
-                       headers=_auth(seeded_user)) as resp:
+    with client.stream(
+        "POST",
+        "/api/v1/agent/stream",
+        json={"thread_id": hilo["id"], "mensaje": "vendi dos cartones a Aurita"},
+        headers=_auth(seeded_user),
+    ) as resp:
         _consume(resp)
 
     # Trampa del harness: `client` le entrega la MISMA `db_session` a todos
@@ -331,8 +342,11 @@ def test_the_first_message_titles_the_thread(client, seeded_user, db_session):
     # pasaria en verde igual.
     db_session.expire_all()
 
-    assert client.get(f"/api/v1/agent/threads/{hilo['id']}",
-                      headers=_auth(seeded_user)).json()["title"].startswith("vendi dos cartones")
+    assert (
+        client.get(f"/api/v1/agent/threads/{hilo['id']}", headers=_auth(seeded_user))
+        .json()["title"]
+        .startswith("vendi dos cartones")
+    )
 
 
 def test_streaming_without_mensaje_or_decision_is_a_422(client, seeded_user):
@@ -496,7 +510,9 @@ async def test_a_client_that_disconnects_before_the_first_byte_still_frees_the_t
             # rename de juguete confirme que arranco.
             loop = asyncio.get_running_loop()
             llego = await loop.run_in_executor(None, entro_al_rename.wait, 5)
-            assert llego, "el rename nunca arranco -- este test no prueba la ventana que dice"
+            assert llego, (
+                "el rename nunca arranco -- este test no prueba la ventana que dice"
+            )
 
             # Reservado, pero `generar()` ni se definio: la linea textual
             # `_hilos_en_curso.add(...)` corre antes del `await
@@ -524,7 +540,9 @@ async def test_a_client_that_disconnects_before_the_first_byte_still_frees_the_t
     finally:
         seguir.set()  # por si algo arriba salio antes de llegar a destrabarlo
 
-    assert hilo["id"] not in agent_endpoints._hilos_en_curso, "el hilo quedo trabado para siempre"
+    assert hilo["id"] not in agent_endpoints._hilos_en_curso, (
+        "el hilo quedo trabado para siempre"
+    )
 
 
 # ---------------------------------------------------------------------
@@ -558,9 +576,12 @@ def test_the_thread_is_released_when_the_run_ends(client, seeded_user):
     trabado para siempre y el usuario sin forma de destrabarlo."""
     hilo = _create_thread_as(client, seeded_user, "mio")
 
-    with client.stream("POST", "/api/v1/agent/stream",
-                       json={"thread_id": hilo["id"], "mensaje": "hola"},
-                       headers=_auth(seeded_user)) as resp:
+    with client.stream(
+        "POST",
+        "/api/v1/agent/stream",
+        json={"thread_id": hilo["id"], "mensaje": "hola"},
+        headers=_auth(seeded_user),
+    ) as resp:
         _consume(resp)
 
     segunda = client.post(
@@ -599,7 +620,9 @@ def test_resuming_with_an_approval_writes(
     )
     hilo = _create_thread_as(client, seeded_user, "mio")
 
-    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    primero = _turno(
+        client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"}
+    )
     confirmaciones = _confirmaciones(primero)
     assert len(confirmaciones) == 1
     pausa = confirmaciones[0]
@@ -642,7 +665,9 @@ def test_resuming_with_a_cancellation_does_not_write(
     )
     hilo = _create_thread_as(client, seeded_user, "mio")
 
-    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    primero = _turno(
+        client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"}
+    )
     pausa = _confirmaciones(primero)[0]
 
     segundo = _turno(
@@ -691,20 +716,27 @@ def test_two_pending_confirmations_can_each_be_answered(
                 },
                 "id": "call_caja",
             },
-            _sale_tool_call(seeded_customer, seeded_product_with_lot, call_id="call_venta"),
+            _sale_tool_call(
+                seeded_customer, seeded_product_with_lot, call_id="call_venta"
+            ),
         ],
         [registrar_movimiento_caja, registrar_venta],
     )
     hilo = _create_thread_as(client, seeded_user, "mio")
 
     primero = _turno(
-        client, seeded_user, {"thread_id": hilo["id"], "mensaje": "el aporte del socio, y vendi 1"}
+        client,
+        seeded_user,
+        {"thread_id": hilo["id"], "mensaje": "el aporte del socio, y vendi 1"},
     )
     pausas = {c["tipo"]: c for c in _confirmaciones(primero)}
     assert set(pausas) == {"confirmar_movimiento_caja", "confirmar_venta"}
     # Cada confirmacion trae SU id: sin eso el panel no tiene con que decir a
     # cual de las dos responde.
-    assert pausas["confirmar_venta"]["interrupt_id"] != pausas["confirmar_movimiento_caja"]["interrupt_id"]
+    assert (
+        pausas["confirmar_venta"]["interrupt_id"]
+        != pausas["confirmar_movimiento_caja"]["interrupt_id"]
+    )
 
     # Responder UNA de las dos: la otra vuelve a pausarse y se anuncia de
     # nuevo, con su id (que puede ser otro), asi que el panel siempre tiene
@@ -714,7 +746,10 @@ def test_two_pending_confirmations_can_each_be_answered(
         seeded_user,
         {
             "thread_id": hilo["id"],
-            "decision": {"accion": "aprobar", "huella": pausas["confirmar_venta"]["huella"]},
+            "decision": {
+                "accion": "aprobar",
+                "huella": pausas["confirmar_venta"]["huella"],
+            },
             "interrupt_id": pausas["confirmar_venta"]["interrupt_id"],
         },
     )
@@ -738,7 +773,10 @@ def test_two_pending_confirmations_can_each_be_answered(
     assert tercero[-1] == {"event": "fin", "data": {"estado": "completo"}}
     db_session.expire_all()
     assert (
-        db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
+        db_session.query(CashMovement)
+        .filter_by(purchase_id=seeded_purchase_draft.id)
+        .count()
+        == 1
     )
     assert db_session.query(Sale).count() == 1
 
@@ -771,7 +809,9 @@ def test_answering_a_confirmation_that_is_no_longer_pending_is_a_409(
         [_sale_tool_call(seeded_customer, seeded_product_with_lot)], [registrar_venta]
     )
     hilo = _create_thread_as(client, seeded_user, "mio")
-    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    primero = _turno(
+        client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"}
+    )
     pausa = _confirmaciones(primero)[0]
 
     inventado = client.post(
@@ -810,7 +850,9 @@ def test_answering_a_confirmation_that_is_no_longer_pending_is_a_409(
     )
     assert repetido.status_code == 409
     db_session.expire_all()
-    assert db_session.query(Sale).count() == 1, "el reintento escribio una segunda venta"
+    assert db_session.query(Sale).count() == 1, (
+        "el reintento escribio una segunda venta"
+    )
 
 
 def test_the_stream_response_tells_proxies_not_to_buffer_it(client, seeded_user):
@@ -868,7 +910,9 @@ def test_a_mensaje_while_a_confirmation_is_pending_is_rejected_and_leaves_it_ans
         [_sale_tool_call(seeded_customer, seeded_product_with_lot)], [registrar_venta]
     )
     hilo = _create_thread_as(client, seeded_user, "mio")
-    primero = _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"})
+    primero = _turno(
+        client, seeded_user, {"thread_id": hilo["id"], "mensaje": "vendi un carton"}
+    )
     pausa = _confirmaciones(primero)[0]
 
     rechazado = client.post(

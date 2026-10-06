@@ -59,7 +59,12 @@ def test_a_snapshot_without_a_messages_key_is_not_a_crash():
 
 def test_the_user_and_the_assistant_become_the_conversation():
     estado = traducir_estado(
-        _snapshot([HumanMessage("vendi dos cartones a Aurita"), AIMessage("Listo, la registre.")])
+        _snapshot(
+            [
+                HumanMessage("vendi dos cartones a Aurita"),
+                AIMessage("Listo, la registre."),
+            ]
+        )
     )
 
     assert estado["mensajes"] == [
@@ -140,7 +145,9 @@ def test_an_assistant_message_with_no_text_is_not_a_message():
     `AIMessage` que solo pide herramientas no tiene nada que escribir, y una
     burbuja vacia en el historial es ruido."""
     estado = traducir_estado(
-        _snapshot([AIMessage("", tool_calls=[{"name": "buscar", "args": {}, "id": "1"}])])
+        _snapshot(
+            [AIMessage("", tool_calls=[{"name": "buscar", "args": {}, "id": "1"}])]
+        )
     )
 
     assert [m for m in estado["mensajes"] if m["rol"] == "asistente"] == []
@@ -199,7 +206,9 @@ def test_an_answered_interrupt_is_not_pending_anymore():
 
     Sin esta regla, el panel mostraria al recargar una tarjeta de confirmacion
     que la persona ya aprobo, y aprobarla otra vez daria 409."""
-    respondida = _tarea([_interrupcion({"tipo": "confirmar_venta"}, id="vieja")], result={"ok": 1})
+    respondida = _tarea(
+        [_interrupcion({"tipo": "confirmar_venta"}, id="vieja")], result={"ok": 1}
+    )
     abierta = _tarea([_interrupcion({"tipo": "confirmar_compra"}, id="nueva")])
 
     estado = traducir_estado(_snapshot(tasks=[respondida, abierta]))
@@ -211,9 +220,13 @@ def test_an_interrupt_whose_payload_is_not_a_dict_still_carries_its_id():
     """Mismo criterio que `_payload` en `streaming.py`: una herramienta futura
     que interrumpa con un string no puede hacer reventar la traduccion entera y
     dejar al panel sin forma de responder la pausa."""
-    estado = traducir_estado(_snapshot(tasks=[_tarea([_interrupcion("algo raro", id="ii-9")])]))
+    estado = traducir_estado(
+        _snapshot(tasks=[_tarea([_interrupcion("algo raro", id="ii-9")])])
+    )
 
-    assert estado["confirmaciones_pendientes"] == [{"valor": "algo raro", "interrupt_id": "ii-9"}]
+    assert estado["confirmaciones_pendientes"] == [
+        {"valor": "algo raro", "interrupt_id": "ii-9"}
+    ]
 
 
 @pytest.mark.asyncio
@@ -240,7 +253,9 @@ async def test_the_history_and_the_live_stream_speak_the_same_vocabulary():
     @tool
     def previsualizar_venta() -> str:
         """Pide confirmacion."""
-        interrupt({"tipo": "confirmar_venta", "huella": firmar([{"subtotal": "50.00"}])})
+        interrupt(
+            {"tipo": "confirmar_venta", "huella": firmar([{"subtotal": "50.00"}])}
+        )
         return "listo"
 
     graph = create_react_agent(
@@ -253,11 +268,15 @@ async def test_the_history_and_the_live_stream_speak_the_same_vocabulary():
     )
     config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    eventos = [e async for e in eventos_sse(graph, {"messages": [("user", "vendi")]}, config)]
+    eventos = [
+        e async for e in eventos_sse(graph, {"messages": [("user", "vendi")]}, config)
+    ]
     estado = traducir_estado(await graph.aget_state(config))
 
     # 1. La actividad de herramienta: mismo nombre de tipo, mismo campo.
-    herramienta_en_vivo = [e["data"]["nombre"] for e in eventos if e["event"] == "herramienta"]
+    herramienta_en_vivo = [
+        e["data"]["nombre"] for e in eventos if e["event"] == "herramienta"
+    ]
     herramienta_en_historial = [
         m["nombre"] for m in estado["mensajes"] if m["rol"] == "herramienta"
     ]

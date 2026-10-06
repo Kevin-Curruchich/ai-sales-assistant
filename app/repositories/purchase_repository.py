@@ -1,8 +1,10 @@
 import uuid
-from typing import Optional
 from datetime import date
-from sqlalchemy import select, func
+from typing import Optional
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
+
 from app.models.purchase import Purchase, PurchaseItem
 
 
@@ -37,12 +39,9 @@ class PurchaseRepository:
         limit: int = 10,
         offset: int = 0,
     ) -> list[Purchase]:
-        stmt = (
-            select(Purchase)
-            .options(
-                joinedload(Purchase.items).joinedload(PurchaseItem.product),
-                joinedload(Purchase.user),
-            )
+        stmt = select(Purchase).options(
+            joinedload(Purchase.items).joinedload(PurchaseItem.product),
+            joinedload(Purchase.user),
         )
         if status:
             stmt = stmt.where(Purchase.status == status)
@@ -52,7 +51,11 @@ class PurchaseRepository:
             stmt = stmt.where(Purchase.date >= start_date)
         if end_date:
             stmt = stmt.where(Purchase.date <= end_date)
-        stmt = stmt.order_by(Purchase.created_at.desc(), Purchase.date.desc()).limit(limit).offset(offset)
+        stmt = (
+            stmt.order_by(Purchase.created_at.desc(), Purchase.date.desc())
+            .limit(limit)
+            .offset(offset)
+        )
         return list(self.db.execute(stmt).unique().scalars().all())
 
     def get_by_id(self, purchase_id: uuid.UUID) -> Optional[Purchase]:
@@ -84,7 +87,9 @@ class PurchaseRepository:
         if self.db.execute(locked).scalar_one_or_none() is None:
             return None
         self.db.execute(
-            select(PurchaseItem.id).where(PurchaseItem.purchase_id == purchase_id).with_for_update()
+            select(PurchaseItem.id)
+            .where(PurchaseItem.purchase_id == purchase_id)
+            .with_for_update()
         )
         stmt = (
             select(Purchase)
@@ -130,7 +135,11 @@ class PurchaseRepository:
             .where(Purchase.status == "confirmed")
             .where(PurchaseItem.product_id == product_id)
             .where(PurchaseItem.remaining_quantity > 0)
-            .order_by(Purchase.date.asc(), Purchase.created_at.asc(), PurchaseItem.created_at.asc())
+            .order_by(
+                Purchase.date.asc(),
+                Purchase.created_at.asc(),
+                PurchaseItem.created_at.asc(),
+            )
         )
         if as_of_date is not None:
             stmt = stmt.where(Purchase.date <= as_of_date)

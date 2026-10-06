@@ -1,34 +1,40 @@
 import uuid
 from decimal import Decimal
 from typing import Optional
+
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
+
 from app.models.product import Product
 
 
 class ProductRepository:
     def count(self, search: Optional[str] = None, status: Optional[str] = None) -> int:
         from sqlalchemy import func
+
         stmt = select(func.count()).select_from(Product)
         if search:
             stmt = stmt.where(
-                Product.name.ilike(f"%{search}%")
-                | Product.sku.ilike(f"%{search}%")
+                Product.name.ilike(f"%{search}%") | Product.sku.ilike(f"%{search}%")
             )
         if status:
             stmt = stmt.where(Product.status == status)
         return self.db.execute(stmt).scalar()
+
     def __init__(self, db: Session):
         self.db = db
 
     def get_all(
-        self, search: Optional[str] = None, status: Optional[str] = None, limit: int = 10, offset: int = 0
+        self,
+        search: Optional[str] = None,
+        status: Optional[str] = None,
+        limit: int = 10,
+        offset: int = 0,
     ) -> list[Product]:
         stmt = select(Product)
         if search:
             stmt = stmt.where(
-                Product.name.ilike(f"%{search}%")
-                | Product.sku.ilike(f"%{search}%")
+                Product.name.ilike(f"%{search}%") | Product.sku.ilike(f"%{search}%")
             )
         if status:
             stmt = stmt.where(Product.status == status)

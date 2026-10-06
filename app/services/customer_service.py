@@ -1,19 +1,23 @@
+import logging
 import uuid
 from typing import Optional
+
+from dateutil.parser import parse
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import select
+from sqlalchemy.orm import Session, joinedload
+
+from app.core.datetime_utils import (
+    format_business_date,
+    format_business_datetime,
+    to_business_tz,
+)
 from app.models.customer import Customer
-from app.repositories.customer_repository import CustomerRepository
-from app.schemas.customer import CustomerCreate, CustomerUpdate
 from app.models.customer_product_cycle import CustomerProductCycle
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
-from datetime import datetime
-import logging
-from dateutil.parser import parse
-
-from app.core.datetime_utils import format_business_date, format_business_datetime, to_business_tz
+from app.repositories.customer_repository import CustomerRepository
+from app.schemas.customer import CustomerCreate, CustomerUpdate
 
 logger = logging.getLogger("customers")
 
@@ -23,10 +27,14 @@ class CustomerService:
         self.db = db  # Ensure the db session is assigned to self.db
         self.repo = CustomerRepository(db)
 
-    def get_all(self, search: Optional[str] = None, limit: int = 10, offset: int = 0) -> list[Customer]:
+    def get_all(
+        self, search: Optional[str] = None, limit: int = 10, offset: int = 0
+    ) -> list[Customer]:
         return self.repo.get_all(search=search, limit=limit, offset=offset)
 
-    def get_all_with_formatted_dates(self, search: Optional[str] = None, limit: int = 10, offset: int = 0):
+    def get_all_with_formatted_dates(
+        self, search: Optional[str] = None, limit: int = 10, offset: int = 0
+    ):
         customers = self.get_all(search=search, limit=limit, offset=offset)
         return [self.format_customer_dates(customer) for customer in customers]
 
@@ -67,10 +75,14 @@ class CustomerService:
         # Now get the dictionary after conversion
         customer_dict = customer.__dict__.copy()
 
-        customer_dict["created_at"] = customer.created_at          # datetime, sin truncar
+        customer_dict["created_at"] = customer.created_at  # datetime, sin truncar
         customer_dict["updated_at"] = customer.updated_at
-        customer_dict["created_at_formatted"] = format_business_datetime(customer.created_at)
-        customer_dict["updated_at_formatted"] = format_business_datetime(customer.updated_at)
+        customer_dict["created_at_formatted"] = format_business_datetime(
+            customer.created_at
+        )
+        customer_dict["updated_at_formatted"] = format_business_datetime(
+            customer.updated_at
+        )
         return customer_dict
 
     def format_sale_dates(self, sale):
@@ -81,21 +93,23 @@ class CustomerService:
         # sale.date es un date puro y no un datetime: format_business_date lo pasa
         # tal cual, sin conversion de zona.
         sale_dict["date_formatted"] = format_business_date(sale.date)
-        
+
         # Format sale items with product details
         items = []
         for item in sale.items:
-            items.append({
-                "id": str(item.id),
-                "product_id": str(item.product_id),
-                "product_name": item.product.name,
-                "product_sku": item.product.sku,
-                "quantity": item.quantity,
-                "unit_price": item.unit_price,
-                "subtotal": item.subtotal,
-            })
+            items.append(
+                {
+                    "id": str(item.id),
+                    "product_id": str(item.product_id),
+                    "product_name": item.product.name,
+                    "product_sku": item.product.sku,
+                    "quantity": item.quantity,
+                    "unit_price": item.unit_price,
+                    "subtotal": item.subtotal,
+                }
+            )
         sale_dict["items"] = items
-        
+
         return sale_dict
 
     def get_last_purchases(self, customer_id: uuid.UUID, limit: int = 5):
@@ -118,23 +132,27 @@ class CustomerService:
             .order_by(CustomerProductCycle.estimated_next_purchase.asc())
         )
         cycles = self.db.execute(stmt).scalars().all()
-        
+
         if not cycles:
             return None
-        
+
         # Format the next purchases with product info
         next_purchases = []
         for cycle in cycles:
-            next_purchases.append({
-                "product_id": str(cycle.product_id),
-                "product_name": cycle.product.name,
-                "product_sku": cycle.product.sku,
-                "estimated_date": cycle.estimated_next_purchase.strftime("%d/%m/%Y"),
-                "avg_interval_days": cycle.avg_interval_days,
-                "last_purchase_date": cycle.last_purchase_date.strftime("%d/%m/%Y"),
-                "last_quantity": cycle.last_quantity,
-            })
-        
+            next_purchases.append(
+                {
+                    "product_id": str(cycle.product_id),
+                    "product_name": cycle.product.name,
+                    "product_sku": cycle.product.sku,
+                    "estimated_date": cycle.estimated_next_purchase.strftime(
+                        "%d/%m/%Y"
+                    ),
+                    "avg_interval_days": cycle.avg_interval_days,
+                    "last_purchase_date": cycle.last_purchase_date.strftime("%d/%m/%Y"),
+                    "last_quantity": cycle.last_quantity,
+                }
+            )
+
         return next_purchases
 
     def get_customer_details(self, customer_id: uuid.UUID, limit: int = 5):
@@ -147,7 +165,9 @@ class CustomerService:
                 logger.warning(f"No sales found for customer {customer_id}")
 
             if not next_purchases:
-                logger.warning(f"No next purchase prediction for customer {customer_id}")
+                logger.warning(
+                    f"No next purchase prediction for customer {customer_id}"
+                )
 
             customer_data = self.format_customer_dates(customer)
             customer_data["last_purchases"] = last_purchases
