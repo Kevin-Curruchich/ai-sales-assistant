@@ -1,10 +1,15 @@
-from typing import Generator
+from typing import Annotated, Generator
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.core.security import verify_firebase_token
 from app.models.user import User
+from app.services.cash_service import CashService
+from app.services.customer_service import CustomerService
+from app.services.product_service import ProductService
+from app.services.purchase_service import PurchaseService
+from app.services.sales import SaleService
 from app.services.user_service import UserService
 
 # HTTP Bearer scheme for extracting the token from the Authorization header
@@ -58,3 +63,46 @@ def require_role(*allowed_roles: str):
             )
         return current_user
     return role_checker
+
+
+# Alias para la firma del endpoint (`current_user: CurrentUser`), en las rutas
+# que necesitan saber QUIEN hace la request. La autenticacion en si va en el
+# router (`dependencies=[Depends(get_current_user)]`); FastAPI cachea la
+# dependencia, asi que pedirla en los dos lados la resuelve una sola vez.
+CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+# Services por request, todos sobre la misma sesion de `get_db`: dos services
+# en un endpoint comparten transaccion. Alias para la firma del endpoint:
+# `service: CustomerServiceDep`.
+
+def get_customer_service(db: Session = Depends(get_db)) -> CustomerService:
+    """Dependency that builds a CustomerService on the request's session."""
+    return CustomerService(db)
+
+
+def get_sale_service(db: Session = Depends(get_db)) -> SaleService:
+    """Dependency that builds a SaleService on the request's session."""
+    return SaleService(db)
+
+
+def get_product_service(db: Session = Depends(get_db)) -> ProductService:
+    """Dependency that builds a ProductService on the request's session."""
+    return ProductService(db)
+
+
+def get_purchase_service(db: Session = Depends(get_db)) -> PurchaseService:
+    """Dependency that builds a PurchaseService on the request's session."""
+    return PurchaseService(db)
+
+
+def get_cash_service(db: Session = Depends(get_db)) -> CashService:
+    """Dependency that builds a CashService on the request's session."""
+    return CashService(db)
+
+
+CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
+SaleServiceDep = Annotated[SaleService, Depends(get_sale_service)]
+ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
+PurchaseServiceDep = Annotated[PurchaseService, Depends(get_purchase_service)]
+CashServiceDep = Annotated[CashService, Depends(get_cash_service)]

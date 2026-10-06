@@ -1,22 +1,22 @@
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
-from app.api.dependencies import get_db, get_current_user
+from app.api.dependencies import SaleServiceDep, get_current_user
 from app.schemas.sale import CalendarResponse
-from app.services.sales import SaleService
 
-router = APIRouter(prefix="/calendar", tags=["Calendar"])
+router = APIRouter(
+    prefix="/calendar",
+    tags=["Calendar"],
+    dependencies=[Depends(get_current_user)],
+)
 
 
 @router.get("/events", response_model=CalendarResponse)
 def get_calendar_events(
     start_date: date,
     end_date: date,
-    db: Session = Depends(get_db),
-    _current_user: dict = Depends(get_current_user),
+    service: SaleServiceDep,
 ):
     try:
-        service = SaleService(db)
         return service.get_calendar_events(start_date=start_date, end_date=end_date)
     except Exception as e:
         raise HTTPException(
