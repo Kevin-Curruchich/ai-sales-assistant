@@ -2,9 +2,8 @@ import re
 import time
 
 import pytest
-from sqlalchemy import text
-
 from alembic import command
+from sqlalchemy import text
 
 # Debe coincidir con MIGRATION_LOCK_KEY en alembic/env.py. No se importa ese
 # modulo directamente porque, al ser un script de Alembic, ejecuta

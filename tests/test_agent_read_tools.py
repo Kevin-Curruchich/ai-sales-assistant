@@ -1,6 +1,6 @@
 """Las herramientas de consulta no pueden escribir y no eligen por el usuario."""
 
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest

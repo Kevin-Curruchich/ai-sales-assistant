@@ -45,7 +45,6 @@ que `native_enum=False` no tomo efecto.
 from typing import Sequence, Union
 
 import sqlalchemy as sa
-
 from alembic import op
 
 # revision identifiers, used by Alembic.

@@ -14,6 +14,11 @@ extend-exclude = ["*.md"]
 # Defaults de Ruff (E4, E7, E9, F) + I: orden de imports, como isort.
 select = ["E4", "E7", "E9", "F", "I"]
 
+[tool.ruff.lint.isort]
+# La carpeta alembic/ del repo (migraciones) hace que Ruff tome el paquete
+# `alembic` como propio y lo ordene junto a `app`. Es la libreria externa.
+known-third-party = ["alembic"]
+
 [tool.ruff.lint.per-file-ignores]
 # Las relaciones de SQLAlchemy nombran el otro modelo como texto
 # (`Mapped[list["Sale"]]`) y SQLAlchemy lo resuelve en su registro: importarlo

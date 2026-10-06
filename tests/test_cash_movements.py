@@ -4,7 +4,7 @@ from sqlalchemy.exc import IntegrityError
 
 import app.models  # noqa: F401
 from app.core.database import Base
-from app.models import CashMovement, CashMovementType
+from app.models import CashMovementType
 
 
 def test_cash_movement_type_values():

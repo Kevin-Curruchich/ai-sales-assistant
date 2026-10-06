@@ -3,7 +3,7 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 from app.models import Customer, CustomerProductCycle, Product, Sale, SaleItem, User

@@ -141,7 +141,7 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
                                 "estado": "llamando",
                             },
                         }
-    except Exception as exc:
+    except Exception:
         # `Exception`, nunca `BaseException`. `asyncio.CancelledError` hereda
         # de `BaseException`, no de `Exception` (verificado en este venv:
         # `asyncio.CancelledError.__mro__` es

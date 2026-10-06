@@ -16,7 +16,7 @@ revision de la Task 8 (ronda 1) pidio explicitamente.
 """
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest

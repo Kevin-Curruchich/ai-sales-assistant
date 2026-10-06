@@ -140,7 +140,7 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import sessionmaker
 
-    from app.models import Customer, CustomerProductCycle, Product, User
+    from app.models import Customer, CustomerProductCycle, Product
     from app.services.sales import SaleService
     from tests.conftest import TEST_DATABASE_URL
 

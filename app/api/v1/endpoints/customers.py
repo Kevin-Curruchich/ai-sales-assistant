@@ -2,10 +2,9 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 
 from app.api.dependencies import CustomerServiceDep, get_current_user
-from app.models.sale import Sale
 from app.schemas.customer import CustomerCreate, CustomerResponse, CustomerUpdate
 
 logger = logging.getLogger("customers")

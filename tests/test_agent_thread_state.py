@@ -20,8 +20,6 @@ viviera en un plugin compartido parchearia el grafo de todos los tests, incluido
 `test_startup.py`.
 """
 
-import pytest
-
 import app.main as main
 from app.agent.tools.write import registrar_venta
 from app.models.sale import Sale

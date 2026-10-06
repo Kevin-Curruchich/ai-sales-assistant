@@ -20,7 +20,7 @@ def test_consumes_the_oldest_lot_first():
         FakeLot(Decimal("6"), Decimal("35.00")),
     ]
     allocations, cost_basis = allocate_fifo(lots, Decimal("4"))
-    assert [(id(l), q) for l, q in allocations] == [(id(lots[0]), Decimal("4"))]
+    assert [(id(lot), q) for lot, q in allocations] == [(id(lots[0]), Decimal("4"))]
     assert cost_basis == Decimal("33.50")
 
 

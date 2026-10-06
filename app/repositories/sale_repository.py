@@ -1,4 +1,3 @@
-import logging
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -8,7 +7,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.datetime_utils import business_today
-from app.models.customer import Customer
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
 

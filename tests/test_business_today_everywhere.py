@@ -18,7 +18,6 @@ from types import SimpleNamespace
 import app.repositories.sale_repository as sale_repository_module
 import app.services.product_service as product_service_module
 import app.services.sales.orchestrator as orchestrator_module
-from app.models.product import Product
 from app.models.sale import Sale
 from app.repositories.sale_repository import SaleRepository
 from app.services.product_service import ProductService

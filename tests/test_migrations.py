@@ -1,11 +1,11 @@
 from pathlib import Path
 
+from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
 from sqlalchemy import text
 
 import app.models  # noqa: F401
-from alembic import command
 from app.core.database import Base
 
 EXPECTED_TABLES = {

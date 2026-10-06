@@ -1,6 +1,5 @@
 import logging
 import uuid
-from datetime import datetime
 from typing import Optional
 
 from dateutil.parser import parse

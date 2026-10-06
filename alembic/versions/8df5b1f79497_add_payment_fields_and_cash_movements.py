@@ -48,7 +48,6 @@ aparezca ese parametro; por eso esta nota lo describe en prosa.
 from typing import Sequence, Union
 
 import sqlalchemy as sa
-
 from alembic import op
 
 # revision identifiers, used by Alembic.
