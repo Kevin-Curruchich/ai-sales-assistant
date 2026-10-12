@@ -45,6 +45,16 @@ class FollowUpService:
         if next_due is not None:
             self._open(customer_id, product_id, next_due)
 
+    def open_if_missing(
+        self, customer_id: uuid.UUID, product_id: uuid.UUID, due_date: date
+    ) -> None:
+        """Abre un seguimiento solo si el par no tiene uno abierto.
+
+        No hace commit: corre dentro de la transaccion de la venta.
+        """
+        if self.repo.get_open(customer_id, product_id) is None:
+            self._open(customer_id, product_id, due_date)
+
     def postpone(
         self, follow_up_id: uuid.UUID, new_date: date, user_id: uuid.UUID
     ) -> FollowUp:

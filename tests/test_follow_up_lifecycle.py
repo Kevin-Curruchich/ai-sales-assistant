@@ -261,3 +261,50 @@ def test_dismiss_opens_nothing_until_the_next_sale(
     )
 
     assert len(_open(db_session, seeded_customer, seeded_product_with_lot)) == 1
+
+
+def test_a_backdated_sale_that_creates_the_first_projection_opens_one(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, sync_requests
+):
+    service = SaleService(db_session)
+    _sell(
+        service,
+        seeded_customer,
+        seeded_product_with_lot,
+        seeded_user,
+        date(2026, 9, 17),
+    )
+    assert _follow_ups(db_session, seeded_customer, seeded_product_with_lot) == []
+
+    # Venta olvidada, registrada despues: el par pasa a tener proyeccion.
+    _sell(
+        service,
+        seeded_customer,
+        seeded_product_with_lot,
+        seeded_user,
+        date(2026, 9, 10),
+    )
+
+    cycle = service.cycle_repo.get_by_customer_and_product(
+        seeded_customer.id, seeded_product_with_lot.id
+    )
+    assert cycle.estimated_next_purchase is not None
+    [opened] = _open(db_session, seeded_customer, seeded_product_with_lot)
+    assert opened.due_date == cycle.estimated_next_purchase
+
+
+def test_a_backdated_sale_after_a_dismiss_opens_nothing(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user, two_sales
+):
+    [current] = _open(db_session, seeded_customer, seeded_product_with_lot)
+    FollowUpService(db_session).dismiss(current.id, seeded_user.id)
+
+    _sell(
+        two_sales,
+        seeded_customer,
+        seeded_product_with_lot,
+        seeded_user,
+        date(2026, 9, 5),
+    )
+
+    assert _open(db_session, seeded_customer, seeded_product_with_lot) == []

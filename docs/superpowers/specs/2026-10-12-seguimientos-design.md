@@ -93,7 +93,10 @@ la venta (mismo patrón que el movimiento de caja, `commit=False`):
      `sale_id`, `closed_at = now`.
    - Tras `_update_cycle`, si el ciclo tiene `estimated_next_purchase`, abrir
      uno nuevo con esa fecha.
-3. Si `sale.date <= last_purchase_date` **no se toca ningún seguimiento.**
+3. Si `sale.date <= last_purchase_date` **no se toca ningún seguimiento**,
+   con una excepción: si el par no tenía proyección antes de la venta
+   (`estimated_next_purchase` nulo o sin ciclo), la tiene ahora y no hay
+   seguimiento abierto, se abre uno en esa proyección.
 
 Por qué la desigualdad estricta, con el caso que lo motivó:
 
@@ -103,6 +106,12 @@ Por qué la desigualdad estricta, con el caso que lo motivó:
 > cuando toca llamarla y contaría una conversión falsa. Moverle la fecha
 > pisaría un posponer manual. La regla: no tocarlo. La proyección del ciclo sí
 > se recalcula.
+>
+> Excepción: ventas el 8 de oct y una olvidada con fecha 1 de oct registrada
+> después. La del 8 no dejó proyección (era la primera compra); la atrasada
+> sí la crea. Sin seguimiento el cliente no aparecería en ninguna lista, así
+> que se abre uno en la proyección nueva. Esto no puede deshacer un descartar:
+> descartar exige una proyección previa, y entonces la excepción no aplica.
 >
 > Una segunda venta el mismo 8 de oct tampoco toca nada: el seguimiento ya lo
 > resolvió la primera de ese día.

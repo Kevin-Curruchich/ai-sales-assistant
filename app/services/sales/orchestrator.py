@@ -705,6 +705,9 @@ class SaleService:
             )
             # Copiar el valor ANTES de `_update_cycle`, que muta este mismo objeto.
             previous_last = previous.last_purchase_date if previous else None
+            had_projection = (
+                previous is not None and previous.estimated_next_purchase is not None
+            )
             self._update_cycle(
                 data.customerId, item_data.productId, data.date, item_data.quantity
             )
@@ -721,6 +724,20 @@ class SaleService:
                     sale.id,
                     cycle.estimated_next_purchase,
                 )
+            elif not had_projection:
+                # Venta atrasada que crea la PRIMERA proyeccion del par: sin
+                # esto el cliente queda sin seguimiento ni forma de aparecer
+                # en las listas. Nunca deshace un descartar: descartar exige
+                # una proyeccion previa.
+                cycle = self.cycle_repo.get_by_customer_and_product(
+                    data.customerId, item_data.productId
+                )
+                if cycle.estimated_next_purchase is not None:
+                    self.follow_up_service.open_if_missing(
+                        data.customerId,
+                        item_data.productId,
+                        cycle.estimated_next_purchase,
+                    )
 
         self.db.commit()
         self.db.refresh(sale)
