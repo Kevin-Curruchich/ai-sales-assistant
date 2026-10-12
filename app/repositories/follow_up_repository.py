@@ -14,6 +14,10 @@ class FollowUpRepository:
     def get_by_id(self, follow_up_id: uuid.UUID) -> Optional[FollowUp]:
         return self.db.get(FollowUp, follow_up_id)
 
+    def get_by_id_for_update(self, follow_up_id: uuid.UUID) -> Optional[FollowUp]:
+        stmt = select(FollowUp).where(FollowUp.id == follow_up_id).with_for_update()
+        return self.db.execute(stmt).scalar_one_or_none()
+
     def get_open(
         self, customer_id: uuid.UUID, product_id: uuid.UUID
     ) -> Optional[FollowUp]:

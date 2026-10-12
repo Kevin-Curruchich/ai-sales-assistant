@@ -78,7 +78,9 @@ class FollowUpService:
         calendar_sync.request_calendar_sync()
 
     def _get_open_or_raise(self, follow_up_id: uuid.UUID) -> FollowUp:
-        follow_up = self.repo.get_by_id(follow_up_id)
+        # FOR UPDATE: un doble envio espera aqui y ve el seguimiento ya cerrado
+        # (409) en vez de chocar con el indice unico (500).
+        follow_up = self.repo.get_by_id_for_update(follow_up_id)
         if follow_up is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
