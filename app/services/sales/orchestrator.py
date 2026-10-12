@@ -889,8 +889,13 @@ class SaleService:
         if cycle:
             cycle.avg_interval_days = interval
             cycle.estimated_next_purchase = next_date
-            cycle.last_purchase_date = sale_date
-            cycle.last_quantity = quantity
+            # Una venta atrasada recalcula la proyeccion (cambia el historial)
+            # pero no es la compra mas reciente: no debe mover
+            # `last_purchase_date` hacia atras. Los seguimientos deciden con
+            # este campo si una venta es informacion nueva.
+            if sale_date >= cycle.last_purchase_date:
+                cycle.last_purchase_date = sale_date
+                cycle.last_quantity = quantity
             cycle.total_purchases = total_purchases
             cycle.projection_method = method
             cycle.projection_confidence = confidence
