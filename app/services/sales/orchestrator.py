@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.datetime_utils import (
-    business_midnight,
+    business_instant,
     business_today,
     format_business_date,
     format_business_datetime,
@@ -808,7 +808,7 @@ class SaleService:
         if sale.total <= 0:
             return
         self.cash_service.record(
-            occurred_at=business_midnight(sale.payment_date),
+            occurred_at=business_instant(sale.payment_date),
             type=CashMovementType.ENTRADA,
             amount=sale.total,
             payment_method=sale.payment_method,
