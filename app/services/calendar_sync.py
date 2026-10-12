@@ -1,13 +1,13 @@
 """Espejo de los seguimientos en Google Calendar.
 
 Quien escribe seguimientos llama a `request_calendar_sync()` despues de su
-commit; eso solo enciende una senal. El hilo que la atiende (mas abajo, Task 7)
-duerme sin temporizador mientras no haya trabajo.
+commit; eso solo enciende una senal. El hilo que la atiende duerme sin temporizador mientras no haya trabajo.
 """
 
 import logging
 import threading
 from datetime import timedelta
+from typing import Optional
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -93,3 +93,42 @@ def sync_pending_follow_ups(db: Session, client) -> int:
         )
         db.commit()
     return failed
+
+
+RETRY_SECONDS = 900
+
+
+def next_wait_timeout(failed: int) -> Optional[float]:
+    """Sin fallas, dormir hasta que alguien pida una pasada; con fallas,
+    reintentar cada 15 minutos."""
+    return RETRY_SECONDS if failed else None
+
+
+def sync_pass(session_factory, client) -> int:
+    """Una pasada completa. Un error inesperado (p. ej. la base caida) cuenta
+    como falla, para que se reintente en vez de dormir para siempre."""
+    try:
+        with session_factory() as db:
+            return sync_pending_follow_ups(db, client)
+    except Exception:
+        logger.exception("Fallo la pasada de sincronizacion con Google Calendar")
+        return 1
+
+
+def _run(session_factory, client) -> None:
+    while True:
+        # Limpiar ANTES de la pasada: un pedido que llega durante ella deja la
+        # senal encendida y el `wait` de abajo vuelve enseguida.
+        _wake.clear()
+        failed = sync_pass(session_factory, client)
+        _wake.wait(timeout=next_wait_timeout(failed))
+
+
+def start_calendar_sync(session_factory, client) -> threading.Thread:
+    """Arranca el hilo. Su primera pasada cubre la carga inicial y lo que
+    haya quedado pendiente de un reinicio."""
+    thread = threading.Thread(
+        target=_run, args=(session_factory, client), name="calendar-sync", daemon=True
+    )
+    thread.start()
+    return thread

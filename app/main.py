@@ -13,7 +13,7 @@ from app.agent.graph import (
 )
 from app.api.v1.router import api_router
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import SessionLocal, engine
 from app.core.security import initialize_firebase
 
 # This import is redundant but harmless: app.api.v1.router (above) transitively
@@ -30,6 +30,8 @@ from app.models import (  # noqa: F401
     SaleItemLotAllocation,
     User,
 )
+from app.services.calendar_sync import start_calendar_sync
+from app.services.google_calendar import GoogleCalendarClient
 
 logger = logging.getLogger("app.startup")
 startup_issues: list[str] = []
@@ -77,6 +79,20 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Firebase initialization failed during startup")
         startup_issues.append("firebase_init_failed")
+
+    # Mismo patron que Firebase: que el espejo de Google no arranque no debe
+    # tumbar las ventas; los seguimientos se quedan `pending` hasta el proximo
+    # arranque que si pueda.
+    if settings.GOOGLE_CALENDAR_ID:
+        try:
+            start_calendar_sync(SessionLocal, GoogleCalendarClient.from_settings())
+        except Exception:
+            logger.exception("Google Calendar sync failed to start")
+            startup_issues.append("calendar_sync_init_failed")
+    else:
+        logger.info(
+            "GOOGLE_CALENDAR_ID no definido: los seguimientos no se reflejan en Google Calendar"
+        )
 
     # Mismo patron que Firebase arriba: que el agente no arranque no debe
     # tumbar las ventas. Un Postgres caido en el momento del arranque degrada
