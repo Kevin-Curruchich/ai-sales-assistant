@@ -12,6 +12,7 @@ from typing import Optional
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
+from app.models.customer_product_cycle import CustomerProductCycle
 from app.models.follow_up import OPEN, SYNC_FAILED, SYNC_SYNCED, FollowUp
 from app.repositories.customer_product_cycle_repository import (
     CustomerProductCycleRepository,
@@ -31,7 +32,7 @@ def request_calendar_sync() -> None:
 EVENT_FIELDS = ("summary", "description", "start", "end", "status")
 
 
-def build_event(follow_up: FollowUp, cycle) -> dict:
+def build_event(follow_up: FollowUp, cycle: Optional[CustomerProductCycle]) -> dict:
     lines = []
     if cycle is not None:
         lines.append(
