@@ -164,9 +164,11 @@ export interface SalePaymentStatusUpdateRequest {
 // Follow-ups
 // -------------------------------------------------------
 
-export type FollowUpStatus = "overdue" | "urgent" | "upcoming" | "normal";
+export type FollowUpStatus = "overdue" | "urgent" | "upcoming" | "normal" | "needs_estimate";
 
 export interface FollowUpItem {
+  follow_up_id: string | null; // UUID; null only for needs_estimate
+  due_date: string | null; // YYYY-MM-DD — show this as "Próxima compra"
   product_id: string; // UUID
   product_name: string;
   avg_interval_days: number | null;
@@ -196,6 +198,18 @@ export interface FollowUpMetrics {
 
 export type FollowUpFilter = "all" | "overdue" | "7_days" | "14_days" | "30_days";
 
+export interface FollowUpPostponeRequest {
+  date: string; // YYYY-MM-DD, after today
+}
+
+export interface FollowUpRecord {
+  id: string; // UUID
+  customer_id: string; // UUID
+  product_id: string; // UUID
+  due_date: string; // YYYY-MM-DD
+  status: "open" | "closed";
+}
+
 // -------------------------------------------------------
 // Calendar
 // -------------------------------------------------------
@@ -208,6 +222,7 @@ export interface CalendarEvent {
   customer: string;
   productId: string; // UUID
   productName: string;
+  followUpId: string; // UUID
   type: CalendarEventType;
 }
 
