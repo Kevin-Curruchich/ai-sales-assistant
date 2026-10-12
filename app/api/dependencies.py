@@ -9,6 +9,7 @@ from app.core.security import verify_firebase_token
 from app.models.user import User
 from app.services.cash_service import CashService
 from app.services.customer_service import CustomerService
+from app.services.follow_up_service import FollowUpService
 from app.services.product_service import ProductService
 from app.services.purchase_service import PurchaseService
 from app.services.sales import SaleService
@@ -106,8 +107,14 @@ def get_cash_service(db: Session = Depends(get_db)) -> CashService:
     return CashService(db)
 
 
+def get_follow_up_service(db: Session = Depends(get_db)) -> FollowUpService:
+    """Dependency that builds a FollowUpService on the request's session."""
+    return FollowUpService(db)
+
+
 CustomerServiceDep = Annotated[CustomerService, Depends(get_customer_service)]
 SaleServiceDep = Annotated[SaleService, Depends(get_sale_service)]
+FollowUpServiceDep = Annotated[FollowUpService, Depends(get_follow_up_service)]
 ProductServiceDep = Annotated[ProductService, Depends(get_product_service)]
 PurchaseServiceDep = Annotated[PurchaseService, Depends(get_purchase_service)]
 CashServiceDep = Annotated[CashService, Depends(get_cash_service)]
