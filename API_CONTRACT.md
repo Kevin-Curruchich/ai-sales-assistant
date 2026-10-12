@@ -230,8 +230,8 @@ Follow-ups are stored rows (`follow_ups`), one per customer + product, opened fr
 
 ### `GET /follow-ups`
 
-- **Query Params:** `filter` (enum: `all` | `overdue` | `7_days` | `14_days` | `30_days`, default: `all`)
-- **Response:** `FollowUp[]`
+- **Query Params:** `filter` (enum: `all` | `overdue` | `7_days` | `14_days` | `30_days`, default: `all`), `limit` (default: `10`), `offset` (default: `0`)
+- **Response:** `{ "data": FollowUp[], "meta": { "total": number } }` — `total` counts every match of the filter, not just this page.
 
 ### `GET /follow-ups/metrics`
 
