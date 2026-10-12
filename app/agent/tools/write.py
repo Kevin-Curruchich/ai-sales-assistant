@@ -131,7 +131,7 @@ from langgraph.types import interrupt
 from app.agent import idempotency
 from app.agent.session import agent_session, user_id_from_config
 from app.agent.signing import firmar, verificar
-from app.core.datetime_utils import business_midnight, business_tz
+from app.core.datetime_utils import business_instant, business_tz
 from app.models.cash_movement import CashMovementType
 from app.models.payment_method import PaymentMethod
 from app.repositories.product_repository import ProductRepository
@@ -796,12 +796,13 @@ def registrar_compra(
 
 
 def _occurred_at(value: str) -> datetime:
-    """Mismo criterio que `_parse_boundary` (read.py): una fecha sin hora se
-    ancla a la medianoche de la zona del negocio, no a UTC ni a un reloj sin
-    huso; una hora sin zona se asume tambien en la zona del negocio."""
+    """Una fecha sin hora se resuelve con `business_instant`: la hora actual
+    si es hoy, la medianoche de la zona del negocio si es un dia pasado --
+    nunca UTC ni un reloj sin huso; una hora sin zona se asume tambien en la
+    zona del negocio."""
     is_bare_date = "T" not in value and " " not in value
     if is_bare_date:
-        return business_midnight(date_type.fromisoformat(value))
+        return business_instant(date_type.fromisoformat(value))
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is not None:
         return parsed

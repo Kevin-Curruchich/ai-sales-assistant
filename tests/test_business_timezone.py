@@ -3,6 +3,8 @@ from datetime import date, datetime, timezone
 import app.core.datetime_utils as datetime_utils_module
 from app.core.config import settings
 from app.core.datetime_utils import (
+    business_instant,
+    business_midnight,
     business_today,
     format_business_date,
     format_business_datetime,
@@ -36,6 +38,32 @@ def test_business_today_is_the_day_in_guatemala_not_on_the_server(monkeypatch):
     monkeypatch.setattr(datetime_utils_module, "datetime", FrozenDatetime)
 
     assert business_today() == date(2026, 10, 1)
+
+
+class _FrozenAtNineFortyGuatemala(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        # 2026-10-12 15:40 UTC son las 09:40 del 12 en Guatemala.
+        return datetime(2026, 10, 12, 15, 40, tzinfo=timezone.utc).astimezone(tz)
+
+
+def test_a_movement_dated_today_keeps_the_real_hour(monkeypatch):
+    """Caso real: todos los movimientos de caja salian a las 12:00 a. m. y
+    no se podia saber a que hora se hizo cada venta o compra del dia."""
+    monkeypatch.setattr(datetime_utils_module, "datetime", _FrozenAtNineFortyGuatemala)
+
+    instant = business_instant(date(2026, 10, 12))
+
+    assert format_business_datetime(instant) == "12/10/2026 09:40"
+
+
+def test_a_movement_dated_in_the_past_stays_at_midnight(monkeypatch):
+    """Un dia pasado no tiene hora conocida: no se inventa una."""
+    monkeypatch.setattr(datetime_utils_module, "datetime", _FrozenAtNineFortyGuatemala)
+
+    day = date(2026, 10, 9)
+
+    assert business_instant(day) == business_midnight(day)
 
 
 def test_a_midday_timestamp_is_unaffected():

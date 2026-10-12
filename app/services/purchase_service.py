@@ -6,7 +6,7 @@ from typing import Optional
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.datetime_utils import business_midnight, format_business_datetime
+from app.core.datetime_utils import business_instant, format_business_datetime
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.purchase import Purchase, PurchaseItem
 from app.repositories.product_repository import ProductRepository
@@ -316,7 +316,7 @@ class PurchaseService:
         # ocurrio, solo no costo nada.
         if purchase.total > 0:
             self.cash_service.record(
-                occurred_at=business_midnight(purchase.date),
+                occurred_at=purchase.occurred_at or business_instant(purchase.date),
                 type=CashMovementType.SALIDA,
                 amount=purchase.total,
                 payment_method=purchase.payment_method,

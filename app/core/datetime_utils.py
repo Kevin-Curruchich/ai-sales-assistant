@@ -26,6 +26,20 @@ def business_midnight(day: date) -> datetime:
     return datetime.combine(day, time.min, tzinfo=ZoneInfo(settings.BUSINESS_TIMEZONE))
 
 
+def business_instant(day: date) -> datetime:
+    """El instante de un hecho del que solo se conoce el dia.
+
+    Si `day` es hoy en la zona del negocio, el hecho esta ocurriendo ahora:
+    se guarda la hora real, que es la que permite ordenar y leer los
+    movimientos de un mismo dia.  Un dia pasado no tiene hora conocida e
+    inventarla seria peor: se ancla a `business_midnight()`.
+    """
+    now = datetime.now(business_tz())
+    if day == now.date():
+        return now
+    return business_midnight(day)
+
+
 def business_end_of_day(day: date) -> datetime:
     """El ultimo instante de `day` en la zona del negocio.
 
