@@ -23,6 +23,7 @@ from app.repositories.customer_product_cycle_repository import (
     CustomerProductCycleRepository,
 )
 from app.repositories.customer_repository import CustomerRepository
+from app.repositories.follow_up_repository import FollowUpRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.repositories.sale_repository import SaleRepository
@@ -48,7 +49,9 @@ from app.schemas.sale import (
     SaleResponse,
     SaleUpdate,
 )
+from app.services import calendar_sync
 from app.services.cash_service import CashService
+from app.services.follow_up_service import FollowUpService
 from app.services.sales.fifo import InsufficientLots, allocate_fifo
 from app.services.sales.pricing import (
     base_margin_for,
@@ -73,6 +76,8 @@ class SaleService:
         self.customer_repo = CustomerRepository(db)
         self.cycle_repo = CustomerProductCycleRepository(db)
         self.cash_service = CashService(db)
+        self.follow_up_repo = FollowUpRepository(db)
+        self.follow_up_service = FollowUpService(db)
 
     # ------------------------------------------------------------------
     # Money and pricing helpers
@@ -695,12 +700,31 @@ class SaleService:
             )
 
         for item_data in data.items:
+            previous = self.cycle_repo.get_by_customer_and_product(
+                data.customerId, item_data.productId
+            )
+            # Copiar el valor ANTES de `_update_cycle`, que muta este mismo objeto.
+            previous_last = previous.last_purchase_date if previous else None
             self._update_cycle(
                 data.customerId, item_data.productId, data.date, item_data.quantity
             )
+            # Solo una venta posterior a la ultima compra es informacion nueva.
+            # Una atrasada, o una segunda del mismo dia (o la misma linea dos
+            # veces en esta venta), no toca los seguimientos.
+            if previous_last is None or data.date > previous_last:
+                cycle = self.cycle_repo.get_by_customer_and_product(
+                    data.customerId, item_data.productId
+                )
+                self.follow_up_service.record_purchase(
+                    data.customerId,
+                    item_data.productId,
+                    sale.id,
+                    cycle.estimated_next_purchase,
+                )
 
         self.db.commit()
         self.db.refresh(sale)
+        calendar_sync.request_calendar_sync()
 
         return sale
 
