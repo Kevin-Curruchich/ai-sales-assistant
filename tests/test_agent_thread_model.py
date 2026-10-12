@@ -3,7 +3,6 @@ una sola identidad por conversacion, no dos que haya que mantener en sincronia."
 
 import uuid
 
-from app.models import AgentThread
 from app.repositories.agent_thread_repository import AgentThreadRepository
 
 

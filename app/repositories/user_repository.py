@@ -1,7 +1,9 @@
 import uuid
 from typing import Optional
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.models.user import User
 
 

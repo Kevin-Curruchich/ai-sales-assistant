@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -45,22 +44,50 @@ def cash_session(migrated_schema):
 
 
 def test_running_balance_adds_entries_and_subtracts_exits(cash):
-    cash.record(datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("115.00"))
-    cash.record(datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("37.00"))
-    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.SALIDA, Decimal("285.00"))
+    cash.record(
+        datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.ENTRADA,
+        Decimal("115.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 3, 10, 0, tzinfo=timezone.utc),
+        CashMovementType.ENTRADA,
+        Decimal("37.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.SALIDA,
+        Decimal("285.00"),
+    )
     assert cash.running_balance() == Decimal("-133.00")
 
 
 def test_owner_balance_is_contributions_minus_withdrawals(cash):
-    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
-    cash.record(datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("125.02"))
-    cash.record(datetime(2026, 9, 20, 9, 0, tzinfo=timezone.utc), CashMovementType.RETIRO_SOCIO, Decimal("100.00"))
+    cash.record(
+        datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.APORTE_SOCIO,
+        Decimal("95.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.APORTE_SOCIO,
+        Decimal("125.02"),
+    )
+    cash.record(
+        datetime(2026, 9, 20, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.RETIRO_SOCIO,
+        Decimal("100.00"),
+    )
     assert cash.owner_balance() == Decimal("120.02")
 
 
 def test_partner_contribution_raises_the_business_balance(cash):
     """aporte_socio es dinero que entra a la caja del negocio."""
-    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
+    cash.record(
+        datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.APORTE_SOCIO,
+        Decimal("95.00"),
+    )
     assert cash.running_balance() == Decimal("95.00")
 
 
@@ -73,7 +100,11 @@ def test_ledger_running_balance_is_stable_with_identical_instants(cash):
     asertar los intermedios: es lo unico que distingue lo correcto de lo roto.
     """
     for amount in ("10.00", "20.00", "30.00"):
-        cash.record(datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal(amount))
+        cash.record(
+            datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc),
+            CashMovementType.ENTRADA,
+            Decimal(amount),
+        )
 
     primera = [balance for _, balance in cash.ledger()]
     segunda = [balance for _, balance in cash.ledger()]
@@ -95,8 +126,16 @@ def test_partner_withdrawal_lowers_the_business_balance(cash):
     cuatro tipos, este es el unico que no tenia un test dedicado a su signo
     sobre el saldo del negocio.
     """
-    cash.record(datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("200.00"))
-    cash.record(datetime(2026, 9, 6, 9, 0, tzinfo=timezone.utc), CashMovementType.RETIRO_SOCIO, Decimal("60.00"))
+    cash.record(
+        datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.ENTRADA,
+        Decimal("200.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 6, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.RETIRO_SOCIO,
+        Decimal("60.00"),
+    )
     assert cash.running_balance() == Decimal("140.00")
 
 
@@ -105,10 +144,26 @@ def test_ledger_last_balance_matches_running_balance_across_all_types(cash):
     deben poder divergir: son la misma cantidad calculada por dos caminos
     distintos, y solo lo siguen siendo si ambos leen el mismo conjunto de
     tipos que restan (CASH_OUTFLOW_TYPES)."""
-    cash.record(datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc), CashMovementType.ENTRADA, Decimal("300.00"))
-    cash.record(datetime(2026, 9, 2, 9, 0, tzinfo=timezone.utc), CashMovementType.SALIDA, Decimal("50.00"))
-    cash.record(datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), CashMovementType.APORTE_SOCIO, Decimal("95.00"))
-    cash.record(datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc), CashMovementType.RETIRO_SOCIO, Decimal("40.00"))
+    cash.record(
+        datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.ENTRADA,
+        Decimal("300.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 2, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.SALIDA,
+        Decimal("50.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.APORTE_SOCIO,
+        Decimal("95.00"),
+    )
+    cash.record(
+        datetime(2026, 9, 4, 9, 0, tzinfo=timezone.utc),
+        CashMovementType.RETIRO_SOCIO,
+        Decimal("40.00"),
+    )
 
     ledger = cash.ledger()
     assert ledger[-1][1] == cash.running_balance()

@@ -86,7 +86,9 @@ def test_the_write_key_is_stable_across_a_real_resume_and_distinct_per_sibling()
     config = {"configurable": {"thread_id": "claves-1"}}
 
     paused = graph.invoke({"messages": [("user", "dale")]}, config)
-    graph.invoke(Command(resume={i.id: {"ok": True} for i in paused["__interrupt__"]}), config)
+    graph.invoke(
+        Command(resume={i.id: {"ok": True} for i in paused["__interrupt__"]}), config
+    )
 
     claves = dict(vistas)
     assert claves["antes-a"] is not None
@@ -107,8 +109,12 @@ def test_the_write_key_is_none_without_a_graph_behind_it():
 
 
 def test_the_write_key_is_scoped_to_the_thread():
-    a = idempotency.write_key({"configurable": {"thread_id": "t1", "checkpoint_ns": "tools:abc"}})
-    b = idempotency.write_key({"configurable": {"thread_id": "t2", "checkpoint_ns": "tools:abc"}})
+    a = idempotency.write_key(
+        {"configurable": {"thread_id": "t1", "checkpoint_ns": "tools:abc"}}
+    )
+    b = idempotency.write_key(
+        {"configurable": {"thread_id": "t2", "checkpoint_ns": "tools:abc"}}
+    )
 
     assert a != b
 
@@ -122,10 +128,14 @@ def _movimiento(monto="50.00"):
     return {"tipo": "aporte_socio", "monto": monto, "fecha": "2026-09-24"}
 
 
-def test_a_replayed_cash_movement_task_does_not_write_twice(db_session, seeded_user, monkeypatch):
+def test_a_replayed_cash_movement_task_does_not_write_twice(
+    db_session, seeded_user, monkeypatch
+):
     """`registrar_movimiento_caja` "duplica SIEMPRE" sin esta guardia: no
     tiene nada con que distinguir una repeticion de una solicitud nueva."""
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
     config = _config(seeded_user, uuid.uuid4())
 
     primero = registrar_movimiento_caja.invoke(_movimiento(), config=config)
@@ -137,12 +147,20 @@ def test_a_replayed_cash_movement_task_does_not_write_twice(db_session, seeded_u
     assert db_session.query(CashMovement).count() == 1
 
 
-def test_a_different_task_in_the_same_thread_still_writes(db_session, seeded_user, monkeypatch):
+def test_a_different_task_in_the_same_thread_still_writes(
+    db_session, seeded_user, monkeypatch
+):
     """La guardia no puede comerse una solicitud nueva y legitima."""
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
 
-    registrar_movimiento_caja.invoke(_movimiento(), config=_config(seeded_user, uuid.uuid4()))
-    registrar_movimiento_caja.invoke(_movimiento(), config=_config(seeded_user, uuid.uuid4()))
+    registrar_movimiento_caja.invoke(
+        _movimiento(), config=_config(seeded_user, uuid.uuid4())
+    )
+    registrar_movimiento_caja.invoke(
+        _movimiento(), config=_config(seeded_user, uuid.uuid4())
+    )
 
     assert db_session.query(CashMovement).count() == 2
 
@@ -243,7 +261,9 @@ def test_direct_invocations_without_a_task_id_are_never_deduplicated(
 ):
     """Sin grafo detras no hay reanudacion, y dos llamadas son dos hechos
     distintos -- la guardia no puede inventarse una equivalencia."""
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
     config = {"configurable": {"user_id": str(seeded_user.id)}}
 
     registrar_movimiento_caja.invoke(_movimiento(), config=config)
@@ -252,12 +272,16 @@ def test_direct_invocations_without_a_task_id_are_never_deduplicated(
     assert db_session.query(CashMovement).count() == 2
 
 
-def test_the_mark_lands_in_the_agent_schema_not_the_business_one(db_session, seeded_user, monkeypatch):
+def test_the_mark_lands_in_the_agent_schema_not_the_business_one(
+    db_session, seeded_user, monkeypatch
+):
     """Una tabla sin modelo en `app/models` dentro del schema del negocio la
     leeria el autogenerate de Alembic como deriva y emitiria un `drop_table`
     en cada migracion. Por eso vive donde ya viven las tablas del
     checkpointer."""
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
     config = _config(seeded_user, uuid.uuid4())
     registrar_movimiento_caja.invoke(_movimiento(), config=config)
 
@@ -281,7 +305,9 @@ def test_the_mark_lands_in_the_agent_schema_not_the_business_one(db_session, see
 
 def _purchase_payload(product):
     return {
-        "items": [{"producto_id": str(product.id), "cantidad": "5", "costo_unitario": "12.50"}],
+        "items": [
+            {"producto_id": str(product.id), "cantidad": "5", "costo_unitario": "12.50"}
+        ],
         "fecha": "2026-09-24",
     }
 
@@ -290,7 +316,11 @@ def _purchase_payload(product):
 def producto_sin_stock(db_session):
     from app.models.product import Product
 
-    product = Product(sku=f"SKU-{uuid.uuid4().hex[:10]}", name="Producto para compra", stock=Decimal("0"))
+    product = Product(
+        sku=f"SKU-{uuid.uuid4().hex[:10]}",
+        name="Producto para compra",
+        stock=Decimal("0"),
+    )
     db_session.add(product)
     db_session.commit()
     db_session.refresh(product)
@@ -345,7 +375,9 @@ def test_a_purchase_whose_confirm_fails_leaves_no_mark_and_can_be_retried(
 
     # El reintento de la MISMA tarea tiene que escribir de verdad, no
     # contestar "ya_registrado" sobre una compra que no existe.
-    reintento = registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
+    reintento = registrar_compra.invoke(
+        _purchase_payload(producto_sin_stock), config=config
+    )
     assert reintento["estado"] == "registrado"
     assert reintento["compra_id"] is not None
     assert db_session.query(Purchase).count() == 1
@@ -360,8 +392,12 @@ def test_a_replayed_purchase_task_does_not_write_twice(
     monkeypatch.setattr("app.agent.tools.write.interrupt", _approve)
     config = _config(seeded_user, uuid.uuid4())
 
-    primero = registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
-    segundo = registrar_compra.invoke(_purchase_payload(producto_sin_stock), config=config)
+    primero = registrar_compra.invoke(
+        _purchase_payload(producto_sin_stock), config=config
+    )
+    segundo = registrar_compra.invoke(
+        _purchase_payload(producto_sin_stock), config=config
+    )
 
     assert primero["estado"] == "registrado"
     assert segundo["estado"] == "ya_registrado"

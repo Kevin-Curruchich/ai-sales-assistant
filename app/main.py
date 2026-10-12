@@ -1,20 +1,35 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
 import logging
 import os
-from app.core.config import settings
-from app.core.security import initialize_firebase
-from app.core.database import engine
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.agent.graph import (
+    build_async_checkpointer,
+    build_graph,
+    checkpointer_schema,
+    default_model,
+)
 from app.api.v1.router import api_router
-from app.agent.graph import build_async_checkpointer, build_graph, checkpointer_schema, default_model
+from app.core.config import settings
+from app.core.database import engine
+from app.core.security import initialize_firebase
 
 # This import is redundant but harmless: app.api.v1.router (above) transitively
 # imports every endpoint/service/repository, each of which imports these model
 # classes directly, so all mapped classes are already registered by that line.
 # Alembic doesn't depend on this import either -- alembic/env.py does its own
 # `import app.models`.
-from app.models import User, Customer, Product, Sale, SaleItem, SaleItemLotAllocation, CustomerProductCycle  # noqa: F401
+from app.models import (  # noqa: F401
+    Customer,
+    CustomerProductCycle,
+    Product,
+    Sale,
+    SaleItem,
+    SaleItemLotAllocation,
+    User,
+)
 
 logger = logging.getLogger("app.startup")
 startup_issues: list[str] = []
@@ -44,7 +59,11 @@ def missing_agent_env() -> list[str]:
     es un error de dedo mas probable que la variable sin definir, y las dos
     fallan igual.
     """
-    return [nombre for nombre in AGENT_REQUIRED_ENV if not os.environ.get(nombre, "").strip()]
+    return [
+        nombre
+        for nombre in AGENT_REQUIRED_ENV
+        if not os.environ.get(nombre, "").strip()
+    ]
 
 
 @asynccontextmanager
@@ -81,7 +100,9 @@ async def lifespan(app: FastAPI):
         startup_issues.extend(AGENT_REQUIRED_ENV[nombre] for nombre in faltantes)
     else:
         try:
-            checkpointer = await build_async_checkpointer(settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema())
+            checkpointer = await build_async_checkpointer(
+                settings.SQLALCHEMY_DATABASE_URI, checkpointer_schema()
+            )
             app.state.agent_graph = build_graph(default_model(), checkpointer)
         except Exception:
             logger.exception("Agent graph initialization failed during startup")

@@ -9,8 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from app.models import Customer, Product, Sale, SaleItem, User
 from scripts.copy_schema_data import (
     BORN_EMPTY_TABLES,
-    SchemaMismatch,
     TABLE_ORDER,
+    SchemaMismatch,
     copy_schema_data,
 )
 from tests.conftest import TEST_DATABASE_URL
@@ -192,7 +192,11 @@ def test_cash_movements_is_exempt_only_while_it_is_empty(
                 "INSERT INTO cash_movements (occurred_at, type, amount) "
                 "VALUES (:d, :t, :a)"
             ),
-            {"d": datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc), "t": "entrada", "a": Decimal("115.00")},
+            {
+                "d": datetime(2026, 9, 3, 9, 0, tzinfo=timezone.utc),
+                "t": "entrada",
+                "a": Decimal("115.00"),
+            },
         )
 
     with pytest.raises(SchemaMismatch, match="cash_movements"):
@@ -238,7 +242,9 @@ def test_copy_rolls_back_completely_when_a_late_table_mismatches(
     _seed(source)
 
     with test_engine.begin() as conn:
-        conn.execute(text(f'ALTER TABLE "{source}".sale_items ADD COLUMN extra_col TEXT'))
+        conn.execute(
+            text(f'ALTER TABLE "{source}".sale_items ADD COLUMN extra_col TEXT')
+        )
 
     with pytest.raises(SchemaMismatch):
         copy_schema_data(test_engine, source, target)
@@ -247,7 +253,9 @@ def test_copy_rolls_back_completely_when_a_late_table_mismatches(
         conn.execute(text(f'SET search_path TO "{target}"'))
         for table in ("users", "customers", "products", "sales"):
             count = conn.execute(text(f'SELECT count(*) FROM "{table}"')).scalar()
-            assert count == 0, f"{table} deberia seguir vacia tras el rollback, tiene {count}"
+            assert count == 0, (
+                f"{table} deberia seguir vacia tras el rollback, tiene {count}"
+            )
 
 
 def test_copy_refuses_db_dev_as_target_without_explicit_opt_in(

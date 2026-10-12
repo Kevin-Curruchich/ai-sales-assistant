@@ -63,11 +63,15 @@ def test_confirming_the_same_purchase_twice_at_once_records_one_cash_exit(
     product_id = seeded_purchase_draft.items[0].product_id
     db_session.commit()
 
-    errors = _confirm_concurrently(migrated_schema, monkeypatch, [purchase_id, purchase_id])
+    errors = _confirm_concurrently(
+        migrated_schema, monkeypatch, [purchase_id, purchase_id]
+    )
 
     assert errors == []
     db_session.expire_all()
-    assert db_session.query(CashMovement).filter_by(purchase_id=purchase_id).count() == 1
+    assert (
+        db_session.query(CashMovement).filter_by(purchase_id=purchase_id).count() == 1
+    )
     assert db_session.get(Product, product_id).stock == Decimal("4")
 
 
@@ -77,7 +81,10 @@ def test_confirming_two_purchases_of_the_same_product_at_once_adds_both_to_stock
     first = seeded_purchase_draft
     product_id = first.items[0].product_id
     second = Purchase(
-        user_id=seeded_user.id, date=date(2026, 9, 21), total=Decimal("30.00"), status="draft"
+        user_id=seeded_user.id,
+        date=date(2026, 9, 21),
+        total=Decimal("30.00"),
+        status="draft",
     )
     db_session.add(second)
     db_session.flush()

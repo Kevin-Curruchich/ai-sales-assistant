@@ -1,0 +1,10 @@
+# Corre Ruff sobre los archivos del commit antes de crearlo.
+# Instalacion (una vez por clon): `pre-commit install`.
+# `rev` va a la par de ruff en requirements-dev.txt.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.10
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format

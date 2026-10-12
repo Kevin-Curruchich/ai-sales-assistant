@@ -36,8 +36,13 @@ docker compose -f docker-compose.dev.yml up -d
 venv/bin/alembic upgrade head # crea db_local desde cero
 ```
 
-`venv/bin/pip` esta roto en este venv (resuelve a un Python 3.14 vacio).
-Usa siempre `venv/bin/python -m pip`.
+El venv es de Python 3.13 (`python3.13 -m venv venv`). Si alguna vez quedo
+mezclado con otra version y faltan modulos, borralo y recrealo:
+
+```bash
+rm -rf venv && python3.13 -m venv venv
+venv/bin/pip install -r requirements-dev.txt
+```
 
 ## Tests
 
@@ -49,6 +54,39 @@ venv/bin/python -m pytest -q
 Los tests no leen `.env`: usan `TEST_DATABASE_URL`, con default a la base
 efimera del puerto 55432. `tests/conftest.py` aborta si esa URL nombra un
 host de Railway, porque los tests crean y destruyen schemas.
+
+## Formato y lint
+
+Ruff formatea y revisa el codigo; la configuracion esta en `pyproject.toml`
+(lineas de 88, imports ordenados). Lo mismo corre en tres lugares, con la
+version fijada en `requirements-dev.txt`:
+
+- **VS Code**: formatea al guardar (`.vscode/settings.json`). Instala las
+  extensiones recomendadas que ofrece al abrir el repo y desactiva autopep8.
+- **pre-commit**: formatea los archivos del commit antes de crearlo. Una vez
+  por clon:
+
+  ```bash
+  brew install pre-commit   # o: pipx install pre-commit
+  pre-commit install
+  ```
+
+- **CI** (`.github/workflows/lint.yml`): falla el PR si algo no esta
+  formateado o tiene errores de lint.
+
+A mano:
+
+```bash
+venv/bin/ruff check --fix .
+venv/bin/ruff format .
+```
+
+El commit que formateo todo el repo esta en `.git-blame-ignore-revs`; para que
+`git blame` lo salte en local:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
 
 ## Comandos contra produccion
 

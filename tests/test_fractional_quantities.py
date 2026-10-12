@@ -15,8 +15,8 @@ from app.schemas.product import ProductCreate, ProductResponse, ProductUpdate
 from app.schemas.purchase import PurchaseItemCreate, PurchaseItemResponse
 from app.schemas.sale import ProfitReportResponse, ProfitReportRow
 
-
 # --- A: el reporte de ganancias ---
+
 
 def test_profit_report_accumulates_fractional_quantities():
     """Reproduce el 500 en /sales/reports/profit.
@@ -26,8 +26,11 @@ def test_profit_report_accumulates_fractional_quantities():
     la respuesta para cualquier rango que incluyera una venta de medio carton.
     """
     row = ProfitReportRow(
-        key="k", label="Carton de huevos",
-        quantity=Decimal("0"), revenue=Decimal("0.00"), gross_profit=Decimal("0.00"),
+        key="k",
+        label="Carton de huevos",
+        quantity=Decimal("0"),
+        revenue=Decimal("0.00"),
+        gross_profit=Decimal("0.00"),
     )
     row.quantity += Decimal("0.5000")
     row.quantity += Decimal("1")
@@ -39,6 +42,7 @@ def test_profit_report_accumulates_fractional_quantities():
 
 
 # --- B: compras fraccionarias ---
+
 
 def test_purchase_item_create_accepts_half_units():
     item = PurchaseItemCreate(
@@ -58,10 +62,14 @@ def test_purchase_item_create_still_rejects_non_positive(bad):
 
 def test_purchase_item_response_round_trips_a_fractional_quantity():
     payload = {
-        "id": uuid.uuid4(), "product_id": uuid.uuid4(),
-        "quantity": Decimal("0.5000"), "unit_cost": Decimal("33.50"),
-        "subtotal": Decimal("16.75"), "product_name": "Carton de huevos",
-        "product_sku": "LKCX-002", "product_earning_mode": "percent",
+        "id": uuid.uuid4(),
+        "product_id": uuid.uuid4(),
+        "quantity": Decimal("0.5000"),
+        "unit_cost": Decimal("33.50"),
+        "subtotal": Decimal("16.75"),
+        "product_name": "Carton de huevos",
+        "product_sku": "LKCX-002",
+        "product_earning_mode": "percent",
         "product_status": "active",
     }
     assert PurchaseItemResponse.model_validate(payload).quantity == Decimal("0.5000")
@@ -69,21 +77,32 @@ def test_purchase_item_response_round_trips_a_fractional_quantity():
 
 # --- C: min_stock ---
 
+
 def test_min_stock_accepts_decimals_on_create_update_and_response():
     created = ProductCreate(
-        sku="LKCX-002", name="Carton",
-        earningPercent=Decimal("10"), min_stock=Decimal("2.5"),
+        sku="LKCX-002",
+        name="Carton",
+        earningPercent=Decimal("10"),
+        min_stock=Decimal("2.5"),
     )
     assert created.min_stock == Decimal("2.5")
 
     updated = ProductUpdate(min_stock=Decimal("1.5"))
     assert updated.min_stock == Decimal("1.5")
 
-    response = ProductResponse.model_validate({
-        "id": uuid.uuid4(), "sku": "LKCX-002", "name": "Carton",
-        "earning_mode": "percent", "stock": Decimal("5.5"),
-        "min_stock": Decimal("2.5"), "status": "active",
-        "created_at": "2026-09-22", "updated_at": "2026-09-22",
-        "stock_alert_status": "ok", "should_reorder": False,
-    })
+    response = ProductResponse.model_validate(
+        {
+            "id": uuid.uuid4(),
+            "sku": "LKCX-002",
+            "name": "Carton",
+            "earning_mode": "percent",
+            "stock": Decimal("5.5"),
+            "min_stock": Decimal("2.5"),
+            "status": "active",
+            "created_at": "2026-09-22",
+            "updated_at": "2026-09-22",
+            "stock_alert_status": "ok",
+            "should_reorder": False,
+        }
+    )
     assert response.min_stock == Decimal("2.5")

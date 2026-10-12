@@ -76,7 +76,9 @@ class CashService:
             out.append((m, self._money(balance)))
         return out
 
-    def count(self, start: Optional[datetime] = None, end: Optional[datetime] = None) -> int:
+    def count(
+        self, start: Optional[datetime] = None, end: Optional[datetime] = None
+    ) -> int:
         return self.repo.count(start=start, end=end)
 
     def recent_movements(

@@ -46,7 +46,9 @@ def _service(lots, product):
     service = SaleService(db=None)
     service.customer_repo.get_by_id = lambda cid: SimpleNamespace(id=cid, name="Ana")
     service.product_repo.get_by_id = lambda pid: product
-    service.product_repo.add_to_stock = lambda pid, delta: setattr(product, "stock", product.stock + delta)
+    service.product_repo.add_to_stock = lambda pid, delta: setattr(
+        product, "stock", product.stock + delta
+    )
     service.purchase_repo.get_fifo_available_lots = lambda **kwargs: lots
     service.sale_repo.get_recent_items_for_customer_product = lambda **kwargs: []
     service.sale_repo.create = lambda sale: sale
@@ -66,7 +68,10 @@ def _service(lots, product):
         ([_lot(Decimal("6"), Decimal("34.17"))], Decimal("0.5"), Decimal("34.17")),
         # Medio carton a 33.33 + un carton a 33.50: (16.665 + 33.50) / 1.5 = 33.4433...
         (
-            [_lot(Decimal("0.5"), Decimal("33.33")), _lot(Decimal("6"), Decimal("33.50"))],
+            [
+                _lot(Decimal("0.5"), Decimal("33.33")),
+                _lot(Decimal("6"), Decimal("33.50")),
+            ],
             Decimal("1.5"),
             Decimal("33.44"),
         ),

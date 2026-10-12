@@ -18,7 +18,6 @@ from types import SimpleNamespace
 import app.repositories.sale_repository as sale_repository_module
 import app.services.product_service as product_service_module
 import app.services.sales.orchestrator as orchestrator_module
-from app.models.product import Product
 from app.models.sale import Sale
 from app.repositories.sale_repository import SaleRepository
 from app.services.product_service import ProductService
@@ -33,7 +32,9 @@ def _cycle(days_until):
         customer_id=uuid.uuid4(),
         product_id=uuid.uuid4(),
         customer=SimpleNamespace(name="Cliente", email=None),
-        product=SimpleNamespace(name="Producto", stock=Decimal("5"), min_stock=Decimal("1")),
+        product=SimpleNamespace(
+            name="Producto", stock=Decimal("5"), min_stock=Decimal("1")
+        ),
         avg_interval_days=Decimal("7"),
         last_purchase_date=HOY - timedelta(days=7),
         last_quantity=Decimal("1"),
@@ -67,15 +68,26 @@ def test_calendar_marks_overdue_against_the_business_day(monkeypatch):
     service = SaleService(db=None)
     service.cycle_repo.get_all_with_estimation = lambda: [_cycle(-1), _cycle(0)]
 
-    calendar = service.get_calendar_events(HOY - timedelta(days=5), HOY + timedelta(days=5))
+    calendar = service.get_calendar_events(
+        HOY - timedelta(days=5), HOY + timedelta(days=5)
+    )
 
     tipos = {e.date: e.type for d in calendar.dates for e in d.events}
     assert tipos == {HOY - timedelta(days=1): "overdue", HOY: "upcoming"}
 
 
-def test_sales_this_month_uses_the_business_month(db_session, seeded_customer, seeded_user, monkeypatch):
+def test_sales_this_month_uses_the_business_month(
+    db_session, seeded_customer, seeded_user, monkeypatch
+):
     monkeypatch.setattr(sale_repository_module, "business_today", lambda: HOY)
-    db_session.add(Sale(customer_id=seeded_customer.id, user_id=seeded_user.id, date=HOY, total=Decimal("40.00")))
+    db_session.add(
+        Sale(
+            customer_id=seeded_customer.id,
+            user_id=seeded_user.id,
+            date=HOY,
+            total=Decimal("40.00"),
+        )
+    )
     db_session.commit()
 
     assert SaleRepository(db_session).get_sales_this_month() == 40.0
@@ -88,19 +100,29 @@ def test_the_sale_dropdown_only_sees_lots_bought_up_to_the_business_day(
     en el reloj del servidor ya sea manana."""
     monkeypatch.setattr(product_service_module, "business_today", lambda: HOY)
     product = _seed_product_with_one_confirmed_lot(
-        db_session, seeded_user, quantity=Decimal("3"), unit_cost=Decimal("10.00"),
+        db_session,
+        seeded_user,
+        quantity=Decimal("3"),
+        unit_cost=Decimal("10.00"),
         purchase_date=HOY + timedelta(days=1),
     )
 
-    for_sale = {p.id: p for p in ProductService(db_session).get_all_active_with_first_lot()}
+    for_sale = {
+        p.id: p for p in ProductService(db_session).get_all_active_with_first_lot()
+    }
 
     assert for_sale[product.id].first_available_lot is None
 
 
-def test_lots_availability_defaults_to_the_business_day(db_session, seeded_user, monkeypatch):
+def test_lots_availability_defaults_to_the_business_day(
+    db_session, seeded_user, monkeypatch
+):
     monkeypatch.setattr(product_service_module, "business_today", lambda: HOY)
     product = _seed_product_with_one_confirmed_lot(
-        db_session, seeded_user, quantity=Decimal("3"), unit_cost=Decimal("10.00"),
+        db_session,
+        seeded_user,
+        quantity=Decimal("3"),
+        unit_cost=Decimal("10.00"),
         purchase_date=HOY + timedelta(days=1),
     )
 

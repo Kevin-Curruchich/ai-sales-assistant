@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
+
 from app.api.dependencies import SaleServiceDep, get_current_user
-from app.schemas.sale import PaginatedFollowUpResponse, FollowUpMetrics
+from app.schemas.sale import FollowUpMetrics, PaginatedFollowUpResponse
 
 router = APIRouter(
     prefix="/follow-ups",
@@ -20,7 +21,9 @@ def list_follow_ups(
 
     filter options: all, overdue, 7_days, 14_days, 30_days
     """
-    items, total = service.get_follow_ups(filter_type=filter, limit=limit, offset=offset)
+    items, total = service.get_follow_ups(
+        filter_type=filter, limit=limit, offset=offset
+    )
     return {"data": items, "meta": {"total": total}}
 
 

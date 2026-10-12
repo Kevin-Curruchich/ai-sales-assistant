@@ -6,8 +6,6 @@ Un panel que RECALCULE la huella en vez de guardarla apagaba la comparacion en
 silencio, y era indetectable del lado del servidor.
 """
 
-import os
-
 import pytest
 
 from app.agent.signing import (

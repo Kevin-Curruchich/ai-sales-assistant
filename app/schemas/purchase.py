@@ -2,12 +2,13 @@ import uuid
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
+
 from pydantic import BaseModel, field_validator
 
 from app.models.payment_method import PaymentMethod
 
-
 # --- Request schemas ---
+
 
 class PurchaseItemCreate(BaseModel):
     productId: uuid.UUID
@@ -47,6 +48,7 @@ class PurchaseUpdate(BaseModel):
 
 
 # --- Response schemas ---
+
 
 class PurchaseItemResponse(BaseModel):
     id: uuid.UUID

@@ -1,8 +1,8 @@
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.schema import CreateTable
 
-from app.core.database import Base
 import app.models  # noqa: F401
+from app.core.database import Base
 
 
 def test_metadata_carries_no_hardcoded_schema():
@@ -25,7 +25,14 @@ def test_foreign_keys_follow_the_naming_convention():
 
 def test_every_table_is_reachable_without_a_schema_prefix():
     expected = {
-        "users", "customers", "products", "purchases", "purchase_items",
-        "sales", "sale_items", "sale_item_lot_allocations", "customer_product_cycles",
+        "users",
+        "customers",
+        "products",
+        "purchases",
+        "purchase_items",
+        "sales",
+        "sale_items",
+        "sale_item_lot_allocations",
+        "customer_product_cycles",
     }
     assert expected <= set(Base.metadata.tables)

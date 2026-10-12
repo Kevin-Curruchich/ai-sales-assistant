@@ -1,11 +1,12 @@
 import uuid
-from typing import Optional
+
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
+
+from app.core.security import create_firebase_user, set_firebase_custom_claims
 from app.models.user import User
 from app.repositories.user_repository import UserRepository
-from app.schemas.user import UserUpdate, UserSignUp
-from app.core.security import create_firebase_user, set_firebase_custom_claims
+from app.schemas.user import UserSignUp, UserUpdate
 
 
 class UserService:
@@ -14,7 +15,7 @@ class UserService:
 
     def get_or_create_from_firebase(self, decoded_token: dict) -> User:
         """Find the local user by Firebase UID (= User.id), or create one on first login.
-        
+
         This is called automatically on every authenticated request so the
         database always has a record for the calling user.
         """
@@ -36,7 +37,7 @@ class UserService:
 
     def signup(self, data: UserSignUp) -> User:
         """Create a Firebase user with custom claims and a local DB record.
-        
+
         1. Generates a UUID locally.
         2. Creates the user in Firebase Authentication using that UUID as the uid.
         3. Sets custom claims (role, is_active) on the Firebase user.
@@ -69,10 +70,13 @@ class UserService:
         )
 
         # 3. Set custom claims on the Firebase user
-        set_firebase_custom_claims(firebase_user.uid, {
-            "role": data.role,
-            "is_active": True,
-        })
+        set_firebase_custom_claims(
+            firebase_user.uid,
+            {
+                "role": data.role,
+                "is_active": True,
+            },
+        )
 
         # 4. Create local DB record with the same UUID
         user = User(
@@ -111,10 +115,13 @@ class UserService:
         user = self.get_by_id(user_id)
         user.role = role
         # Sync custom claims to Firebase
-        set_firebase_custom_claims(str(user.id), {
-            "role": role,
-            "is_active": user.is_active,
-        })
+        set_firebase_custom_claims(
+            str(user.id),
+            {
+                "role": role,
+                "is_active": user.is_active,
+            },
+        )
         return self.repo.update(user)
 
     def update(self, user_id: uuid.UUID, data: UserUpdate, current_user: User) -> User:
@@ -130,8 +137,11 @@ class UserService:
             setattr(user, key, value)
         # Sync custom claims to Firebase if role or is_active changed
         if "role" in update_data or "is_active" in update_data:
-            set_firebase_custom_claims(str(user.id), {
-                "role": user.role,
-                "is_active": user.is_active,
-            })
+            set_firebase_custom_claims(
+                str(user.id),
+                {
+                    "role": user.role,
+                    "is_active": user.is_active,
+                },
+            )
         return self.repo.update(user)

@@ -27,7 +27,13 @@ VENTA_ID = "5a1e0000-0000-4000-8000-000000000003"
 
 MENSAJE = "Vendí 2 @Cartón de huevos a @Aurita, no pagado"
 MENCIONES = [
-    {"tipo": "producto", "id": PRODUCTO_ID, "nombre": "Cartón de huevos", "inicio": 8, "fin": 25},
+    {
+        "tipo": "producto",
+        "id": PRODUCTO_ID,
+        "nombre": "Cartón de huevos",
+        "inicio": 8,
+        "fin": 25,
+    },
     {"tipo": "cliente", "id": CLIENTE_ID, "nombre": "Aurita", "inicio": 28, "fin": 35},
 ]
 
@@ -53,13 +59,20 @@ def _estado(client, user, thread_id):
 # ---------------------------------------------------------------------
 
 
-def test_a_message_with_mentions_and_a_command_reaches_the_graph_with_them(client, seeded_user):
+def test_a_message_with_mentions_and_a_command_reaches_the_graph_with_them(
+    client, seeded_user
+):
     hilo = _create_thread_as(client, seeded_user, "mio")
 
     _turno(
         client,
         seeded_user,
-        {"thread_id": hilo["id"], "mensaje": MENSAJE, "comando": "venta", "menciones": MENCIONES},
+        {
+            "thread_id": hilo["id"],
+            "mensaje": MENSAJE,
+            "comando": "venta",
+            "menciones": MENCIONES,
+        },
     )
 
     (humano,) = _last_entrada()["messages"]
@@ -69,7 +82,9 @@ def test_a_message_with_mentions_and_a_command_reaches_the_graph_with_them(clien
     assert humano.additional_kwargs["menciones"] == MENCIONES
 
 
-def test_a_message_without_the_new_fields_reaches_the_graph_as_plain_text(client, seeded_user):
+def test_a_message_without_the_new_fields_reaches_the_graph_as_plain_text(
+    client, seeded_user
+):
     hilo = _create_thread_as(client, seeded_user, "mio")
 
     _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "hola"})
@@ -84,20 +99,34 @@ def test_a_message_without_the_new_fields_reaches_the_graph_as_plain_text(client
     "extra",
     [
         pytest.param({"comando": "borrar"}, id="comando desconocido"),
-        pytest.param({"menciones": [{**MENCIONES[0], "tipo": "proveedor"}]}, id="tipo desconocido"),
-        pytest.param({"menciones": [{**MENCIONES[0], "fin": len(MENSAJE) + 1}]}, id="rango fuera del texto"),
-        pytest.param({"menciones": [{**MENCIONES[0], "inicio": -1}]}, id="inicio negativo"),
+        pytest.param(
+            {"menciones": [{**MENCIONES[0], "tipo": "proveedor"}]},
+            id="tipo desconocido",
+        ),
+        pytest.param(
+            {"menciones": [{**MENCIONES[0], "fin": len(MENSAJE) + 1}]},
+            id="rango fuera del texto",
+        ),
+        pytest.param(
+            {"menciones": [{**MENCIONES[0], "inicio": -1}]}, id="inicio negativo"
+        ),
         pytest.param({"menciones": [{**MENCIONES[0], "fin": 8}]}, id="rango vacio"),
         pytest.param(
-            {"menciones": [MENCIONES[0], {**MENCIONES[1], "inicio": 20}]}, id="rangos superpuestos"
+            {"menciones": [MENCIONES[0], {**MENCIONES[1], "inicio": 20}]},
+            id="rangos superpuestos",
         ),
-        pytest.param({"menciones": [{**MENCIONES[0], "id": "no-es-un-uuid"}]}, id="id que no es uuid"),
+        pytest.param(
+            {"menciones": [{**MENCIONES[0], "id": "no-es-un-uuid"}]},
+            id="id que no es uuid",
+        ),
     ],
 )
 def test_a_malformed_mention_or_command_is_a_422(client, seeded_user, extra):
     hilo = _create_thread_as(client, seeded_user, "mio")
 
-    resp = _post(client, seeded_user, {"thread_id": hilo["id"], "mensaje": MENSAJE, **extra})
+    resp = _post(
+        client, seeded_user, {"thread_id": hilo["id"], "mensaje": MENSAJE, **extra}
+    )
 
     assert resp.status_code == 422, resp.text
 
@@ -110,7 +139,12 @@ def test_mentions_without_a_mensaje_are_a_422(client, seeded_user):
     resp = _post(
         client,
         seeded_user,
-        {"thread_id": hilo["id"], "decision": {"accion": "cancelar"}, "interrupt_id": "x", "comando": "venta"},
+        {
+            "thread_id": hilo["id"],
+            "decision": {"accion": "cancelar"},
+            "interrupt_id": "x",
+            "comando": "venta",
+        },
     )
 
     assert resp.status_code == 422, resp.text
@@ -123,14 +157,28 @@ def test_ranges_are_counted_in_code_points_not_utf16_units(client, seeded_user):
     mensaje = "🥚 @Aurita"
     assert mensaje[2:9] == "@Aurita"
     hilo = _create_thread_as(client, seeded_user, "mio")
-    mencion = {"tipo": "cliente", "id": CLIENTE_ID, "nombre": "Aurita", "inicio": 2, "fin": 9}
+    mencion = {
+        "tipo": "cliente",
+        "id": CLIENTE_ID,
+        "nombre": "Aurita",
+        "inicio": 2,
+        "fin": 9,
+    }
 
-    _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": mensaje, "menciones": [mencion]})
+    _turno(
+        client,
+        seeded_user,
+        {"thread_id": hilo["id"], "mensaje": mensaje, "menciones": [mencion]},
+    )
 
     resp = _post(
         client,
         seeded_user,
-        {"thread_id": hilo["id"], "mensaje": mensaje, "menciones": [{**mencion, "inicio": 3, "fin": 10}]},
+        {
+            "thread_id": hilo["id"],
+            "mensaje": mensaje,
+            "menciones": [{**mencion, "inicio": 3, "fin": 10}],
+        },
     )
     assert resp.status_code == 422
 
@@ -139,7 +187,11 @@ def test_ids_that_do_not_exist_are_not_rejected_by_the_endpoint(client, seeded_u
     """La existencia la decide la tool (`no_encontrada`), no el endpoint."""
     hilo = _create_thread_as(client, seeded_user, "mio")
 
-    _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": MENSAJE, "menciones": MENCIONES})
+    _turno(
+        client,
+        seeded_user,
+        {"thread_id": hilo["id"], "mensaje": MENSAJE, "menciones": MENCIONES},
+    )
 
 
 # ---------------------------------------------------------------------
@@ -147,30 +199,49 @@ def test_ids_that_do_not_exist_are_not_rejected_by_the_endpoint(client, seeded_u
 # ---------------------------------------------------------------------
 
 
-def test_the_state_gives_back_the_command_and_mentions_of_a_user_message(client, seeded_user):
+def test_the_state_gives_back_the_command_and_mentions_of_a_user_message(
+    client, seeded_user
+):
     hilo = _create_thread_as(client, seeded_user, "mio")
     _turno(
         client,
         seeded_user,
-        {"thread_id": hilo["id"], "mensaje": MENSAJE, "comando": "venta", "menciones": MENCIONES},
+        {
+            "thread_id": hilo["id"],
+            "mensaje": MENSAJE,
+            "comando": "venta",
+            "menciones": MENCIONES,
+        },
     )
 
     primero = _estado(client, seeded_user, hilo["id"])["mensajes"][0]
 
-    assert primero == {"rol": "usuario", "texto": MENSAJE, "comando": "venta", "menciones": MENCIONES}
+    assert primero == {
+        "rol": "usuario",
+        "texto": MENSAJE,
+        "comando": "venta",
+        "menciones": MENCIONES,
+    }
 
 
 def test_a_plain_user_message_keeps_its_old_shape_in_the_state(client, seeded_user):
     hilo = _create_thread_as(client, seeded_user, "mio")
     _turno(client, seeded_user, {"thread_id": hilo["id"], "mensaje": "hola"})
 
-    assert _estado(client, seeded_user, hilo["id"])["mensajes"][0] == {"rol": "usuario", "texto": "hola"}
+    assert _estado(client, seeded_user, hilo["id"])["mensajes"][0] == {
+        "rol": "usuario",
+        "texto": "hola",
+    }
 
 
 def test_an_old_checkpointed_message_without_the_fields_still_translates():
-    snapshot = type("S", (), {"values": {"messages": [HumanMessage("viejo")]}, "tasks": []})()
+    snapshot = type(
+        "S", (), {"values": {"messages": [HumanMessage("viejo")]}, "tasks": []}
+    )()
 
-    assert traducir_estado(snapshot)["mensajes"] == [{"rol": "usuario", "texto": "viejo"}]
+    assert traducir_estado(snapshot)["mensajes"] == [
+        {"rol": "usuario", "texto": "viejo"}
+    ]
 
 
 # ---------------------------------------------------------------------
@@ -198,8 +269,20 @@ def test_the_model_sees_each_mention_with_the_id_the_tools_expect():
 def test_a_mentioned_sale_is_the_venta_id_of_registrar_cobro():
     mensaje = "@Aurita pagó @Venta 24/09 · Q33.33 en efectivo"
     menciones = [
-        {"tipo": "cliente", "id": CLIENTE_ID, "nombre": "Aurita", "inicio": 0, "fin": 7},
-        {"tipo": "venta", "id": VENTA_ID, "nombre": "Venta 24/09 · Q33.33", "inicio": 13, "fin": 34},
+        {
+            "tipo": "cliente",
+            "id": CLIENTE_ID,
+            "nombre": "Aurita",
+            "inicio": 0,
+            "fin": 7,
+        },
+        {
+            "tipo": "venta",
+            "id": VENTA_ID,
+            "nombre": "Venta 24/09 · Q33.33",
+            "inicio": 13,
+            "fin": 34,
+        },
     ]
     assert mensaje[13:34] == "@Venta 24/09 · Q33.33"
 
@@ -234,7 +317,9 @@ def test_the_references_do_not_leak_into_the_stored_message():
 
 
 def test_prompt_con_fecha_sends_the_references_to_the_model():
-    mensajes = prompt_con_fecha({"messages": [_con_campos("venta", MENCIONES), AIMessage("listo")]})
+    mensajes = prompt_con_fecha(
+        {"messages": [_con_campos("venta", MENCIONES), AIMessage("listo")]}
+    )
 
     assert CLIENTE_ID in mensajes[1].content
     assert mensajes[2].content == "listo"

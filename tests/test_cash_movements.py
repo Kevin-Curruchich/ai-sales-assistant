@@ -2,9 +2,9 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
-from app.core.database import Base
-from app.models import CashMovement, CashMovementType
 import app.models  # noqa: F401
+from app.core.database import Base
+from app.models import CashMovementType
 
 
 def test_cash_movement_type_values():
@@ -65,7 +65,9 @@ def test_running_balance_is_not_stored(test_engine, migrated_schema):
     assert "saldo_acumulado" not in cols
 
 
-def test_saldo_inicial_is_accepted_by_the_check_constraint(test_engine, migrated_schema):
+def test_saldo_inicial_is_accepted_by_the_check_constraint(
+    test_engine, migrated_schema
+):
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
         conn.execute(
@@ -80,7 +82,9 @@ def test_saldo_inicial_is_accepted_by_the_check_constraint(test_engine, migrated
     assert count == 1
 
 
-def test_cash_movement_type_column_is_varchar_not_a_native_enum(test_engine, migrated_schema):
+def test_cash_movement_type_column_is_varchar_not_a_native_enum(
+    test_engine, migrated_schema
+):
     """Mismo patron que payment_method (tests/test_payment_method.py): un enum
     nativo es schema-scoped (db_v2.cash_movement_type_enum != db_local...) y
     ademas pelea con el DDL transaccional de Alembic para agregar valores."""
@@ -128,7 +132,9 @@ def test_cash_movement_type_check_rejects_anything_else(test_engine, migrated_sc
             )
 
 
-def test_cash_movement_type_survived_the_varchar_conversion_as_not_nullable(test_engine, migrated_schema):
+def test_cash_movement_type_survived_the_varchar_conversion_as_not_nullable(
+    test_engine, migrated_schema
+):
     """Un movimiento sin tipo no entra.
 
     El NOT NULL no lo introdujo esta rama -- venia de la columna enum

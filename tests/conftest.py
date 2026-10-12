@@ -2,6 +2,8 @@ import os
 import uuid
 
 import pytest
+from alembic import command
+from alembic.config import Config as AlembicConfig
 from sqlalchemy import create_engine, text
 
 # Fixtures de dominio (sesion + datos sembrados) usadas por esta task y por
@@ -140,9 +142,6 @@ def throwaway_schema(test_engine):
             conn.execute(text(f'DROP SCHEMA IF EXISTS "{name}" CASCADE'))
 
 
-from alembic.config import Config as AlembicConfig
-
-
 @pytest.fixture
 def alembic_config(throwaway_schema):
     """Config de Alembic apuntada al schema desechable del test."""
@@ -151,9 +150,6 @@ def alembic_config(throwaway_schema):
     cfg.attributes["sqlalchemy_url"] = TEST_DATABASE_URL
     cfg.attributes["target_schema"] = throwaway_schema
     return cfg
-
-
-from alembic import command
 
 
 @pytest.fixture

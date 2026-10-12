@@ -1,9 +1,11 @@
 import uuid
 from datetime import date, datetime
-from typing import TYPE_CHECKING
 from decimal import Decimal
-from sqlalchemy import Date, ForeignKey, DateTime, Numeric, Uuid, func
+from typing import TYPE_CHECKING
+
+from sqlalchemy import Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.core.database import Base
 
 if TYPE_CHECKING:
@@ -14,7 +16,10 @@ class SaleItemLotAllocation(Base):
     __tablename__ = "sale_item_lot_allocations"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+        Uuid,
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
     )
     sale_item_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("sale_items.id", ondelete="CASCADE"), nullable=False, index=True
@@ -31,7 +36,9 @@ class SaleItemLotAllocation(Base):
     )
 
     # Relationships
-    sale_item: Mapped["SaleItem"] = relationship("SaleItem", back_populates="allocations")
+    sale_item: Mapped["SaleItem"] = relationship(
+        "SaleItem", back_populates="allocations"
+    )
 
     def __repr__(self) -> str:
         return (

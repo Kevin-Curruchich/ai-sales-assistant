@@ -16,7 +16,12 @@ from decimal import Decimal
 from langchain_core.tools import tool
 
 from app.agent.session import agent_session
-from app.core.datetime_utils import business_end_of_day, business_midnight, business_today, business_tz
+from app.core.datetime_utils import (
+    business_end_of_day,
+    business_midnight,
+    business_today,
+    business_tz,
+)
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.services.cash_service import CashService
 from app.services.customer_service import CustomerService
@@ -40,7 +45,12 @@ def buscar_cliente(nombre: str) -> dict:
         total = service.count(search=nombre)
         return {
             "clientes": [
-                {"id": str(c.id), "nombre": c.name, "empresa": c.company, "email": c.email}
+                {
+                    "id": str(c.id),
+                    "nombre": c.name,
+                    "empresa": c.company,
+                    "email": c.email,
+                }
                 for c in found
             ],
             "total": total,
@@ -118,7 +128,9 @@ def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
                     # la misma entrada, registraba cero. Dos cifras distintas
                     # para la misma venta, y la que el usuario ve antes de
                     # aprobar es la equivocada.
-                    unitPrice=Decimal(str(i["precio_unitario"])) if i.get("precio_unitario") is not None else None,
+                    unitPrice=Decimal(str(i["precio_unitario"]))
+                    if i.get("precio_unitario") is not None
+                    else None,
                 )
                 for i in items
             ],
@@ -134,7 +146,9 @@ def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
 
 
 @tool
-def consultar_seguimiento(filtro: str = "all", limite: int = 10, offset: int = 0) -> dict:
+def consultar_seguimiento(
+    filtro: str = "all", limite: int = 10, offset: int = 0
+) -> dict:
     """Lista clientes con seguimiento de recompra pendiente.
 
     `filtro`: "all" | "overdue" | "7_days" | "14_days" | "30_days". Por cada
@@ -187,7 +201,9 @@ def _parse_boundary(value: str, *, inclusive_end: bool) -> datetime:
 
 
 @tool
-def consultar_caja(desde: str | None = None, hasta: str | None = None, limite: int = 20) -> dict:
+def consultar_caja(
+    desde: str | None = None, hasta: str | None = None, limite: int = 20
+) -> dict:
     """Consulta el estado de caja: saldo operativo, saldo del socio y el libro de movimientos.
 
     `saldo` es el efectivo operativo disponible ahora mismo; `saldo_socio` es
@@ -215,9 +231,13 @@ def consultar_caja(desde: str | None = None, hasta: str | None = None, limite: i
                     "fecha": movement.occurred_at.isoformat(),
                     "tipo": movement.type.value,
                     "monto": str(movement.amount),
-                    "medio_pago": movement.payment_method.value if movement.payment_method else None,
+                    "medio_pago": movement.payment_method.value
+                    if movement.payment_method
+                    else None,
                     "venta_id": str(movement.sale_id) if movement.sale_id else None,
-                    "compra_id": str(movement.purchase_id) if movement.purchase_id else None,
+                    "compra_id": str(movement.purchase_id)
+                    if movement.purchase_id
+                    else None,
                     "nota": movement.note,
                     "saldo_acumulado": str(saldo_acumulado),
                 }
@@ -279,8 +299,12 @@ def consultar_ventas(
                     "cliente": v.customer_name,
                     "total": str(v.total),
                     "pendiente": v.is_payment_pending,
-                    "dias_pendiente": (hoy - v.date).days if v.is_payment_pending else None,
-                    "fecha_pago": v.payment_date.isoformat() if v.payment_date else None,
+                    "dias_pendiente": (hoy - v.date).days
+                    if v.is_payment_pending
+                    else None,
+                    "fecha_pago": v.payment_date.isoformat()
+                    if v.payment_date
+                    else None,
                     "medio_pago": v.payment_method.value if v.payment_method else None,
                     "items": [
                         {

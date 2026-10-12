@@ -17,10 +17,18 @@ def _sale(customer, product, pending):
     )
 
 
-def test_filters_by_payment_status(db_session, seeded_customer, seeded_product_with_lot, seeded_user):
+def test_filters_by_payment_status(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user
+):
     service = SaleService(db_session)
-    pending = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
-    paid = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
+    pending = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
+    paid = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=False),
+        user_id=seeded_user.id,
+    )
 
     assert [s.id for s in service.get_all(is_payment_pending=True)] == [pending.id]
     assert [s.id for s in service.get_all(is_payment_pending=False)] == [paid.id]
@@ -31,12 +39,25 @@ def test_filters_by_payment_status(db_session, seeded_customer, seeded_product_w
 
 
 def test_combines_product_and_payment_status(
-    db_session, seeded_customer, seeded_product_with_lot, seeded_product_with_one_lot, seeded_user
+    db_session,
+    seeded_customer,
+    seeded_product_with_lot,
+    seeded_product_with_one_lot,
+    seeded_user,
 ):
     service = SaleService(db_session)
-    target = service.create(_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
-    service.create(_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
-    service.create(_sale(seeded_customer, seeded_product_with_one_lot, pending=True), user_id=seeded_user.id)
+    target = service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
+    service.create(
+        _sale(seeded_customer, seeded_product_with_lot, pending=False),
+        user_id=seeded_user.id,
+    )
+    service.create(
+        _sale(seeded_customer, seeded_product_with_one_lot, pending=True),
+        user_id=seeded_user.id,
+    )
 
     filters = dict(product_id=seeded_product_with_lot.id, is_payment_pending=True)
     assert [s.id for s in service.get_all(**filters)] == [target.id]

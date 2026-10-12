@@ -1,18 +1,20 @@
 import firebase_admin
-from firebase_admin import auth as firebase_auth, credentials
 from fastapi import HTTPException, status
+from firebase_admin import auth as firebase_auth
+from firebase_admin import credentials
+
 from app.core.config import settings
 
 
 def initialize_firebase() -> None:
     """Initialize the Firebase Admin SDK.
-    
+
     Call this once at application startup.
     Uses the service account JSON file specified by FIREBASE_CREDENTIALS_PATH,
     or Application Default Credentials if no path is provided.
     """
     if firebase_admin._apps:
-        return # Already initialized
+        return  # Already initialized
 
     if settings.FIREBASE_CREDENTIALS_PATH:
         cred = credentials.Certificate(settings.FIREBASE_CREDENTIALS_PATH)
@@ -24,13 +26,13 @@ def initialize_firebase() -> None:
 
 def verify_firebase_token(id_token: str) -> dict:
     """Verify a Firebase ID token and return the decoded claims.
-    
+
     Args:
         id_token: The Firebase ID token string from the client.
-        
+
     Returns:
         A dict with the decoded token claims (uid, email, etc.).
-        
+
     Raises:
         HTTPException 401 if the token is invalid or expired.
     """
@@ -61,7 +63,7 @@ def create_firebase_user(
     display_name: str | None = None,
 ) -> firebase_auth.UserRecord:
     """Create a new user in Firebase Authentication with a specific UID.
-    
+
     Raises:
         HTTPException 409 if the email already exists.
         HTTPException 400 for other Firebase errors.
@@ -88,7 +90,7 @@ def create_firebase_user(
 
 def set_firebase_custom_claims(uid: str, claims: dict) -> None:
     """Set custom claims (role, is_active) on a Firebase user.
-    
+
     These claims are included in the ID token after the user refreshes it.
     """
     try:

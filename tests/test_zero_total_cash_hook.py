@@ -62,7 +62,10 @@ def test_a_paid_zero_total_sale_is_registered_without_a_cash_entry(
 ):
     service = SaleService(db_session)
 
-    sale = service.create(_free_sale(seeded_customer, seeded_product_with_lot, pending=False), user_id=seeded_user.id)
+    sale = service.create(
+        _free_sale(seeded_customer, seeded_product_with_lot, pending=False),
+        user_id=seeded_user.id,
+    )
 
     assert sale.total == Decimal("0.00")
     assert sale.is_payment_pending is False
@@ -77,7 +80,9 @@ def test_a_paid_sale_with_a_total_above_zero_still_records_its_entry(
     data = SaleCreate(
         customerId=seeded_customer.id,
         date=date(2026, 9, 24),
-        items=[SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"))],
+        items=[
+            SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"))
+        ],
         isPaymentPending=False,
     )
 
@@ -95,9 +100,14 @@ def test_marking_a_zero_total_sale_as_paid_records_no_cash_entry(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user
 ):
     service = SaleService(db_session)
-    sale = service.create(_free_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+    sale = service.create(
+        _free_sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
 
-    result = service.update_payment_status_enriched(sale.id, SalePaymentStatusUpdate(isPaymentPending=False))
+    result = service.update_payment_status_enriched(
+        sale.id, SalePaymentStatusUpdate(isPaymentPending=False)
+    )
 
     assert result.is_payment_pending is False
     assert db_session.query(CashMovement).filter_by(sale_id=sale.id).count() == 0
@@ -108,7 +118,10 @@ def test_updating_a_zero_total_sale_to_paid_records_no_cash_entry(
 ):
     """El mismo camino desde `PUT /api/v1/sales/{sale_id}`."""
     service = SaleService(db_session)
-    sale = service.create(_free_sale(seeded_customer, seeded_product_with_lot, pending=True), user_id=seeded_user.id)
+    sale = service.create(
+        _free_sale(seeded_customer, seeded_product_with_lot, pending=True),
+        user_id=seeded_user.id,
+    )
 
     service.update(sale.id, SaleUpdate(isPaymentPending=False))
 
@@ -119,7 +132,9 @@ def test_updating_a_zero_total_sale_to_paid_records_no_cash_entry(
 # --- Camino 3: PurchaseService.confirm ---------------------------------
 
 
-def test_confirming_a_zero_total_purchase_records_no_cash_exit(db_session, seeded_user, seeded_customer):
+def test_confirming_a_zero_total_purchase_records_no_cash_exit(
+    db_session, seeded_user, seeded_customer
+):
     """Un lote donado: costo unitario cero, `unitCost = 0` que el schema de
     compras acepta igual que el de ventas."""
     from app.models.product import Product
@@ -133,7 +148,11 @@ def test_confirming_a_zero_total_purchase_records_no_cash_exit(db_session, seede
     purchase = service.create(
         PurchaseCreate(
             date=date(2026, 9, 20),
-            items=[PurchaseItemCreate(productId=product.id, quantity=Decimal("5"), unitCost=Decimal("0"))],
+            items=[
+                PurchaseItemCreate(
+                    productId=product.id, quantity=Decimal("5"), unitCost=Decimal("0")
+                )
+            ],
             medioPago=PaymentMethod.EFECTIVO,
         ),
         user_id=seeded_user.id,
@@ -143,7 +162,9 @@ def test_confirming_a_zero_total_purchase_records_no_cash_exit(db_session, seede
 
     assert confirmed.total == Decimal("0.00")
     assert confirmed.status == "confirmed"
-    assert db_session.query(CashMovement).filter_by(purchase_id=purchase.id).count() == 0
+    assert (
+        db_session.query(CashMovement).filter_by(purchase_id=purchase.id).count() == 0
+    )
     # El lote entra al inventario igual: la compra ocurrio, solo no costo nada.
     db_session.refresh(product)
     assert product.stock == Decimal("5")

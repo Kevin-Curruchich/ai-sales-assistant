@@ -1,0 +1,5 @@
+# Commits que solo cambian formato. GitHub los salta en la vista de blame;
+# en local: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: Format the whole repo with Ruff
+0232fc0fdcb89c5b7ffc638c55c4f04b9c5ce42f

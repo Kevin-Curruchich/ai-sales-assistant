@@ -1,7 +1,7 @@
 from sqlalchemy import Numeric
 
-from app.core.database import Base
 import app.models  # noqa: F401
+from app.core.database import Base
 
 DECIMAL_QUANTITY_COLUMNS = [
     ("products", "stock"),

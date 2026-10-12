@@ -1,5 +1,7 @@
 from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, status
+
 from app.api.dependencies import SaleServiceDep, get_current_user
 from app.schemas.sale import CalendarResponse
 

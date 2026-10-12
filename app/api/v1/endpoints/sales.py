@@ -1,15 +1,17 @@
 import uuid
-from typing import Optional
 from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, Depends, status
+
 from app.api.dependencies import CurrentUser, SaleServiceDep, get_current_user
 from app.schemas.sale import (
+    ProfitReportResponse,
     SaleCreate,
     SalePaymentStatusUpdate,
     SalePreviewResponse,
     SaleResponse,
     SaleUpdate,
-    ProfitReportResponse,
 )
 
 router = APIRouter(
@@ -72,7 +74,9 @@ def get_profit_report(
     )
 
 
-@router.post("/preview", response_model=SalePreviewResponse, status_code=status.HTTP_200_OK)
+@router.post(
+    "/preview", response_model=SalePreviewResponse, status_code=status.HTTP_200_OK
+)
 def preview_sale(data: SaleCreate, service: SaleServiceDep):
     """Dry-run FIFO lot allocation and pricing without writing to the database.
 

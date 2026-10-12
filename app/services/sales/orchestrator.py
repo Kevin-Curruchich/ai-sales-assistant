@@ -1,33 +1,31 @@
 import uuid
 from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.models.customer_product_cycle import CustomerProductCycle
+from app.core.datetime_utils import (
+    business_midnight,
+    business_today,
+    format_business_date,
+    format_business_datetime,
+)
 from app.models.cash_movement import CashMovement, CashMovementType
+from app.models.customer_product_cycle import CustomerProductCycle
+from app.models.payment_method import PaymentMethod
 from app.models.purchase import PurchaseItem
 from app.models.sale import Sale
 from app.models.sale_item import SaleItem
-from app.models.payment_method import PaymentMethod
 from app.models.sale_item_lot_allocation import SaleItemLotAllocation
-from app.repositories.customer_product_cycle_repository import CustomerProductCycleRepository
-from app.repositories.customer_repository import CustomerRepository
-from app.repositories.purchase_repository import PurchaseRepository
-from app.repositories.product_repository import ProductRepository
-from app.repositories.sale_repository import SaleRepository
-from app.services.cash_service import CashService
-from app.services.sales.fifo import InsufficientLots, allocate_fifo
-from app.services.sales.pricing import (
-    base_margin_for,
-    detect_habitual_margin,
-    suggested_unit_price as _pricing_suggested_unit_price,
+from app.repositories.customer_product_cycle_repository import (
+    CustomerProductCycleRepository,
 )
-from app.services.sales.projection import project
-from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
-from app.core.datetime_utils import business_midnight, business_today, format_business_date, format_business_datetime
+from app.repositories.customer_repository import CustomerRepository
+from app.repositories.product_repository import ProductRepository
+from app.repositories.purchase_repository import PurchaseRepository
+from app.repositories.sale_repository import SaleRepository
 from app.schemas.sale import (
     CalendarDateEvents,
     CalendarEvent,
@@ -50,6 +48,17 @@ from app.schemas.sale import (
     SaleResponse,
     SaleUpdate,
 )
+from app.services.cash_service import CashService
+from app.services.sales.fifo import InsufficientLots, allocate_fifo
+from app.services.sales.pricing import (
+    base_margin_for,
+    detect_habitual_margin,
+)
+from app.services.sales.pricing import (
+    suggested_unit_price as _pricing_suggested_unit_price,
+)
+from app.services.sales.projection import project
+from app.services.sales.reporting import InvalidGroupBy, build_profit_rows
 
 MONEY = Decimal("0.01")
 HUNDRED = Decimal("100")
@@ -106,9 +115,20 @@ class SaleService:
         item_data: SaleItemCreate,
         customer_id: uuid.UUID,
     ) -> tuple[
-        Decimal, Decimal, Decimal, Decimal, bool, Optional[str], Optional[Decimal], Optional[Decimal], bool
+        Decimal,
+        Decimal,
+        Decimal,
+        Decimal,
+        bool,
+        Optional[str],
+        Optional[Decimal],
+        Optional[Decimal],
+        bool,
     ]:
-        if item_data.discountPercent is not None and item_data.discountAmount is not None:
+        if (
+            item_data.discountPercent is not None
+            and item_data.discountAmount is not None
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=(
@@ -141,8 +161,16 @@ class SaleService:
                 suggested = self._money(cost_basis + habitual)
                 is_habitual = True
 
-        discount_percent = self._money(item_data.discountPercent) if item_data.discountPercent is not None else None
-        discount_amount = self._money(item_data.discountAmount) if item_data.discountAmount is not None else None
+        discount_percent = (
+            self._money(item_data.discountPercent)
+            if item_data.discountPercent is not None
+            else None
+        )
+        discount_amount = (
+            self._money(item_data.discountAmount)
+            if item_data.discountAmount is not None
+            else None
+        )
 
         if item_data.unitPrice is not None:
             if discount_percent is not None or discount_amount is not None:
@@ -172,7 +200,9 @@ class SaleService:
             reason = item_data.pricingExceptionReason
 
             if discount_percent is not None:
-                unit_price = self._money(suggested * (Decimal("1") - (discount_percent / HUNDRED)))
+                unit_price = self._money(
+                    suggested * (Decimal("1") - (discount_percent / HUNDRED))
+                )
             elif discount_amount is not None:
                 unit_price = self._money(suggested - discount_amount)
 
@@ -216,11 +246,21 @@ class SaleService:
                     quantity=item.quantity,
                     unit_price=self._money(item.unit_price),
                     subtotal=self._money(item.subtotal),
-                    cost_basis_unit=self._money(item.cost_basis_unit) if item.cost_basis_unit is not None else None,
-                    gross_profit_unit=self._money(item.gross_profit_unit) if item.gross_profit_unit is not None else None,
-                    gross_profit_total=self._money(item.gross_profit_total) if item.gross_profit_total is not None else None,
-                    discount_percent=self._money(item.discount_percent) if item.discount_percent is not None else None,
-                    discount_amount=self._money(item.discount_amount) if item.discount_amount is not None else None,
+                    cost_basis_unit=self._money(item.cost_basis_unit)
+                    if item.cost_basis_unit is not None
+                    else None,
+                    gross_profit_unit=self._money(item.gross_profit_unit)
+                    if item.gross_profit_unit is not None
+                    else None,
+                    gross_profit_total=self._money(item.gross_profit_total)
+                    if item.gross_profit_total is not None
+                    else None,
+                    discount_percent=self._money(item.discount_percent)
+                    if item.discount_percent is not None
+                    else None,
+                    discount_amount=self._money(item.discount_amount)
+                    if item.discount_amount is not None
+                    else None,
                     is_price_overridden=item.is_price_overridden,
                     pricing_exception_reason=item.pricing_exception_reason,
                     allocations=[
@@ -236,8 +276,12 @@ class SaleService:
                     product_name=product.name if product else "",
                     product_sku=product.sku if product else "",
                     product_earning_mode=product.earning_mode if product else "percent",
-                    product_earning_percent=product.earning_percent if product else None,
-                    product_earning_fee_amount=product.earning_fee_amount if product else None,
+                    product_earning_percent=product.earning_percent
+                    if product
+                    else None,
+                    product_earning_fee_amount=product.earning_fee_amount
+                    if product
+                    else None,
                     product_status=product.status if product else "",
                 )
             )
@@ -264,7 +308,9 @@ class SaleService:
             customer_email=customer.email if customer else "",
         )
 
-    def recalculate_sale_snapshots_for_products(self, product_ids: set[uuid.UUID], from_date: date) -> None:
+    def recalculate_sale_snapshots_for_products(
+        self, product_ids: set[uuid.UUID], from_date: date
+    ) -> None:
         # FIFO snapshots are immutable once a sale is confirmed.
         return
 
@@ -514,8 +560,6 @@ class SaleService:
             ),
         )
 
-
-
     def update_enriched(self, sale_id: uuid.UUID, data: SaleUpdate) -> SaleResponse:
         sale = self.update(sale_id, data)
         return self._to_sale_response(self.get_by_id(sale.id))
@@ -651,7 +695,9 @@ class SaleService:
             )
 
         for item_data in data.items:
-            self._update_cycle(data.customerId, item_data.productId, data.date, item_data.quantity)
+            self._update_cycle(
+                data.customerId, item_data.productId, data.date, item_data.quantity
+            )
 
         self.db.commit()
         self.db.refresh(sale)
@@ -683,7 +729,10 @@ class SaleService:
                 ),
             )
 
-        if "isPaymentPending" in update_data and update_data["isPaymentPending"] is not None:
+        if (
+            "isPaymentPending" in update_data
+            and update_data["isPaymentPending"] is not None
+        ):
             # Segunda ruta viva que cambia el estado de pago (la otra es
             # `update_payment_status_enriched`, via PATCH
             # /sales/{id}/payment-status). Antes solo ponia el booleano y
@@ -697,7 +746,9 @@ class SaleService:
 
         return result
 
-    def _apply_payment_status_transition(self, sale: Sale, is_payment_pending: bool) -> None:
+    def _apply_payment_status_transition(
+        self, sale: Sale, is_payment_pending: bool
+    ) -> None:
         """Mueve la caja segun la transicion de `is_payment_pending`.
 
         No comitea: deja la venta y el movimiento en la misma sesion para que
@@ -807,7 +858,11 @@ class SaleService:
     # ------------------------------------------------------------------
 
     def _update_cycle(
-        self, customer_id: uuid.UUID, product_id: uuid.UUID, sale_date: date, quantity: Decimal
+        self,
+        customer_id: uuid.UUID,
+        product_id: uuid.UUID,
+        sale_date: date,
+        quantity: Decimal,
     ) -> None:
         cycle = self.cycle_repo.get_by_customer_and_product(customer_id, product_id)
 
@@ -858,7 +913,9 @@ class SaleService:
     # Follow-up logic
     # ------------------------------------------------------------------
 
-    def get_follow_ups(self, filter_type: str = "all", limit: int = 10, offset: int = 0) -> tuple[list[FollowUpResponse], int]:
+    def get_follow_ups(
+        self, filter_type: str = "all", limit: int = 10, offset: int = 0
+    ) -> tuple[list[FollowUpResponse], int]:
         today = business_today()
         cycles = self.cycle_repo.get_all_for_follow_ups()
 
@@ -874,7 +931,11 @@ class SaleService:
             worst_days: Optional[int] = None
 
             for c in c_cycles:
-                days_until = (c.estimated_next_purchase - today).days if c.estimated_next_purchase else None
+                days_until = (
+                    (c.estimated_next_purchase - today).days
+                    if c.estimated_next_purchase
+                    else None
+                )
                 product = c.product
 
                 items.append(
@@ -892,7 +953,9 @@ class SaleService:
                     )
                 )
 
-                if days_until is not None and (worst_days is None or days_until < worst_days):
+                if days_until is not None and (
+                    worst_days is None or days_until < worst_days
+                ):
                     worst_days = days_until
 
             if worst_days is None:
@@ -932,11 +995,14 @@ class SaleService:
             )
 
         follow_ups.sort(
-            key=lambda f: min((i.days_until for i in f.items if i.days_until is not None), default=9999)
+            key=lambda f: min(
+                (i.days_until for i in f.items if i.days_until is not None),
+                default=9999,
+            )
         )
 
         total = len(follow_ups)
-        return follow_ups[offset:offset + limit], total
+        return follow_ups[offset : offset + limit], total
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
         today = business_today()
@@ -952,7 +1018,10 @@ class SaleService:
             if not c.estimated_next_purchase:
                 continue
             days = (c.estimated_next_purchase - today).days
-            if c.customer_id not in customer_worst or days < customer_worst[c.customer_id]:
+            if (
+                c.customer_id not in customer_worst
+                or days < customer_worst[c.customer_id]
+            ):
                 customer_worst[c.customer_id] = days
 
         # Los tres tiles de "proximos N dias" llevan cota inferior.  Sin ella
@@ -965,7 +1034,9 @@ class SaleService:
         next_14 = sum(1 for d in customer_worst.values() if 0 <= d <= 14)
         next_30 = sum(1 for d in customer_worst.values() if 0 <= d <= 30)
 
-        return FollowUpMetrics(overdue=overdue, next7Days=next_7, next14Days=next_14, next30Days=next_30)
+        return FollowUpMetrics(
+            overdue=overdue, next7Days=next_7, next14Days=next_14, next30Days=next_30
+        )
 
     # ------------------------------------------------------------------
     # Calendar logic
@@ -978,7 +1049,11 @@ class SaleService:
         all_events: list[CalendarEvent] = []
         for c in cycles:
             next_purchase = c.estimated_next_purchase
-            if not next_purchase or next_purchase < start_date or next_purchase > end_date:
+            if (
+                not next_purchase
+                or next_purchase < start_date
+                or next_purchase > end_date
+            ):
                 continue
 
             event_type = "overdue" if next_purchase < today else "upcoming"
@@ -1001,7 +1076,9 @@ class SaleService:
         current_date = start_date
         while current_date <= end_date:
             date_events_list.append(
-                CalendarDateEvents(date=current_date, events=events_by_date.get(current_date, []))
+                CalendarDateEvents(
+                    date=current_date, events=events_by_date.get(current_date, [])
+                )
             )
             current_date += timedelta(days=1)
 
@@ -1023,7 +1100,9 @@ class SaleService:
         end_date: Optional[date] = None,
         limit: int = 100,
     ) -> ProfitReportResponse:
-        sales = self.sale_repo.get_all(start_date=start_date, end_date=end_date, limit=10000, offset=0)
+        sales = self.sale_repo.get_all(
+            start_date=start_date, end_date=end_date, limit=10000, offset=0
+        )
 
         try:
             rows = build_profit_rows(sales, group_by=group_by)

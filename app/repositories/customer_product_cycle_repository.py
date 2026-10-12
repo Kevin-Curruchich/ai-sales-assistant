@@ -1,8 +1,9 @@
 import uuid
 from typing import Optional
-from datetime import date
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
+
 from app.models.customer_product_cycle import CustomerProductCycle
 
 

@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends
+
 from app.api.dependencies import CustomerServiceDep, SaleServiceDep, get_current_user
 from app.schemas.dashboard import DashboardSummary
 
@@ -18,7 +19,9 @@ def get_dashboard_summary(
     sales_this_month = sale_service.get_sales_this_month()
     follow_up_metrics = sale_service.get_follow_up_metrics()
     recent_sales = sale_service.get_all_enriched(limit=5, offset=0)
-    priority_customers, _ = sale_service.get_follow_ups(filter_type="7_days", limit=100, offset=0)
+    priority_customers, _ = sale_service.get_follow_ups(
+        filter_type="7_days", limit=100, offset=0
+    )
 
     return DashboardSummary(
         totalCustomers=total_customers,

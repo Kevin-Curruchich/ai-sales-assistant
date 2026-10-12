@@ -44,14 +44,14 @@ hace exactamente lo inverso, con el `USING` explicito en ambos sentidos aunque
 la tabla este vacia: escrito como si tuviera filas, porque en cuanto Task 8
 corra dejara de estarlo.
 """
+
 from typing import Sequence, Union
 
 from alembic import op
 
-
 # revision identifiers, used by Alembic.
-revision: str = '7c056dc387a2'
-down_revision: Union[str, None] = '559bd2d61ba6'
+revision: str = "7c056dc387a2"
+down_revision: Union[str, None] = "559bd2d61ba6"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -60,7 +60,9 @@ _VALUES = ("entrada", "salida", "aporte_socio", "retiro_socio", "saldo_inicial")
 
 
 def upgrade() -> None:
-    op.execute("ALTER TABLE cash_movements ALTER COLUMN type TYPE VARCHAR(20) USING type::text")
+    op.execute(
+        "ALTER TABLE cash_movements ALTER COLUMN type TYPE VARCHAR(20) USING type::text"
+    )
     values = ", ".join(f"'{v}'" for v in _VALUES)
     op.create_check_constraint(_CHECK_NAME, "cash_movements", f"type IN ({values})")
     op.execute("DROP TYPE cash_movement_type_enum")

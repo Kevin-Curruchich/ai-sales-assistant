@@ -1,10 +1,15 @@
 import uuid
-from typing import Optional
 from datetime import date
+from typing import Optional
+
 from fastapi import APIRouter, Depends, status
+
 from app.api.dependencies import CurrentUser, PurchaseServiceDep, get_current_user
 from app.schemas.purchase import (
-    PurchaseCreate, PurchaseUpdate, PurchaseResponse, PaginatedPurchaseResponse,
+    PaginatedPurchaseResponse,
+    PurchaseCreate,
+    PurchaseResponse,
+    PurchaseUpdate,
 )
 
 router = APIRouter(
@@ -47,12 +52,16 @@ def get_purchase(purchase_id: uuid.UUID, service: PurchaseServiceDep):
 
 
 @router.post("", response_model=PurchaseResponse, status_code=status.HTTP_201_CREATED)
-def create_purchase(data: PurchaseCreate, service: PurchaseServiceDep, current_user: CurrentUser):
+def create_purchase(
+    data: PurchaseCreate, service: PurchaseServiceDep, current_user: CurrentUser
+):
     return service.create(data, user_id=current_user.id)
 
 
 @router.put("/{purchase_id}", response_model=PurchaseResponse)
-def update_purchase(purchase_id: uuid.UUID, data: PurchaseUpdate, service: PurchaseServiceDep):
+def update_purchase(
+    purchase_id: uuid.UUID, data: PurchaseUpdate, service: PurchaseServiceDep
+):
     return service.update(purchase_id, data)
 
 

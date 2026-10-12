@@ -65,9 +65,13 @@ def _sale_tool_call(customer, product, *, call_id="call_1", cantidad="1"):
     }
 
 
-def test_the_graph_interrupts_before_writing(db_session, seeded_customer, seeded_product_with_lot, seeded_user):
+def test_the_graph_interrupts_before_writing(
+    db_session, seeded_customer, seeded_product_with_lot, seeded_user
+):
     """Con un modelo falso que pide registrar una venta, el grafo se detiene."""
-    model = FakeToolCallingModel(scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)])
+    model = FakeToolCallingModel(
+        scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)]
+    )
     graph = build_graph(model=model, checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "t1", "user_id": str(seeded_user.id)}}
 
@@ -80,7 +84,9 @@ def test_the_graph_interrupts_before_writing(db_session, seeded_customer, seeded
 def test_resuming_after_the_interrupt_continues_from_inside_the_tool(
     db_session, seeded_customer, seeded_product_with_lot, seeded_user
 ):
-    model = FakeToolCallingModel(scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)])
+    model = FakeToolCallingModel(
+        scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)]
+    )
     graph = build_graph(model=model, checkpointer=MemorySaver())
     config = {"configurable": {"thread_id": "t2", "user_id": str(seeded_user.id)}}
     graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
@@ -108,7 +114,11 @@ def test_the_checkpointer_never_targets_the_business_schema():
 
 
 def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_still_interrupted(
-    db_session, seeded_customer, seeded_product_with_lot, seeded_purchase_draft, seeded_user
+    db_session,
+    seeded_customer,
+    seeded_product_with_lot,
+    seeded_purchase_draft,
+    seeded_user,
 ):
     """Condicion de aceptacion bloqueante de Task 9 (no esta en el brief).
 
@@ -142,12 +152,19 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
                 },
                 "id": "call_caja",
             },
-            _sale_tool_call(seeded_customer, seeded_product_with_lot, call_id="call_venta", cantidad="2"),
+            _sale_tool_call(
+                seeded_customer,
+                seeded_product_with_lot,
+                call_id="call_venta",
+                cantidad="2",
+            ),
         ]
     )
     graph = build_graph(model=model, checkpointer=MemorySaver())
 
-    first = graph.invoke({"messages": [("user", "aporte del socio a la compra, y vendi 2")]}, config)
+    first = graph.invoke(
+        {"messages": [("user", "aporte del socio a la compra, y vendi 2")]}, config
+    )
     interrupts = first["__interrupt__"]
     assert len(interrupts) == 2
     by_tipo = {i.value["tipo"]: i for i in interrupts}
@@ -158,27 +175,41 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
         caja_interrupt.id: {"accion": "aprobar"},
         venta_interrupt.id: {
             "accion": "corregir",
-            "valores": {"items": [{"producto_id": str(seeded_product_with_lot.id), "cantidad": "1"}]},
+            "valores": {
+                "items": [
+                    {"producto_id": str(seeded_product_with_lot.id), "cantidad": "1"}
+                ]
+            },
         },
     }
     second = graph.invoke(Command(resume=resume_round_1), config)
 
     # La caja ya escribio -- exactamente una vez -- ANTES de que la venta
     # vuelva a pausarse.
-    assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
+    assert (
+        db_session.query(CashMovement)
+        .filter_by(purchase_id=seeded_purchase_draft.id)
+        .count()
+        == 1
+    )
 
     remaining_interrupts = second["__interrupt__"]
     assert len(remaining_interrupts) == 1
     assert remaining_interrupts[0].value["tipo"] == "confirmar_venta"
     nueva_huella = remaining_interrupts[0].value["huella"]
 
-    resume_round_2 = {remaining_interrupts[0].id: {"accion": "aprobar", "huella": nueva_huella}}
+    resume_round_2 = {
+        remaining_interrupts[0].id: {"accion": "aprobar", "huella": nueva_huella}
+    }
     final = graph.invoke(Command(resume=resume_round_2), config)
 
     assert "__interrupt__" not in final
     assert db_session.query(Sale).count() == 1
     # La asercion central: la caja sigue en UNO despues de que la venta,
     # hermana suya en el mismo mensaje del modelo, termino de reanudarse.
-    assert db_session.query(CashMovement).filter_by(purchase_id=seeded_purchase_draft.id).count() == 1
-
-
+    assert (
+        db_session.query(CashMovement)
+        .filter_by(purchase_id=seeded_purchase_draft.id)
+        .count()
+        == 1
+    )

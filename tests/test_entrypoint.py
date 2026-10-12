@@ -107,9 +107,7 @@ def _dockerignore_pattern_excludes(pattern: str, path: str) -> bool:
     parts = path.split("/")
     path_candidates = {path} | {"/".join(parts[i:]) for i in range(len(parts))}
 
-    return any(
-        fnmatch.fnmatch(p, c) for c in candidates for p in path_candidates
-    )
+    return any(fnmatch.fnmatch(p, c) for c in candidates for p in path_candidates)
 
 
 def test_dockerignore_does_not_exclude_migrations():

@@ -35,7 +35,9 @@ def test_create_rejects_an_invalid_email(client, seeded_user):
 
 def test_list_filters_by_search_and_reports_the_total(client, seeded_user):
     for name in ("Ana López", "Bruno Díaz", "Ana María"):
-        client.post("/api/v1/customers", json={"name": name}, headers=_auth(seeded_user))
+        client.post(
+            "/api/v1/customers", json={"name": name}, headers=_auth(seeded_user)
+        )
 
     resp = client.get("/api/v1/customers?search=ana", headers=_auth(seeded_user))
 

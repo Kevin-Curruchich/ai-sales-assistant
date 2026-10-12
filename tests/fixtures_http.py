@@ -39,7 +39,9 @@ class _ModeloQueNoLlamaANadie(BaseChatModel):
         return "sin-modelo"
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
-        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="listo"))])
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content="listo"))]
+        )
 
 
 @pytest.fixture
@@ -101,7 +103,9 @@ def client(db_session, monkeypatch):
         )
 
     if main.build_async_checkpointer is _build_checkpointer_real:
-        monkeypatch.setattr("app.main.build_async_checkpointer", _checkpointer_de_juguete)
+        monkeypatch.setattr(
+            "app.main.build_async_checkpointer", _checkpointer_de_juguete
+        )
     if main.build_graph is _build_graph_real:
         monkeypatch.setattr("app.main.build_graph", _grafo_de_juguete)
 

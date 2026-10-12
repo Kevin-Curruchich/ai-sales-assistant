@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, EmailStr
 
-
 # --- Request schemas ---
+
 
 class CustomerCreate(BaseModel):
     name: str
@@ -25,6 +26,7 @@ class CustomerUpdate(BaseModel):
 
 
 # --- Response schemas ---
+
 
 class CustomerResponse(BaseModel):
     id: uuid.UUID

@@ -34,8 +34,11 @@ build/
 .pytest_cache/
 .cache/
 
-# IDE specific files
-.vscode/
+# IDE specific files. De .vscode/ se versionan solo la configuracion del
+# proyecto (formato, interprete, tests) y las extensiones recomendadas.
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
 .idea/
 
 # Uvicorn reload artifacts

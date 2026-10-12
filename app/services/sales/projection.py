@@ -63,5 +63,7 @@ def project(
     # distintas, asi que todo intervalo es >= 1 y el EWMA de valores >= 1
     # tambien lo es. Un piso aqui seria una rama que ningun test puede alcanzar.
     estimate = ewma_interval(intervals).quantize(FOUR_PLACES, rounding=ROUND_HALF_UP)
-    next_date = dates[-1] + timedelta(days=int(estimate.to_integral_value(ROUND_HALF_UP)))
+    next_date = dates[-1] + timedelta(
+        days=int(estimate.to_integral_value(ROUND_HALF_UP))
+    )
     return estimate, next_date, METHOD_EWMA, confidence

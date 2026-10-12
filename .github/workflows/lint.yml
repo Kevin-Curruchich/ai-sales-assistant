@@ -1,0 +1,22 @@
+# Formato y lint en cada PR y en main. El hook de pre-commit se puede saltar
+# (`--no-verify`) o no estar instalado; esto no.
+name: Lint
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ruff:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Solo Ruff, a la version de requirements-dev.txt: no hace falta instalar
+      # el proyecto entero para revisar formato.
+      - run: pip install "$(grep '^ruff==' requirements-dev.txt)"
+      - run: ruff format --check .
+      - run: ruff check .

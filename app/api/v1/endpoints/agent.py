@@ -6,14 +6,14 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
-from langgraph.types import Command
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 from pydantic import BaseModel, model_validator
 from sqlalchemy.orm import Session
 
 from app.agent.historial import traducir_estado
 from app.agent.streaming import eventos_sse
-from app.api.dependencies import get_db, get_current_user
+from app.api.dependencies import get_current_user, get_db
 from app.models import User
 from app.schemas.agent import (
     AgentThreadCreate,
@@ -55,7 +55,9 @@ def list_threads(
     return service.list_for(current_user.id)
 
 
-@router.post("/threads", response_model=AgentThreadResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/threads", response_model=AgentThreadResponse, status_code=status.HTTP_201_CREATED
+)
 def create_thread(
     data: AgentThreadCreate,
     db: Session = Depends(get_db),
@@ -390,7 +392,9 @@ async def stream_agent(
     # cancelacion por desconexion), cuando esa tarea termina, se libera.
     tarea_del_pedido = asyncio.current_task()
     if tarea_del_pedido is not None:
-        tarea_del_pedido.add_done_callback(lambda _t: _hilos_en_curso.discard(thread_key))
+        tarea_del_pedido.add_done_callback(
+            lambda _t: _hilos_en_curso.discard(thread_key)
+        )
 
     # El config lo arma este endpoint, del lado del servidor, exclusivamente
     # con la identidad del token -- ver el docstring de arriba.
@@ -500,7 +504,10 @@ async def stream_agent(
         # mensaje. El costo es cosmetico (un titulo, no un dato de negocio)
         # y no tiene test dedicado.
         await run_in_threadpool(
-            service.rename_owned, thread.id, current_user.id, data.mensaje[:TITLE_MAX_LENGTH]
+            service.rename_owned,
+            thread.id,
+            current_user.id,
+            data.mensaje[:TITLE_MAX_LENGTH],
         )
 
     async def generar():

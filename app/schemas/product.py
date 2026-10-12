@@ -3,6 +3,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Optional
+
 from pydantic import BaseModel, model_validator
 
 
@@ -12,6 +13,7 @@ class EarningMode(str, Enum):
 
 
 # --- Request schemas ---
+
 
 class ProductCreate(BaseModel):
     sku: str
@@ -60,11 +62,12 @@ class ProductUpdate(BaseModel):
         return self
 
 
-
 # --- Response schemas ---
+
 
 class AvailableLotInfo(BaseModel):
     """First available FIFO lot for a product."""
+
     purchase_item_id: uuid.UUID
     purchase_id: uuid.UUID
     purchase_date: date
@@ -77,6 +80,7 @@ class AvailableLotInfo(BaseModel):
 
 class ProductForSaleResponse(BaseModel):
     """Product with first available lot (for sales view, no pagination)."""
+
     id: uuid.UUID
     sku: str
     name: str
@@ -93,6 +97,7 @@ class ProductForSaleResponse(BaseModel):
 
 class LotsAvailabilityResponse(BaseModel):
     """All available lots for a product (for detailed lot selection)."""
+
     product_id: uuid.UUID
     product_sku: str
     product_name: str

@@ -5,10 +5,9 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import create_engine, pool, text
 
+import app.models  # noqa: F401  — registra todas las tablas en Base.metadata
 from app.core.config import settings
 from app.core.database import Base
-
-import app.models  # noqa: F401  — registra todas las tablas en Base.metadata
 
 config = context.config
 if config.config_file_name is not None:
@@ -51,7 +50,10 @@ def _schema() -> str:
 
 
 def _guard_against_protected_schema(schema: str) -> None:
-    if schema == PROTECTED_SCHEMA and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1":
+    if (
+        schema == PROTECTED_SCHEMA
+        and os.environ.get(ALLOW_PROTECTED_SCHEMA_ENV_VAR) != "1"
+    ):
         raise RuntimeError(
             f"Alembic resolved the target schema to {schema!r}. That schema holds "
             "live production data and this project's plan forbids migrating it "

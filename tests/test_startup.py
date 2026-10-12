@@ -15,7 +15,9 @@ def test_startup_does_not_create_tables():
     en main.py. No es la garantia real -- ver test_lifespan_never_calls_create_all,
     que asegura el comportamiento sin importar por donde se lo invoque."""
     source = Path(main.__file__).read_text()
-    assert "create_all" not in source, "El arranque no debe crear tablas; eso es de Alembic"
+    assert "create_all" not in source, (
+        "El arranque no debe crear tablas; eso es de Alembic"
+    )
     assert "prepare_schema_bootstrap" not in source
     assert "ensure_schema_compatibility" not in source
 
@@ -26,11 +28,14 @@ def test_lifespan_never_calls_create_all(monkeypatch):
     no existe. Un grep de texto sobre main.py no detecta ninguna de esas rutas;
     parchear el metodo real si lo hace."""
     from fastapi.testclient import TestClient
+
     from app.core.database import Base
 
     calls = []
     monkeypatch.setattr(
-        Base.metadata, "create_all", lambda *args, **kwargs: calls.append((args, kwargs))
+        Base.metadata,
+        "create_all",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
     )
 
     with TestClient(main.app):
@@ -54,13 +59,17 @@ def _sin_construir_el_grafo(monkeypatch):
     de Postgres contra el puerto de los tests."""
 
     def _no(*_args, **_kwargs):
-        raise AssertionError("el lifespan construyo el grafo sin sus variables de entorno")
+        raise AssertionError(
+            "el lifespan construyo el grafo sin sus variables de entorno"
+        )
 
     monkeypatch.setattr("app.main.build_async_checkpointer", _no)
     monkeypatch.setattr("app.main.build_graph", _no)
 
 
-def test_a_missing_agent_env_var_leaves_the_agent_unavailable_instead_of_green(monkeypatch):
+def test_a_missing_agent_env_var_leaves_the_agent_unavailable_instead_of_green(
+    monkeypatch,
+):
     """Sin `ANTHROPIC_API_KEY`, `ChatAnthropic` se construye igual (la
     validacion es al llamar, no al instanciar): el grafo se armaba,
     `startup_issues` quedaba vacio, `/health` devolvia `ok`, el despliegue de

@@ -35,9 +35,9 @@ def test_overdue_customers_do_not_count_as_upcoming():
     metrics = service.get_follow_up_metrics()
 
     assert metrics.overdue == 1
-    assert metrics.next7Days == 1       # solo el de +3
-    assert metrics.next14Days == 2      # +3, +10
-    assert metrics.next30Days == 3      # +3, +10, +20
+    assert metrics.next7Days == 1  # solo el de +3
+    assert metrics.next14Days == 2  # +3, +10
+    assert metrics.next30Days == 3  # +3, +10, +20
 
 
 def test_when_everyone_is_overdue_the_upcoming_tiles_are_empty():

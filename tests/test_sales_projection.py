@@ -140,7 +140,7 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
     from sqlalchemy import create_engine, event
     from sqlalchemy.orm import sessionmaker
 
-    from app.models import Customer, CustomerProductCycle, Product, User
+    from app.models import Customer, CustomerProductCycle, Product
     from app.services.sales import SaleService
     from tests.conftest import TEST_DATABASE_URL
 
@@ -161,10 +161,14 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
         session.flush()
         session.add(
             CustomerProductCycle(
-                customer_id=customer.id, product_id=product.id,
-                avg_interval_days=None, estimated_next_purchase=None,
-                last_purchase_date=_date(2026, 8, 1), last_quantity=_Decimal("1"),
-                total_purchases=1, projection_method="ewma",
+                customer_id=customer.id,
+                product_id=product.id,
+                avg_interval_days=None,
+                estimated_next_purchase=None,
+                last_purchase_date=_date(2026, 8, 1),
+                last_quantity=_Decimal("1"),
+                total_purchases=1,
+                projection_method="ewma",
                 projection_confidence="insufficient",
             )
         )
@@ -173,7 +177,9 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
         follow_ups, total = SaleService(session).get_follow_ups(filter_type="all")
         nombres = [f.customer for f in follow_ups]
         assert "Cliente de una sola compra" in nombres
-        encontrado = next(f for f in follow_ups if f.customer == "Cliente de una sola compra")
+        encontrado = next(
+            f for f in follow_ups if f.customer == "Cliente de una sola compra"
+        )
         assert encontrado.status == "needs_estimate"
     finally:
         session.close()
@@ -193,7 +199,8 @@ def test_a_fractional_ewma_interval_flows_through_follow_ups_without_raising(
     orquestador, no solo instanciando el schema a mano.
     """
     import uuid as _uuid
-    from datetime import date as _date, timedelta as _timedelta
+    from datetime import date as _date
+    from datetime import timedelta as _timedelta
     from decimal import Decimal as _Decimal
 
     from sqlalchemy import create_engine, event
@@ -220,11 +227,14 @@ def test_a_fractional_ewma_interval_flows_through_follow_ups_without_raising(
         session.flush()
         session.add(
             CustomerProductCycle(
-                customer_id=customer.id, product_id=product.id,
+                customer_id=customer.id,
+                product_id=product.id,
                 avg_interval_days=_Decimal("19.3318"),
                 estimated_next_purchase=_date.today() + _timedelta(days=5),
-                last_purchase_date=_date(2026, 8, 1), last_quantity=_Decimal("1"),
-                total_purchases=5, projection_method="ewma",
+                last_purchase_date=_date(2026, 8, 1),
+                last_quantity=_Decimal("1"),
+                total_purchases=5,
+                projection_method="ewma",
                 projection_confidence="medium",
             )
         )

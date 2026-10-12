@@ -1,10 +1,11 @@
 import uuid
 from datetime import datetime
 from typing import Optional
+
 from pydantic import BaseModel, EmailStr
 
-
 # --- Response schemas ---
+
 
 class UserResponse(BaseModel):
     id: uuid.UUID
@@ -20,8 +21,10 @@ class UserResponse(BaseModel):
 
 # --- Request schemas ---
 
+
 class UserUpdateRole(BaseModel):
     """Only admins can change roles."""
+
     role: str  # "admin" | "manager" | "viewer"
 
 

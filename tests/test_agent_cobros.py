@@ -26,7 +26,9 @@ def _config(user):
     return {"configurable": {"user_id": str(user.id)}}
 
 
-def _create_sale(db_session, user, customer, product, *, pending, day=date(2026, 9, 24)):
+def _create_sale(
+    db_session, user, customer, product, *, pending, day=date(2026, 9, 24)
+):
     return SaleService(db_session).create(
         SaleCreate(
             customerId=customer.id,
@@ -40,12 +42,16 @@ def _create_sale(db_session, user, customer, product, *, pending, day=date(2026,
 
 @pytest.fixture
 def pending_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot):
-    return _create_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True)
+    return _create_sale(
+        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True
+    )
 
 
 @pytest.fixture
 def paid_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot):
-    return _create_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=False)
+    return _create_sale(
+        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=False
+    )
 
 
 # ---------------------------------------------------------------------
@@ -53,7 +59,9 @@ def paid_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot)
 # ---------------------------------------------------------------------
 
 
-def test_consultar_ventas_lists_only_pending_sales_when_asked(db_session, pending_sale, paid_sale):
+def test_consultar_ventas_lists_only_pending_sales_when_asked(
+    db_session, pending_sale, paid_sale
+):
     result = consultar_ventas.invoke({"estado_pago": "pendiente"})
 
     assert [v["id"] for v in result["ventas"]] == [str(pending_sale.id)]
@@ -70,8 +78,12 @@ def test_consultar_ventas_sums_every_match_not_only_the_page(
 ):
     """`monto_total` es lo que se debe en total, no lo que entro en la pagina:
     con `limite=1` el agente diria "te deben Q40" cuando son Q80."""
-    a = _create_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True)
-    b = _create_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True)
+    a = _create_sale(
+        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True
+    )
+    b = _create_sale(
+        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True
+    )
 
     result = consultar_ventas.invoke({"estado_pago": "pendiente", "limite": 1})
 
@@ -81,7 +93,9 @@ def test_consultar_ventas_sums_every_match_not_only_the_page(
     assert Decimal(result["monto_total"]) == a.total + b.total
 
 
-def test_consultar_ventas_reports_how_many_days_a_sale_has_been_owed(db_session, pending_sale):
+def test_consultar_ventas_reports_how_many_days_a_sale_has_been_owed(
+    db_session, pending_sale
+):
     hoy = datetime.now(business_tz()).date()
 
     venta = consultar_ventas.invoke({"estado_pago": "pendiente"})["ventas"][0]
@@ -97,11 +111,17 @@ def test_consultar_ventas_has_no_days_owed_for_a_paid_sale(db_session, paid_sale
 
 
 def test_consultar_ventas_filters_by_customer(
-    db_session, seeded_user, seeded_customer, two_similar_customers, seeded_product_with_lot
+    db_session,
+    seeded_user,
+    seeded_customer,
+    two_similar_customers,
+    seeded_product_with_lot,
 ):
     otro = two_similar_customers[0]
     _create_sale(db_session, seeded_user, otro, seeded_product_with_lot, pending=True)
-    mia = _create_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True)
+    mia = _create_sale(
+        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True
+    )
 
     result = consultar_ventas.invoke({"cliente_id": str(seeded_customer.id)})
 
@@ -112,10 +132,20 @@ def test_consultar_ventas_filters_by_date_range(
     db_session, seeded_user, seeded_customer, seeded_product_with_lot
 ):
     _create_sale(
-        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True, day=date(2026, 9, 10)
+        db_session,
+        seeded_user,
+        seeded_customer,
+        seeded_product_with_lot,
+        pending=True,
+        day=date(2026, 9, 10),
     )
     dentro = _create_sale(
-        db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True, day=date(2026, 9, 24)
+        db_session,
+        seeded_user,
+        seeded_customer,
+        seeded_product_with_lot,
+        pending=True,
+        day=date(2026, 9, 24),
     )
 
     result = consultar_ventas.invoke({"desde": "2026-09-20", "hasta": "2026-09-24"})
@@ -145,10 +175,16 @@ def test_consultar_ventas_writes_nothing(db_session, pending_sale):
 def test_an_approved_cobro_marks_the_sale_paid_and_records_the_cash_entry(
     db_session, pending_sale, seeded_user, monkeypatch
 ):
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
 
     result = registrar_cobro.invoke(
-        {"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30", "medio_pago": "transferencia"},
+        {
+            "venta_id": str(pending_sale.id),
+            "fecha_pago": "2026-09-30",
+            "medio_pago": "transferencia",
+        },
         config=_config(seeded_user),
     )
 
@@ -193,8 +229,12 @@ def test_the_confirmation_card_shows_what_is_being_collected(
     assert cobro["medio_pago"] == "efectivo"
 
 
-def test_a_cancelled_cobro_writes_nothing(db_session, pending_sale, seeded_user, monkeypatch):
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "cancelar"})
+def test_a_cancelled_cobro_writes_nothing(
+    db_session, pending_sale, seeded_user, monkeypatch
+):
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "cancelar"}
+    )
 
     result = registrar_cobro.invoke(
         {"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30"},
@@ -210,7 +250,9 @@ def test_a_cancelled_cobro_writes_nothing(db_session, pending_sale, seeded_user,
 def test_an_unrecognized_decision_on_a_cobro_writes_nothing(
     db_session, pending_sale, seeded_user, monkeypatch
 ):
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "quizas"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "quizas"}
+    )
 
     result = registrar_cobro.invoke(
         {"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30"},
@@ -227,7 +269,10 @@ def test_correcting_a_cobro_asks_again_with_the_new_values(
     payloads = []
     decisions = iter(
         [
-            {"accion": "corregir", "valores": {"fecha_pago": "2026-09-28", "medio_pago": "transferencia"}},
+            {
+                "accion": "corregir",
+                "valores": {"fecha_pago": "2026-09-28", "medio_pago": "transferencia"},
+            },
             {"accion": "aprobar"},
         ]
     )
@@ -295,10 +340,14 @@ def test_a_sale_paid_from_the_panel_while_waiting_for_approval_is_not_collected_
     )
 
     assert result["estado"] == "ya_pagada"
-    assert db_session.query(CashMovement).filter_by(sale_id=pending_sale.id).count() == 1
+    assert (
+        db_session.query(CashMovement).filter_by(sale_id=pending_sale.id).count() == 1
+    )
 
 
-def test_an_unknown_sale_is_reported_without_asking_for_approval(db_session, seeded_user, monkeypatch):
+def test_an_unknown_sale_is_reported_without_asking_for_approval(
+    db_session, seeded_user, monkeypatch
+):
     calls = {"n": 0}
 
     def spy(_p):
@@ -308,7 +357,10 @@ def test_an_unknown_sale_is_reported_without_asking_for_approval(db_session, see
     monkeypatch.setattr("app.agent.tools.write.interrupt", spy)
 
     result = registrar_cobro.invoke(
-        {"venta_id": "00000000-0000-0000-0000-000000000000", "fecha_pago": "2026-09-30"},
+        {
+            "venta_id": "00000000-0000-0000-0000-000000000000",
+            "fecha_pago": "2026-09-30",
+        },
         config=_config(seeded_user),
     )
 
@@ -316,7 +368,9 @@ def test_an_unknown_sale_is_reported_without_asking_for_approval(db_session, see
     assert calls["n"] == 0
 
 
-def test_registrar_cobro_authenticates_before_asking_for_approval(db_session, pending_sale, monkeypatch):
+def test_registrar_cobro_authenticates_before_asking_for_approval(
+    db_session, pending_sale, monkeypatch
+):
     calls = {"n": 0}
 
     def spy(_p):
@@ -326,7 +380,9 @@ def test_registrar_cobro_authenticates_before_asking_for_approval(db_session, pe
     monkeypatch.setattr("app.agent.tools.write.interrupt", spy)
 
     with pytest.raises(AgentAuthError):
-        registrar_cobro.invoke({"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30"})
+        registrar_cobro.invoke(
+            {"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30"}
+        )
 
     assert calls["n"] == 0
     db_session.refresh(pending_sale)
@@ -346,7 +402,11 @@ def test_an_invalid_payment_method_fails_before_asking_for_approval(
 
     with pytest.raises(ValueError):
         registrar_cobro.invoke(
-            {"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30", "medio_pago": "cheque"},
+            {
+                "venta_id": str(pending_sale.id),
+                "fecha_pago": "2026-09-30",
+                "medio_pago": "cheque",
+            },
             config=_config(seeded_user),
         )
 
@@ -365,7 +425,9 @@ def test_a_cobro_replayed_by_the_same_task_is_not_written_twice(
             "checkpoint_ns": f"tools:{pending_sale.id}",
         }
     }
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
     first = registrar_cobro.invoke(
         {"venta_id": str(pending_sale.id), "fecha_pago": "2026-09-30"}, config=config
     )
@@ -385,7 +447,9 @@ def test_a_cobro_replayed_by_the_same_task_is_not_written_twice(
     assert second["estado"] == "ya_registrado"
     assert second["venta_id"] == str(pending_sale.id)
     assert calls["n"] == 0
-    assert db_session.query(CashMovement).filter_by(sale_id=pending_sale.id).count() == 1
+    assert (
+        db_session.query(CashMovement).filter_by(sale_id=pending_sale.id).count() == 1
+    )
 
 
 def test_a_zero_total_sale_is_marked_paid_without_a_cash_entry(
@@ -398,16 +462,23 @@ def test_a_zero_total_sale_is_marked_paid_without_a_cash_entry(
             customerId=seeded_customer.id,
             date=date(2026, 9, 24),
             items=[
-                SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"), unitPrice=Decimal("0"))
+                SaleItemCreate(
+                    productId=seeded_product_with_lot.id,
+                    quantity=Decimal("1"),
+                    unitPrice=Decimal("0"),
+                )
             ],
             isPaymentPending=True,
         ),
         user_id=seeded_user.id,
     )
-    monkeypatch.setattr("app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"})
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
 
     result = registrar_cobro.invoke(
-        {"venta_id": str(sale.id), "fecha_pago": "2026-09-30"}, config=_config(seeded_user)
+        {"venta_id": str(sale.id), "fecha_pago": "2026-09-30"},
+        config=_config(seeded_user),
     )
 
     assert result["estado"] == "registrado"

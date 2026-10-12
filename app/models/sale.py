@@ -1,8 +1,10 @@
 import uuid
 from datetime import date, datetime
 from typing import Optional
+
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
 from app.core.database import Base
 from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
@@ -11,7 +13,10 @@ class Sale(Base):
     __tablename__ = "sales"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        Uuid, primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
+        Uuid,
+        primary_key=True,
+        default=uuid.uuid4,
+        server_default=func.gen_random_uuid(),
     )
     customer_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
@@ -21,7 +26,9 @@ class Sale(Base):
     )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     total: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False, default=0)
-    is_payment_pending: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    is_payment_pending: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     # Nullable a proposito: en los datos reales hay ventas pagadas sin fecha
     # registrada, y alguna con fecha anterior a la venta.  Sin CHECK.
     payment_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)

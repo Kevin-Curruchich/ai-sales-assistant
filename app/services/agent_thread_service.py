@@ -37,7 +37,9 @@ class AgentThreadService:
             raise HTTPException(status_code=404, detail="Hilo no encontrado")
         return thread
 
-    def rename_owned(self, thread_id: uuid.UUID, user_id: uuid.UUID, title: str) -> AgentThread:
+    def rename_owned(
+        self, thread_id: uuid.UUID, user_id: uuid.UUID, title: str
+    ) -> AgentThread:
         thread = self.get_owned(thread_id, user_id)
         self.repo.rename(thread.id, title)
         self.db.commit()

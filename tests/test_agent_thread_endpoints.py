@@ -64,17 +64,23 @@ def test_the_owner_can_rename_their_own_thread(client, seeded_user):
     assert resp.status_code == 200
     assert resp.json()["title"] == "nuevo titulo"
 
-    releido = client.get(f"/api/v1/agent/threads/{mio['id']}", headers=_auth(seeded_user))
+    releido = client.get(
+        f"/api/v1/agent/threads/{mio['id']}", headers=_auth(seeded_user)
+    )
     assert releido.json()["title"] == "nuevo titulo"
 
 
 def test_the_owner_can_delete_their_own_thread(client, seeded_user):
     mio = _create_thread_as(client, seeded_user, "mio")
 
-    resp = client.delete(f"/api/v1/agent/threads/{mio['id']}", headers=_auth(seeded_user))
+    resp = client.delete(
+        f"/api/v1/agent/threads/{mio['id']}", headers=_auth(seeded_user)
+    )
     assert resp.status_code == 204
 
-    releido = client.get(f"/api/v1/agent/threads/{mio['id']}", headers=_auth(seeded_user))
+    releido = client.get(
+        f"/api/v1/agent/threads/{mio['id']}", headers=_auth(seeded_user)
+    )
     assert releido.status_code == 404
 
 
@@ -86,9 +92,13 @@ def test_deleting_another_users_thread_answers_404_and_leaves_it_intact(
     contesta 404."""
     ajeno = _create_thread_as(client, second_user, "del otro")
 
-    resp = client.delete(f"/api/v1/agent/threads/{ajeno['id']}", headers=_auth(seeded_user))
+    resp = client.delete(
+        f"/api/v1/agent/threads/{ajeno['id']}", headers=_auth(seeded_user)
+    )
     assert resp.status_code == 404
 
-    todavia_ahi = client.get(f"/api/v1/agent/threads/{ajeno['id']}", headers=_auth(second_user))
+    todavia_ahi = client.get(
+        f"/api/v1/agent/threads/{ajeno['id']}", headers=_auth(second_user)
+    )
     assert todavia_ahi.status_code == 200
     assert todavia_ahi.json()["id"] == ajeno["id"]
