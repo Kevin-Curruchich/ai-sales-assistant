@@ -42,10 +42,28 @@ def _cycle(days_until):
     )
 
 
+def _follow_up(days_until):
+    c = _cycle(days_until)
+    return SimpleNamespace(
+        id=uuid.uuid4(),
+        customer_id=c.customer_id,
+        product_id=c.product_id,
+        customer=c.customer,
+        product=c.product,
+        due_date=c.estimated_next_purchase,
+    )
+
+
+def _service_with(follow_ups):
+    service = SaleService(db=None)
+    service.follow_up_repo.get_open_with_relations = lambda: follow_ups
+    service.cycle_repo.get_all_for_follow_ups = lambda: []
+    return service
+
+
 def test_follow_ups_count_days_from_the_business_day(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "business_today", lambda: HOY)
-    service = SaleService(db=None)
-    service.cycle_repo.get_all_for_follow_ups = lambda: [_cycle(3)]
+    service = _service_with([_follow_up(3)])
 
     follow_ups, _total = service.get_follow_ups()
 
@@ -55,8 +73,7 @@ def test_follow_ups_count_days_from_the_business_day(monkeypatch):
 
 def test_follow_up_metrics_count_days_from_the_business_day(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "business_today", lambda: HOY)
-    service = SaleService(db=None)
-    service.cycle_repo.get_all_with_estimation = lambda: [_cycle(3)]
+    service = _service_with([_follow_up(3)])
 
     metrics = service.get_follow_up_metrics()
 
@@ -65,8 +82,7 @@ def test_follow_up_metrics_count_days_from_the_business_day(monkeypatch):
 
 def test_calendar_marks_overdue_against_the_business_day(monkeypatch):
     monkeypatch.setattr(orchestrator_module, "business_today", lambda: HOY)
-    service = SaleService(db=None)
-    service.cycle_repo.get_all_with_estimation = lambda: [_cycle(-1), _cycle(0)]
+    service = _service_with([_follow_up(-1), _follow_up(0)])
 
     calendar = service.get_calendar_events(
         HOY - timedelta(days=5), HOY + timedelta(days=5)

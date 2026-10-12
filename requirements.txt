@@ -91,6 +91,7 @@ psycopg-binary==3.2.13
 psycopg-pool==3.2.8
 pydantic-settings==2.9.1
 firebase-admin==6.7.0
+google-auth==2.60.0
 email-validator==2.3.0
 alembic==1.14.0
 Mako==1.4.1

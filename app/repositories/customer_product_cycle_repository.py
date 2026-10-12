@@ -58,13 +58,18 @@ class CustomerProductCycleRepository:
         )
         return list(self.db.execute(stmt).unique().scalars().all())
 
+    # No commitean: el unico que escribe ciclos es `SaleService._update_cycle`,
+    # dentro de la transaccion de la venta (mismo patron que
+    # `SaleRepository.create`). Un commit aqui guardaba la venta, la caja y el
+    # stock antes de escribir los seguimientos. `flush` porque las sesiones
+    # tienen autoflush apagado y la venta vuelve a leer el ciclo.
     def create(self, cycle: CustomerProductCycle) -> CustomerProductCycle:
         self.db.add(cycle)
-        self.db.commit()
+        self.db.flush()
         self.db.refresh(cycle)
         return cycle
 
     def update(self, cycle: CustomerProductCycle) -> CustomerProductCycle:
-        self.db.commit()
+        self.db.flush()
         self.db.refresh(cycle)
         return cycle

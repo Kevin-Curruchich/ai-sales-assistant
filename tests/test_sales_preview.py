@@ -57,6 +57,11 @@ def _service(lots, product):
     # pendiente. db=None es deliberado en este test (aisla el calculo FIFO),
     # asi que el colaborador nuevo se stubea igual que los repos de arriba.
     service.cash_service.record = lambda **kwargs: None
+    # Seguimientos: create() consulta el ciclo y registra la compra del par.
+    service.cycle_repo.get_by_customer_and_product = lambda *a: SimpleNamespace(
+        last_purchase_date=None, estimated_next_purchase=None
+    )
+    service.follow_up_service.record_purchase = lambda *a, **kw: None
     service.db = SimpleNamespace(commit=lambda: None, refresh=lambda *_: None)
     return service
 

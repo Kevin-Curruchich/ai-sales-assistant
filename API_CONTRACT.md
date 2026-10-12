@@ -226,12 +226,12 @@ When a sale is created the backend automatically:
 
 ## 6. Follow-up Module
 
-Follow-ups are computed from `CustomerProductCycle` records. Each follow-up groups all tracked products for a given customer.
+Follow-ups are stored rows (`follow_ups`), one per customer + product, opened from the purchase projection and closed by a newer sale of that product or by hand (postpone / dismiss). Lists only show **open** follow-ups, grouped by customer. Customers with no projection at all appear as `needs_estimate` in the `all` filter only.
 
 ### `GET /follow-ups`
 
-- **Query Params:** `filter` (enum: `all` | `overdue` | `7_days` | `14_days` | `30_days`, default: `all`)
-- **Response:** `FollowUp[]`
+- **Query Params:** `filter` (enum: `all` | `overdue` | `7_days` | `14_days` | `30_days`, default: `all`), `limit` (default: `10`), `offset` (default: `0`)
+- **Response:** `{ "data": FollowUp[], "meta": { "total": number } }` — `total` counts every match of the filter, not just this page.
 
 ### `GET /follow-ups/metrics`
 
@@ -246,6 +246,17 @@ Counts for metric cards.
     "next30Days": 0
   }
   ```
+
+### `POST /follow-ups/{id}/postpone`
+
+- **Body:** `{ "date": "YYYY-MM-DD" }` — must be after today (business timezone).
+- **Response 200:** `{ "id", "customer_id", "product_id", "due_date", "status": "open" }` — the new follow-up.
+- **Errors:** `404` unknown id · `409` already closed · `422` date not in the future.
+
+### `POST /follow-ups/{id}/dismiss`
+
+- Closes the follow-up; no new one opens until the next sale of that product.
+- **Response:** `204`. **Errors:** `404` unknown id · `409` already closed.
 
 ---
 
@@ -367,9 +378,11 @@ Counts for metric cards.
   "customer_id": "uuid",
   "customer": "string",
   "email": "string | null",
-  "status": "overdue | urgent | upcoming | normal",
+  "status": "overdue | urgent | upcoming | normal | needs_estimate",
   "items": [
     {
+      "follow_up_id": "uuid | null",
+      "due_date": "YYYY-MM-DD | null",
       "product_id": "uuid",
       "product_name": "string",
       "avg_interval_days": 30,
@@ -384,6 +397,9 @@ Counts for metric cards.
   ]
 }
 ```
+
+- `follow_up_id` (UUID | null) — null only for `needs_estimate`.
+- `due_date` (YYYY-MM-DD | null) — show this as "Próxima compra".
 
 ### FollowUpMetrics
 ```json
@@ -403,6 +419,7 @@ Counts for metric cards.
   "customer": "string",
   "productId": "uuid",
   "productName": "string",
+  "followUpId": "uuid",
   "type": "overdue | upcoming"
 }
 ```

@@ -66,6 +66,10 @@ class Settings(BaseSettings):
         None  # Path to the firebase-adminsdk.json file
     )
 
+    # Calendario del negocio donde se reflejan los seguimientos abiertos. Sin
+    # el, el espejo no arranca y los seguimientos se quedan `pending` en la base.
+    GOOGLE_CALENDAR_ID: Optional[str] = None
+
     # Zona del negocio.  Los reportes agrupan por dia de negocio y las fechas se
     # muestran en esta zona para todo el mundo: una venta ocurrio en Guatemala,
     # y verla como otro dia desde otra zona rompe el vinculo con el hecho real.
