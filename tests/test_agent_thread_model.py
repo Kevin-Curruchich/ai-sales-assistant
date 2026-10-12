@@ -58,3 +58,21 @@ def test_rename_without_commit_leaves_the_row_rollbackable(db_session, seeded_us
     db_session.rollback()
 
     assert repo.get(thread.id).title == "titulo original"
+
+
+def test_listing_puts_the_newest_thread_first(db_session, seeded_user):
+    """`created_at` sale de now(), que es la hora de inicio de la transaccion:
+    dentro del test todos empatan, asi que se fija a mano."""
+    from datetime import datetime, timedelta, timezone
+
+    repo = AgentThreadRepository(db_session)
+    viejo = repo.create(owner_id=seeded_user.id, title="viejo")
+    nuevo = repo.create(owner_id=seeded_user.id, title="nuevo")
+    ahora = datetime.now(timezone.utc)
+    viejo.created_at = ahora - timedelta(days=1)
+    nuevo.created_at = ahora
+    db_session.flush()
+
+    listados = repo.list_for_owner(seeded_user.id)
+
+    assert [t.id for t in listados] == [nuevo.id, viejo.id]

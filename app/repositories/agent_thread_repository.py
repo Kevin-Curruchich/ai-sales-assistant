@@ -25,7 +25,7 @@ class AgentThreadRepository:
         stmt = (
             select(AgentThread)
             .where(AgentThread.owner_id == owner_id)
-            .order_by(AgentThread.created_at, AgentThread.id)
+            .order_by(AgentThread.created_at.desc(), AgentThread.id.desc())
         )
         return list(self.db.execute(stmt).scalars().all())
 
