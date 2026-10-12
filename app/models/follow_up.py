@@ -71,10 +71,10 @@ class FollowUp(Base):
         server_default=func.gen_random_uuid(),
     )
     customer_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("customers.id"), nullable=False, index=True
+        ForeignKey("customers.id", ondelete="CASCADE"), nullable=False, index=True
     )
     product_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("products.id"), nullable=False, index=True
+        ForeignKey("products.id", ondelete="CASCADE"), nullable=False, index=True
     )
     due_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default=OPEN)

@@ -67,11 +67,13 @@ def upgrade() -> None:
             ["customer_id"],
             ["customers.id"],
             name=op.f("fk_follow_ups_customer_id_customers"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["product_id"],
             ["products.id"],
             name=op.f("fk_follow_ups_product_id_products"),
+            ondelete="CASCADE",
         ),
         sa.ForeignKeyConstraint(
             ["sale_id"],

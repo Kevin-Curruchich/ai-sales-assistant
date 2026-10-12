@@ -308,3 +308,16 @@ def test_a_backdated_sale_after_a_dismiss_opens_nothing(
     )
 
     assert _open(db_session, seeded_customer, seeded_product_with_lot) == []
+
+
+def test_deleting_a_customer_deletes_their_follow_ups(
+    db_session, seeded_customer, seeded_product_with_lot, two_sales
+):
+    from app.services.customer_service import CustomerService
+
+    customer_id = seeded_customer.id
+    assert len(_open(db_session, seeded_customer, seeded_product_with_lot)) == 1
+
+    CustomerService(db_session).delete(customer_id)
+
+    assert db_session.query(FollowUp).filter_by(customer_id=customer_id).count() == 0
