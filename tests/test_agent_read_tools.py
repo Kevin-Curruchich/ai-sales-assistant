@@ -16,6 +16,7 @@ from app.core.datetime_utils import business_today, business_tz
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.customer import Customer
 from app.models.customer_product_cycle import CustomerProductCycle
+from app.models.follow_up import FollowUp
 from app.models.sale import Sale
 
 # Los movimientos de caja se siembran con la misma zona con la que produccion
@@ -187,7 +188,16 @@ def test_consultar_seguimiento_reports_real_status_and_days_until(
         last_quantity=Decimal("1"),
         total_purchases=2,
     )
-    db_session.add_all([urgente, vencido])
+    seguimientos = [
+        FollowUp(
+            customer_id=c.customer_id,
+            product_id=c.product_id,
+            due_date=c.estimated_next_purchase,
+            status="open",
+        )
+        for c in (urgente, vencido)
+    ]
+    db_session.add_all([urgente, vencido, *seguimientos])
     db_session.commit()
 
     todos = consultar_seguimiento.invoke({})

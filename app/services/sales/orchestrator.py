@@ -942,54 +942,78 @@ class SaleService:
     # Follow-up logic
     # ------------------------------------------------------------------
 
+    def _follow_up_item(
+        self,
+        product_id: uuid.UUID,
+        product,
+        cycle: Optional[CustomerProductCycle],
+        today: date,
+        follow_up=None,
+    ) -> FollowUpItemResponse:
+        due = follow_up.due_date if follow_up is not None else None
+        return FollowUpItemResponse(
+            follow_up_id=follow_up.id if follow_up is not None else None,
+            due_date=due,
+            product_id=product_id,
+            product_name=product.name,
+            avg_interval_days=cycle.avg_interval_days if cycle else None,
+            last_purchase_date=cycle.last_purchase_date if cycle else None,
+            last_quantity=cycle.last_quantity if cycle else Decimal("0"),
+            estimated_next_purchase=cycle.estimated_next_purchase if cycle else None,
+            days_until=(due - today).days if due is not None else None,
+            current_stock=product.stock,
+            min_stock=product.min_stock,
+            stock_alert=product.stock <= product.min_stock,
+        )
+
     def get_follow_ups(
         self, filter_type: str = "all", limit: int = 10, offset: int = 0
     ) -> tuple[list[FollowUpResponse], int]:
         today = business_today()
         cycles = self.cycle_repo.get_all_for_follow_ups()
+        cycle_by_pair = {(c.customer_id, c.product_id): c for c in cycles}
 
-        customer_cycles: dict[uuid.UUID, list[CustomerProductCycle]] = {}
-        for c in cycles:
-            customer_cycles.setdefault(c.customer_id, []).append(c)
+        customers: dict[uuid.UUID, object] = {}
+        items_by_customer: dict[uuid.UUID, list[FollowUpItemResponse]] = {}
+
+        # Lo pendiente son los seguimientos abiertos: uno cerrado por venta,
+        # pospuesto o descartado ya no cuenta.
+        for fu in self.follow_up_repo.get_open_with_relations():
+            customers[fu.customer_id] = fu.customer
+            items_by_customer.setdefault(fu.customer_id, []).append(
+                self._follow_up_item(
+                    fu.product_id,
+                    fu.product,
+                    cycle_by_pair.get((fu.customer_id, fu.product_id)),
+                    today,
+                    follow_up=fu,
+                )
+            )
+
+        # `needs_estimate`: clientes sin ninguna proyeccion. Un cliente con
+        # proyeccion pero sin seguimiento abierto (descartado) no es eso: no
+        # hay nada pendiente con el, y no debe reaparecer.
+        if filter_type == "all":
+            cycles_by_customer: dict[uuid.UUID, list[CustomerProductCycle]] = {}
+            for c in cycles:
+                cycles_by_customer.setdefault(c.customer_id, []).append(c)
+            for customer_id, c_cycles in cycles_by_customer.items():
+                if customer_id in items_by_customer:
+                    continue
+                if any(c.estimated_next_purchase for c in c_cycles):
+                    continue
+                customers[customer_id] = c_cycles[0].customer
+                items_by_customer[customer_id] = [
+                    self._follow_up_item(c.product_id, c.product, c, today)
+                    for c in c_cycles
+                ]
 
         follow_ups: list[FollowUpResponse] = []
-
-        for customer_id, c_cycles in customer_cycles.items():
-            customer = c_cycles[0].customer
-            items: list[FollowUpItemResponse] = []
-            worst_days: Optional[int] = None
-
-            for c in c_cycles:
-                days_until = (
-                    (c.estimated_next_purchase - today).days
-                    if c.estimated_next_purchase
-                    else None
-                )
-                product = c.product
-
-                items.append(
-                    FollowUpItemResponse(
-                        product_id=c.product_id,
-                        product_name=product.name,
-                        avg_interval_days=c.avg_interval_days,
-                        last_purchase_date=c.last_purchase_date,
-                        last_quantity=c.last_quantity,
-                        estimated_next_purchase=c.estimated_next_purchase,
-                        days_until=days_until,
-                        current_stock=product.stock,
-                        min_stock=product.min_stock,
-                        stock_alert=product.stock <= product.min_stock,
-                    )
-                )
-
-                if days_until is not None and (
-                    worst_days is None or days_until < worst_days
-                ):
-                    worst_days = days_until
+        for customer_id, items in items_by_customer.items():
+            days = [i.days_until for i in items if i.days_until is not None]
+            worst_days = min(days) if days else None
 
             if worst_days is None:
-                # Ningun producto de este cliente tiene proyeccion: hace falta un
-                # estimado inicial. Antes se descartaba en silencio.
                 fu_status = "needs_estimate"
             elif worst_days < 0:
                 fu_status = "overdue"
@@ -1002,7 +1026,6 @@ class SaleService:
 
             if filter_type != "all" and fu_status == "needs_estimate":
                 continue
-
             if filter_type == "overdue" and fu_status != "overdue":
                 continue
             if filter_type == "7_days" and worst_days > 7:
@@ -1013,6 +1036,7 @@ class SaleService:
                 continue
 
             items.sort(key=lambda i: i.days_until if i.days_until is not None else 9999)
+            customer = customers[customer_id]
             follow_ups.append(
                 FollowUpResponse(
                     customer_id=customer_id,
@@ -1035,23 +1059,18 @@ class SaleService:
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
         today = business_today()
-        # Deliberately get_all_with_estimation(), not get_all_for_follow_ups():
-        # all four tiles below are defined by days_until, which a
-        # needs_estimate customer (no estimated_next_purchase) does not have.
-        # Including them would mean inventing the number this branch exists
-        # to stop inventing, not an inconsistency to "fix".
-        cycles = self.cycle_repo.get_all_with_estimation()
+        # Los tiles se definen por days_until de seguimientos abiertos; los
+        # clientes `needs_estimate` no tienen seguimiento, asi que no cuentan.
+        open_follow_ups = self.follow_up_repo.get_open_with_relations()
 
         customer_worst: dict[uuid.UUID, int] = {}
-        for c in cycles:
-            if not c.estimated_next_purchase:
-                continue
-            days = (c.estimated_next_purchase - today).days
+        for fu in open_follow_ups:
+            days = (fu.due_date - today).days
             if (
-                c.customer_id not in customer_worst
-                or days < customer_worst[c.customer_id]
+                fu.customer_id not in customer_worst
+                or days < customer_worst[fu.customer_id]
             ):
-                customer_worst[c.customer_id] = days
+                customer_worst[fu.customer_id] = days
 
         # Los tres tiles de "proximos N dias" llevan cota inferior.  Sin ella
         # un cliente vencido hace 40 dias contaba en los tres, y con todos los
@@ -1073,27 +1092,19 @@ class SaleService:
 
     def get_calendar_events(self, start_date: date, end_date: date) -> CalendarResponse:
         today = business_today()
-        cycles = self.cycle_repo.get_all_with_estimation()
-
         all_events: list[CalendarEvent] = []
-        for c in cycles:
-            next_purchase = c.estimated_next_purchase
-            if (
-                not next_purchase
-                or next_purchase < start_date
-                or next_purchase > end_date
-            ):
+        for fu in self.follow_up_repo.get_open_with_relations():
+            if fu.due_date < start_date or fu.due_date > end_date:
                 continue
-
-            event_type = "overdue" if next_purchase < today else "upcoming"
             all_events.append(
                 CalendarEvent(
-                    date=next_purchase,
-                    customerId=c.customer_id,
-                    customer=c.customer.name,
-                    productId=c.product_id,
-                    productName=c.product.name,
-                    type=event_type,
+                    date=fu.due_date,
+                    followUpId=fu.id,
+                    customerId=fu.customer_id,
+                    customer=fu.customer.name,
+                    productId=fu.product_id,
+                    productName=fu.product.name,
+                    type="overdue" if fu.due_date < today else "upcoming",
                 )
             )
 

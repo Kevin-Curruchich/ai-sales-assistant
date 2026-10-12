@@ -238,6 +238,16 @@ def test_a_fractional_ewma_interval_flows_through_follow_ups_without_raising(
                 projection_confidence="medium",
             )
         )
+        from app.models.follow_up import FollowUp
+
+        session.add(
+            FollowUp(
+                customer_id=customer.id,
+                product_id=product.id,
+                due_date=_date.today() + _timedelta(days=5),
+                status="open",
+            )
+        )
         session.commit()
 
         # No debe levantar pydantic.ValidationError.

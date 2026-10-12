@@ -19,13 +19,13 @@ def _cycle(days_until):
     return SimpleNamespace(
         customer_id=uuid.uuid4(),
         product_id=uuid.uuid4(),
-        estimated_next_purchase=business_today() + timedelta(days=days_until),
+        due_date=business_today() + timedelta(days=days_until),
     )
 
 
 def _service(cycles):
     service = SaleService(db=None)
-    service.cycle_repo.get_all_with_estimation = lambda: cycles
+    service.follow_up_repo.get_open_with_relations = lambda: cycles
     return service
 
 

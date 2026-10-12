@@ -204,6 +204,11 @@ class SaleResponse(BaseModel):
 class FollowUpItemResponse(BaseModel):
     """A single product that a customer is expected to need."""
 
+    # Null solo para clientes `needs_estimate`, que no tienen seguimiento.
+    follow_up_id: Optional[uuid.UUID] = None
+    # Fecha del seguimiento: la proyeccion al abrirse o la elegida al posponer.
+    # Es la que debe mostrarse como "Proxima compra".
+    due_date: Optional[date] = None
     product_id: uuid.UUID
     product_name: str
     avg_interval_days: Optional[Decimal] = None
@@ -245,6 +250,7 @@ class FollowUpMetrics(BaseModel):
 
 class CalendarEvent(BaseModel):
     date: date
+    followUpId: uuid.UUID
     customerId: uuid.UUID
     customer: str
     productId: uuid.UUID
