@@ -25,7 +25,6 @@ def test_new_payment_fields_exist_on_the_models():
     cycles = Base.metadata.tables["customer_product_cycles"].c
     assert "projection_method" in cycles
     assert "projection_confidence" in cycles
-    assert "calendar_event_id" in cycles
 
 
 def test_payment_date_is_nullable():

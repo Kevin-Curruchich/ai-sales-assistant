@@ -26,6 +26,7 @@ TABLE_ORDER = [
     "sale_items",
     "sale_item_lot_allocations",
     "customer_product_cycles",
+    "follow_ups",
 ]
 
 # Tablas que existen en el schema migrado pero que esta copia deliberadamente
