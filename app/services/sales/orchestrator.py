@@ -272,6 +272,7 @@ class SaleService:
                         SaleItemLotAllocationResponse(
                             id=alloc.id,
                             purchase_item_id=alloc.purchase_item_id,
+                            purchase_id=alloc.purchase_item.purchase_id,
                             quantity_allocated=alloc.quantity_allocated,
                             unit_cost_snapshot=self._money(alloc.unit_cost_snapshot),
                             lot_purchase_date=alloc.lot_purchase_date,

@@ -146,3 +146,18 @@ class PurchaseRepository:
         if lock_for_update:
             stmt = stmt.with_for_update(of=PurchaseItem)
         return list(self.db.execute(stmt).scalars().all())
+
+    def get_sold_out_lots(
+        self, product_id: uuid.UUID, limit: int = 20
+    ) -> list[PurchaseItem]:
+        stmt = (
+            select(PurchaseItem)
+            .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
+            .options(selectinload(PurchaseItem.purchase))
+            .where(Purchase.status == "confirmed")
+            .where(PurchaseItem.product_id == product_id)
+            .where(PurchaseItem.remaining_quantity <= 0)
+            .order_by(Purchase.date.desc(), PurchaseItem.created_at.desc())
+            .limit(limit)
+        )
+        return list(self.db.execute(stmt).scalars().all())

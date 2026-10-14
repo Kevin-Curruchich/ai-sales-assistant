@@ -139,6 +139,7 @@ class SalePreviewResponse(BaseModel):
 class SaleItemLotAllocationResponse(BaseModel):
     id: uuid.UUID
     purchase_item_id: uuid.UUID
+    purchase_id: uuid.UUID
     quantity_allocated: Decimal
     unit_cost_snapshot: Decimal
     lot_purchase_date: date
