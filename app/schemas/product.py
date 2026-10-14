@@ -78,6 +78,16 @@ class AvailableLotInfo(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SoldOutLotInfo(BaseModel):
+    """A confirmed lot with nothing left: product history, not for sale."""
+
+    purchase_item_id: uuid.UUID
+    purchase_id: uuid.UUID
+    purchase_date: date
+    quantity: Decimal
+    unit_cost: Decimal
+
+
 class ProductForSaleResponse(BaseModel):
     """Product with first available lot (for sales view, no pagination)."""
 
@@ -106,6 +116,7 @@ class LotsAvailabilityResponse(BaseModel):
     earning_percent: Optional[Decimal] = None
     earning_fee_amount: Optional[Decimal] = None
     lots: list[AvailableLotInfo]
+    sold_out_lots: list[SoldOutLotInfo] = []
 
     model_config = {"from_attributes": True}
 

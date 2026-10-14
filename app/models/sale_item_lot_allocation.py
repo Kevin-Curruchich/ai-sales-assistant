@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.purchase import PurchaseItem
     from app.models.sale_item import SaleItem
 
 
@@ -38,6 +39,10 @@ class SaleItemLotAllocation(Base):
     # Relationships
     sale_item: Mapped["SaleItem"] = relationship(
         "SaleItem", back_populates="allocations"
+    )
+    # selectin: la respuesta de cada venta lee purchase_id de todos sus lotes.
+    purchase_item: Mapped["PurchaseItem"] = relationship(
+        "PurchaseItem", lazy="selectin", viewonly=True
     )
 
     def __repr__(self) -> str:

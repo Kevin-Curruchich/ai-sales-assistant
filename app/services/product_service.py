@@ -18,6 +18,7 @@ from app.schemas.product import (
     ProductCreate,
     ProductForSaleResponse,
     ProductUpdate,
+    SoldOutLotInfo,
 )
 
 
@@ -143,6 +144,18 @@ class ProductService:
             earning_percent=product.earning_percent,
             earning_fee_amount=product.earning_fee_amount,
             lots=lot_infos,
+            sold_out_lots=[
+                SoldOutLotInfo(
+                    purchase_item_id=lot.id,
+                    purchase_id=lot.purchase_id,
+                    purchase_date=lot.purchase.date,
+                    quantity=self._format_stock(lot.quantity),
+                    unit_cost=Decimal(str(lot.unit_cost)).quantize(
+                        self._MONEY, rounding=ROUND_HALF_UP
+                    ),
+                )
+                for lot in self.purchase_repo.get_sold_out_lots(product_id)
+            ],
         )
 
     def __init__(self, db: Session):
