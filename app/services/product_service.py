@@ -14,6 +14,9 @@ from app.repositories.product_repository import ProductRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.schemas.product import (
     AvailableLotInfo,
+    CapitalReportResponse,
+    CapitalReportRow,
+    CapitalReportTotals,
     LotsAvailabilityResponse,
     ProductCreate,
     ProductForSaleResponse,
@@ -85,6 +88,30 @@ class ProductService:
             )
 
         return result
+
+    def get_capital_report(self) -> CapitalReportResponse:
+        inventory = self.repo.inventory_value_by_product()
+        receivable = self.repo.receivable_by_product()
+        zero = Decimal("0")
+        rows = [
+            CapitalReportRow(
+                product_id=p.id,
+                product_name=p.name,
+                product_sku=p.sku,
+                stock=self._format_stock(p.stock),
+                inventory_value=self._format_stock(inventory.get(p.id, zero)),
+                receivable=self._format_stock(receivable.get(p.id, zero)),
+            )
+            for p in self.repo.get_by_ids(set(inventory) | set(receivable))
+        ]
+        rows.sort(key=lambda r: r.inventory_value + r.receivable, reverse=True)
+        return CapitalReportResponse(
+            data=rows,
+            totals=CapitalReportTotals(
+                inventory_value=sum((r.inventory_value for r in rows), zero),
+                receivable=sum((r.receivable for r in rows), zero),
+            ),
+        )
 
     def get_lots_availability(
         self, product_id: uuid.UUID, as_of_date: Optional[date] = None

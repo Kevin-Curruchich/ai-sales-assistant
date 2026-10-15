@@ -88,6 +88,27 @@ class SoldOutLotInfo(BaseModel):
     unit_cost: Decimal
 
 
+class CapitalReportRow(BaseModel):
+    product_id: uuid.UUID
+    product_name: str
+    product_sku: str
+    stock: Decimal
+    inventory_value: Decimal
+    receivable: Decimal
+
+
+class CapitalReportTotals(BaseModel):
+    inventory_value: Decimal
+    receivable: Decimal
+
+
+class CapitalReportResponse(BaseModel):
+    """Money tied up per product: stock at lot cost and unpaid sales."""
+
+    data: list[CapitalReportRow]
+    totals: CapitalReportTotals
+
+
 class ProductForSaleResponse(BaseModel):
     """Product with first available lot (for sales view, no pagination)."""
 
