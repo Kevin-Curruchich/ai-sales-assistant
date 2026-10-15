@@ -99,6 +99,12 @@ Aggregated metrics for the main dashboard.
 - **Query Params:** `search` (string, optional), `status_filter` (`active` | `inactive`, optional)
 - **Response:** `Product[]`
 
+### `GET /products/reports/capital`
+
+- **Response:** `{ "data": [{ "product_id", "product_name", "product_sku", "stock", "inventory_value", "receivable" }], "totals": { "inventory_value", "receivable" } }`. Foto al momento, sin parametros ni paginacion. `stock`, `inventory_value` y `receivable` son decimales como string (igual que `Product.stock`).
+- `inventory_value`: lo que queda en lotes confirmados × su costo de compra. `receivable`: subtotal de los items de ventas con pago pendiente; `totals.receivable` es igual a `pendingPaymentsTotal` del dashboard.
+- Solo productos con `inventory_value` o `receivable` mayor a 0, ordenados por la suma de ambos, descendente.
+
 ### `GET /products/{product_id}`
 
 - **Response:** `Product`

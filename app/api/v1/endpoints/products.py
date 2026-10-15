@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.api.dependencies import ProductServiceDep, get_current_user
 from app.schemas.product import (
+    CapitalReportResponse,
     LotsAvailabilityResponse,
     PaginatedProductResponse,
     ProductCreate,
@@ -57,6 +58,13 @@ def list_products_for_sale(service: ProductServiceDep):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"An error occurred while fetching products for sale: {str(e)}",
         )
+
+
+# Antes de /{product_id}: si no, "reports" se lee como un id.
+@router.get("/reports/capital", response_model=CapitalReportResponse)
+def get_capital_report(service: ProductServiceDep):
+    """Money tied up per product: stock at lot cost and unpaid sales."""
+    return service.get_capital_report()
 
 
 @router.get("/{product_id}/lots-availability", response_model=LotsAvailabilityResponse)
