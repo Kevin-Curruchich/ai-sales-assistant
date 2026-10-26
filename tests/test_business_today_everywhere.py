@@ -62,7 +62,7 @@ def _service_with(follow_ups):
 
 
 def test_follow_ups_count_days_from_the_business_day(monkeypatch):
-    monkeypatch.setattr(orchestrator_module, "business_today", lambda: HOY)
+    monkeypatch.setattr(orchestrator_module, "business_today", lambda db: HOY)
     service = _service_with([_follow_up(3)])
 
     follow_ups, _total = service.get_follow_ups()
@@ -72,7 +72,7 @@ def test_follow_ups_count_days_from_the_business_day(monkeypatch):
 
 
 def test_follow_up_metrics_count_days_from_the_business_day(monkeypatch):
-    monkeypatch.setattr(orchestrator_module, "business_today", lambda: HOY)
+    monkeypatch.setattr(orchestrator_module, "business_today", lambda db: HOY)
     service = _service_with([_follow_up(3)])
 
     metrics = service.get_follow_up_metrics()
@@ -81,7 +81,7 @@ def test_follow_up_metrics_count_days_from_the_business_day(monkeypatch):
 
 
 def test_calendar_marks_overdue_against_the_business_day(monkeypatch):
-    monkeypatch.setattr(orchestrator_module, "business_today", lambda: HOY)
+    monkeypatch.setattr(orchestrator_module, "business_today", lambda db: HOY)
     service = _service_with([_follow_up(-1), _follow_up(0)])
 
     calendar = service.get_calendar_events(
@@ -95,7 +95,7 @@ def test_calendar_marks_overdue_against_the_business_day(monkeypatch):
 def test_sales_this_month_uses_the_business_month(
     db_session, seeded_customer, seeded_user, monkeypatch
 ):
-    monkeypatch.setattr(sale_repository_module, "business_today", lambda: HOY)
+    monkeypatch.setattr(sale_repository_module, "business_today", lambda db: HOY)
     db_session.add(
         Sale(
             customer_id=seeded_customer.id,
@@ -114,7 +114,7 @@ def test_the_sale_dropdown_only_sees_lots_bought_up_to_the_business_day(
 ):
     """Un lote comprado "manana" en Guatemala no se puede vender hoy, aunque
     en el reloj del servidor ya sea manana."""
-    monkeypatch.setattr(product_service_module, "business_today", lambda: HOY)
+    monkeypatch.setattr(product_service_module, "business_today", lambda db: HOY)
     product = _seed_product_with_one_confirmed_lot(
         db_session,
         seeded_user,
@@ -133,7 +133,7 @@ def test_the_sale_dropdown_only_sees_lots_bought_up_to_the_business_day(
 def test_lots_availability_defaults_to_the_business_day(
     db_session, seeded_user, monkeypatch
 ):
-    monkeypatch.setattr(product_service_module, "business_today", lambda: HOY)
+    monkeypatch.setattr(product_service_module, "business_today", lambda db: HOY)
     product = _seed_product_with_one_confirmed_lot(
         db_session,
         seeded_user,

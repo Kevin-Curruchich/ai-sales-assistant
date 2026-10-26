@@ -9,7 +9,7 @@ def _open_follow_up(db, customer, product):
     follow_up = FollowUp(
         customer_id=customer.id,
         product_id=product.id,
-        due_date=business_today() + timedelta(days=2),
+        due_date=business_today(db) + timedelta(days=2),
         status="open",
     )
     db.add(follow_up)
@@ -21,7 +21,7 @@ def test_postpone_returns_the_new_follow_up(
     client, db_session, seeded_user, seeded_customer, seeded_product_with_lot
 ):
     follow_up = _open_follow_up(db_session, seeded_customer, seeded_product_with_lot)
-    new_date = business_today() + timedelta(days=9)
+    new_date = business_today(db_session) + timedelta(days=9)
 
     resp = client.post(
         f"/api/v1/follow-ups/{follow_up.id}/postpone",
@@ -43,7 +43,7 @@ def test_postpone_to_today_is_unprocessable(
 
     resp = client.post(
         f"/api/v1/follow-ups/{follow_up.id}/postpone",
-        json={"date": business_today().isoformat()},
+        json={"date": business_today(db_session).isoformat()},
         headers=_auth(seeded_user),
     )
 

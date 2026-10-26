@@ -79,15 +79,16 @@ def test_la_fecha_sale_de_la_zona_del_negocio_y_no_del_reloj_del_servidor():
     """
     from datetime import datetime as datetime_real
     from unittest.mock import patch
+    from zoneinfo import ZoneInfo
 
     from app.agent.prompt_runtime import _hoy
-    from app.core.datetime_utils import business_tz
+    from app.core.config import settings
 
     with patch("app.agent.prompt_runtime.datetime") as reloj:
         reloj.now.return_value = datetime_real(2026, 10, 1, 20, 0)
         _hoy()
 
-    reloj.now.assert_called_once_with(business_tz())
+    reloj.now.assert_called_once_with(ZoneInfo(settings.BUSINESS_TIMEZONE))
 
 
 def test_el_prompt_del_sistema_sigue_entero():

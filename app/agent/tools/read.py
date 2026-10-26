@@ -165,7 +165,7 @@ def consultar_seguimiento(
         }
 
 
-def _parse_boundary(value: str, *, inclusive_end: bool) -> datetime:
+def _parse_boundary(db, value: str, *, inclusive_end: bool) -> datetime:
     """Convierte "AAAA-MM-DD" (o un timestamp ISO completo) a un `datetime`
     con zona -- `occurred_at` es `timestamptz`, no un reloj sin husario.
 
@@ -195,9 +195,13 @@ def _parse_boundary(value: str, *, inclusive_end: bool) -> datetime:
     is_bare_date = "T" not in value and " " not in value
     if is_bare_date:
         day = date_type.fromisoformat(value)
-        return business_end_of_day(day) if inclusive_end else business_midnight(day)
+        return (
+            business_end_of_day(db, day)
+            if inclusive_end
+            else business_midnight(db, day)
+        )
 
-    return parsed.replace(tzinfo=business_tz())
+    return parsed.replace(tzinfo=business_tz(db))
 
 
 @tool
@@ -217,8 +221,8 @@ def consultar_caja(
     """
     with agent_session() as db:
         service = CashService(db)
-        start = _parse_boundary(desde, inclusive_end=False) if desde else None
-        end = _parse_boundary(hasta, inclusive_end=True) if hasta else None
+        start = _parse_boundary(db, desde, inclusive_end=False) if desde else None
+        end = _parse_boundary(db, hasta, inclusive_end=True) if hasta else None
         entries = list(reversed(service.ledger(start=start, end=end)))
         if limite:
             entries = entries[:limite]
@@ -284,9 +288,8 @@ def consultar_ventas(
         "end_date": date_type.fromisoformat(hasta) if hasta else None,
         "is_payment_pending": _ESTADOS_PAGO.get(estado_pago) if estado_pago else None,
     }
-    hoy = business_today()
-
     with agent_session() as db:
+        hoy = business_today(db)
         service = SaleService(db)
         ventas = service.get_all_enriched(**filtros, limit=limite, offset=offset)
         total = service.count(**filtros)

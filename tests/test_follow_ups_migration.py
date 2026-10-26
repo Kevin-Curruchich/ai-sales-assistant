@@ -33,7 +33,7 @@ def _cycle(session, customer_id, product_id, next_purchase):
         customer_id=customer_id,
         product_id=product_id,
         estimated_next_purchase=next_purchase,
-        last_purchase_date=business_today() - timedelta(days=30),
+        last_purchase_date=business_today(session) - timedelta(days=30),
         last_quantity=Decimal("1"),
         total_purchases=2,
     )
@@ -43,13 +43,14 @@ def test_backfill_opens_one_follow_up_per_projected_cycle(alembic_config):
     command.upgrade(alembic_config, "07ee91fc2b95")
     schema = alembic_config.attributes["target_schema"]
     session, engine = _session_for(schema)
+    session.info["business_tz"] = "America/Guatemala"
     try:
         customer = _insert(session, Customer, name="Aurita")
         future, past, unprojected = (
             _insert(session, Product, sku=f"SKU-{n}", name=f"Producto {n}")
             for n in ("F", "P", "U")
         )
-        today = business_today()
+        today = business_today(session)
         _cycle(session, customer, future, today + timedelta(days=10))
         _cycle(session, customer, past, today - timedelta(days=10))
         _cycle(session, customer, unprojected, None)

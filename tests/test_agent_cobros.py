@@ -96,7 +96,7 @@ def test_consultar_ventas_sums_every_match_not_only_the_page(
 def test_consultar_ventas_reports_how_many_days_a_sale_has_been_owed(
     db_session, pending_sale
 ):
-    hoy = datetime.now(business_tz()).date()
+    hoy = datetime.now(business_tz(db_session)).date()
 
     venta = consultar_ventas.invoke({"estado_pago": "pendiente"})["ventas"][0]
 
@@ -199,7 +199,7 @@ def test_an_approved_cobro_marks_the_sale_paid_and_records_the_cash_entry(
     assert movement.amount == pending_sale.total
     # El cobro entra a caja el dia que la persona dice, en hora de Guatemala
     # -- no el dia del servidor, que es lo que hace hoy el PATCH del panel.
-    assert movement.occurred_at == business_midnight(date(2026, 9, 30))
+    assert movement.occurred_at == business_midnight(db_session, date(2026, 9, 30))
 
 
 def test_the_confirmation_card_shows_what_is_being_collected(

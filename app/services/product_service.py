@@ -46,7 +46,7 @@ class ProductService:
         for product in products:
             lots = self.purchase_repo.get_fifo_available_lots(
                 product_id=product.id,
-                as_of_date=business_today(),
+                as_of_date=business_today(self.db),
                 lock_for_update=False,
             )
 
@@ -102,7 +102,7 @@ class ProductService:
             HTTPException 404 if product not found
         """
         if as_of_date is None:
-            as_of_date = business_today()
+            as_of_date = business_today(self.db)
 
         product = self.repo.get_by_id(product_id)
         if not product:
@@ -181,7 +181,7 @@ class ProductService:
             return None, None
         if isinstance(value, str):
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return value, format_business_datetime(value)
+        return value, format_business_datetime(self.db, value)
 
     def _get_stock_alert(self, stock: Decimal, min_stock: Decimal) -> tuple[str, bool]:
         if stock <= 0:

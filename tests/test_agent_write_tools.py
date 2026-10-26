@@ -468,21 +468,21 @@ def test_a_real_checkpointer_resume_still_catches_a_stale_approval(
 # ---------------------------------------------------------------------
 
 
-def test_occurred_at_bare_date_anchors_to_business_midnight():
-    assert _occurred_at("2026-09-24") == datetime(
-        2026, 9, 24, 0, 0, tzinfo=business_tz()
+def test_occurred_at_bare_date_anchors_to_business_midnight(db_session):
+    assert _occurred_at(db_session, "2026-09-24") == datetime(
+        2026, 9, 24, 0, 0, tzinfo=business_tz(db_session)
     )
 
 
-def test_occurred_at_with_explicit_timezone_is_used_as_is():
-    assert _occurred_at("2026-09-24T23:30:00+00:00") == datetime(
+def test_occurred_at_with_explicit_timezone_is_used_as_is(db_session):
+    assert _occurred_at(db_session, "2026-09-24T23:30:00+00:00") == datetime(
         2026, 9, 24, 23, 30, tzinfo=timezone.utc
     )
 
 
-def test_occurred_at_with_time_but_no_timezone_assumes_business_timezone():
-    assert _occurred_at("2026-09-24T15:00:00") == datetime(
-        2026, 9, 24, 15, 0, tzinfo=business_tz()
+def test_occurred_at_with_time_but_no_timezone_assumes_business_timezone(db_session):
+    assert _occurred_at(db_session, "2026-09-24T15:00:00") == datetime(
+        2026, 9, 24, 15, 0, tzinfo=business_tz(db_session)
     )
 
 

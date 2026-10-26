@@ -795,18 +795,18 @@ def registrar_compra(
 # ---------------------------------------------------------------------
 
 
-def _occurred_at(value: str) -> datetime:
+def _occurred_at(db, value: str) -> datetime:
     """Una fecha sin hora se resuelve con `business_instant`: la hora actual
     si es hoy, la medianoche de la zona del negocio si es un dia pasado --
     nunca UTC ni un reloj sin huso; una hora sin zona se asume tambien en la
     zona del negocio."""
     is_bare_date = "T" not in value and " " not in value
     if is_bare_date:
-        return business_instant(date_type.fromisoformat(value))
+        return business_instant(db, date_type.fromisoformat(value))
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is not None:
         return parsed
-    return parsed.replace(tzinfo=business_tz())
+    return parsed.replace(tzinfo=business_tz(db))
 
 
 @tool
@@ -901,7 +901,7 @@ def registrar_movimiento_caja(
 
             service = CashService(db)
             movement = service.record(
-                occurred_at=_occurred_at(valores["fecha"]),
+                occurred_at=_occurred_at(db, valores["fecha"]),
                 type=CashMovementType(valores["tipo"]),
                 amount=Decimal(str(valores["monto"])),
                 payment_method=PaymentMethod(valores["medio_pago"])

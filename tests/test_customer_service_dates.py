@@ -20,10 +20,10 @@ def _sale(created_at, updated_at, sale_date):
     )
 
 
-def test_format_sale_dates_uses_the_guatemala_calendar_day():
+def test_format_sale_dates_uses_the_guatemala_calendar_day(db_session):
     """2026-09-22T03:30:00+00:00 son las 21:30 del 21 en Guatemala (UTC-6):
     el dia calendario difiere entre UTC y hora del negocio."""
-    service = CustomerService(db=None)
+    service = CustomerService(db_session)
     utc_instant = datetime(2026, 9, 22, 3, 30, 0, tzinfo=timezone.utc)
     sale = _sale(
         created_at=utc_instant, updated_at=utc_instant, sale_date=date(2026, 9, 21)

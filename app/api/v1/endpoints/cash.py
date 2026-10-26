@@ -40,8 +40,8 @@ def list_cash_movements(
     Las fechas son dias calendario en la zona del negocio: `end_date` incluye
     ese dia completo.
     """
-    start = business_midnight(start_date) if start_date else None
-    end = business_end_of_day(end_date) if end_date else None
+    start = business_midnight(service.db, start_date) if start_date else None
+    end = business_end_of_day(service.db, end_date) if end_date else None
     rows = service.recent_movements(start=start, end=end, limit=limit, offset=offset)
     return {
         "data": [

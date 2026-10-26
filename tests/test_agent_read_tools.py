@@ -2,6 +2,7 @@
 
 from datetime import datetime, timedelta
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -12,7 +13,7 @@ from app.agent.tools.read import (
     consultar_seguimiento,
     previsualizar_venta,
 )
-from app.core.datetime_utils import business_today, business_tz
+from app.core.datetime_utils import business_today
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.customer import Customer
 from app.models.customer_product_cycle import CustomerProductCycle
@@ -24,7 +25,7 @@ from app.models.sale import Sale
 # tz-aware, nunca naive) -- si la siembra fuera naive junto con un boundary
 # tambien naive, ambos comparten el mismo supuesto equivocado y el desfase de
 # husario queda invisible para el test.
-GT = business_tz()
+GT = ZoneInfo("America/Guatemala")
 
 
 def test_buscar_cliente_returns_every_match_without_choosing(
@@ -174,8 +175,8 @@ def test_consultar_seguimiento_reports_real_status_and_days_until(
         customer_id=seeded_customer.id,
         product_id=seeded_product_with_lot.id,
         avg_interval_days=Decimal("15"),
-        estimated_next_purchase=business_today() + timedelta(days=5),
-        last_purchase_date=business_today() - timedelta(days=10),
+        estimated_next_purchase=business_today(db_session) + timedelta(days=5),
+        last_purchase_date=business_today(db_session) - timedelta(days=10),
         last_quantity=Decimal("2"),
         total_purchases=3,
     )
@@ -183,8 +184,8 @@ def test_consultar_seguimiento_reports_real_status_and_days_until(
         customer_id=otro_cliente.id,
         product_id=seeded_product_with_one_lot.id,
         avg_interval_days=Decimal("10"),
-        estimated_next_purchase=business_today() - timedelta(days=3),
-        last_purchase_date=business_today() - timedelta(days=13),
+        estimated_next_purchase=business_today(db_session) - timedelta(days=3),
+        last_purchase_date=business_today(db_session) - timedelta(days=13),
         last_quantity=Decimal("1"),
         total_purchases=2,
     )

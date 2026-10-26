@@ -62,7 +62,11 @@ def _service(lots, product):
         last_purchase_date=None, estimated_next_purchase=None
     )
     service.follow_up_service.record_purchase = lambda *a, **kw: None
-    service.db = SimpleNamespace(commit=lambda: None, refresh=lambda *_: None)
+    service.db = SimpleNamespace(
+        commit=lambda: None,
+        refresh=lambda *_: None,
+        info={"business_tz": "America/Guatemala"},
+    )
     return service
 
 

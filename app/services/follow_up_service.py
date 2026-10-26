@@ -59,7 +59,7 @@ class FollowUpService:
         self, follow_up_id: uuid.UUID, new_date: date, user_id: uuid.UUID
     ) -> FollowUp:
         current = self._get_open_or_raise(follow_up_id)
-        if new_date <= business_today():
+        if new_date <= business_today(self.db):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="La nueva fecha del seguimiento debe ser posterior a hoy",

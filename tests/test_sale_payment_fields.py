@@ -30,14 +30,14 @@ def test_a_pending_sale_carries_no_payment_date():
     assert data.fechaPago is None
 
 
-def test_occurred_at_defaults_to_the_sale_date_at_midnight_business_time():
+def test_occurred_at_stays_unset_in_the_schema():
     data = SaleCreate(
         customerId=uuid.uuid4(),
         date=date(2026, 9, 24),
         items=[SaleItemCreate(productId=uuid.uuid4(), quantity=Decimal("1"))],
     )
-    assert data.occurredAt is not None
-    assert data.occurredAt.tzinfo is not None
+    # El orquestador lo resuelve con la zona del comercio.
+    assert data.occurredAt is None
 
 
 def test_a_created_sale_stores_its_payment_method(

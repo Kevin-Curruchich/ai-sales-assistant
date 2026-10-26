@@ -37,7 +37,7 @@ class FakeCalendar:
 
 def _follow_up(db, customer, product, **fields):
     values = {
-        "due_date": business_today() + timedelta(days=3),
+        "due_date": business_today(db) + timedelta(days=3),
         "status": "open",
         "sync_status": "pending",
         **fields,

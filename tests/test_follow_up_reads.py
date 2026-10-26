@@ -15,14 +15,14 @@ from app.services.sales import SaleService
 
 
 def _cycle_and_follow_up(db, customer, product, days_until):
-    due = business_today() + timedelta(days=days_until)
+    due = business_today(db) + timedelta(days=days_until)
     db.add(
         CustomerProductCycle(
             customer_id=customer.id,
             product_id=product.id,
             avg_interval_days=Decimal("7"),
             estimated_next_purchase=due,
-            last_purchase_date=business_today() - timedelta(days=5),
+            last_purchase_date=business_today(db) - timedelta(days=5),
             last_quantity=Decimal("1"),
             total_purchases=3,
         )
@@ -63,7 +63,7 @@ def test_a_dismissed_follow_up_leaves_every_list(
         assert service.get_follow_ups(filter_type=filter_type) == ([], 0)
     assert service.get_follow_up_metrics().next7Days == 0
     calendar = service.get_calendar_events(
-        business_today(), business_today() + timedelta(days=7)
+        business_today(db_session), business_today(db_session) + timedelta(days=7)
     )
     assert calendar.summary.upcoming == 0
 
@@ -74,7 +74,7 @@ def test_a_postponed_follow_up_uses_the_new_date(
     follow_up = _cycle_and_follow_up(
         db_session, seeded_customer, seeded_product_with_lot, 2
     )
-    new_date = business_today() + timedelta(days=20)
+    new_date = business_today(db_session) + timedelta(days=20)
     new = FollowUpService(db_session).postpone(follow_up.id, new_date, seeded_user.id)
     service = SaleService(db_session)
 

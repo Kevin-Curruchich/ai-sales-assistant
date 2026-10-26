@@ -37,12 +37,13 @@ fecharia manana una venta de las siete de la tarde.
 from __future__ import annotations
 
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import SystemMessage
 
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.referencias import con_referencias
-from app.core.datetime_utils import business_tz
+from app.core.config import settings
 
 _PLANTILLA_FECHA = """
 
@@ -66,7 +67,8 @@ def _hoy() -> date:
     Funcion propia y no una expresion suelta para que los tests puedan fijar el
     reloj sin parchear `datetime` en todo el modulo.
     """
-    return datetime.now(business_tz()).date()
+    # shortcut: zona global hasta que el prompt reciba business_tz por configurable (Task 6).
+    return datetime.now(ZoneInfo(settings.BUSINESS_TIMEZONE)).date()
 
 
 def prompt_con_fecha(state) -> list:

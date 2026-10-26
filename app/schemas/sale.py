@@ -5,7 +5,6 @@ from typing import Optional
 
 from pydantic import BaseModel, field_validator, model_validator
 
-from app.core.datetime_utils import business_instant
 from app.models.payment_method import PaymentMethod
 
 # --- Request schemas ---
@@ -71,8 +70,6 @@ class SaleCreate(BaseModel):
                 self.medioPago = PaymentMethod.EFECTIVO
             if self.fechaPago is None:
                 self.fechaPago = self.date
-        if self.occurredAt is None:
-            self.occurredAt = business_instant(self.date)
         return self
 
 
