@@ -43,7 +43,7 @@ def _set_business_on_begin(session, transaction, connection):
 
 def bind_business(db: Session, business_id: uuid.UUID, timezone: str) -> None:
     db.info["business_id"] = business_id
-    db.info["timezone"] = timezone
+    db.info["business_tz"] = timezone
     if db.in_transaction():
         _apply_business(db, business_id)
 

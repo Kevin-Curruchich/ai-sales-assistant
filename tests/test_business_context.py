@@ -31,9 +31,17 @@ def test_bind_sets_variable_in_open_transaction(unbound_session):
 
 def test_variable_survives_commit(unbound_session):
     bid = uuid.uuid4()
+    unbound_session.execute(text("select 1"))  # abre transaccion
     bind_business(unbound_session, bid, "America/Guatemala")
     unbound_session.commit()
     assert _current(unbound_session) == str(bid)
+
+
+def test_bind_stores_context_in_session_info(unbound_session):
+    bid = uuid.uuid4()
+    bind_business(unbound_session, bid, "America/Guatemala")
+    assert unbound_session.info["business_id"] == bid
+    assert unbound_session.info["business_tz"] == "America/Guatemala"
 
 
 def test_unbound_session_has_no_business(unbound_session):
