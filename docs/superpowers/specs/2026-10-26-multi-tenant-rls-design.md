@@ -96,8 +96,17 @@ autogenerate de Alembic no detecte deriva.
   el worker. `GRANT SELECT, INSERT, UPDATE, DELETE` sobre las tablas del schema
   de negocio y `USAGE` sobre sus secuencias; los mismos permisos sobre el schema
   `agent` del checkpointer.
-- Config: nuevas variables `POSTGRES_APP_USER` / `POSTGRES_APP_PASSWORD` para
-  la API; Alembic sigue usando `POSTGRES_USER`.
+- Config: la API sigue usando `DATABASE_URL` / `POSTGRES_*`, que en
+  produccion apuntan al usuario de la API (miembro de `app_tenant`). Alembic
+  usa `MIGRATIONS_DATABASE_URL` (con `postgres`) si esta definida.
+- `app_tenant` es un rol `NOLOGIN` que crea la migracion y recibe los GRANTs;
+  el usuario LOGIN de la API se crea a mano como miembro (runbook). El usuario
+  de la API es dueno del schema `agent`, donde el checkpointer crea sus tablas.
+- Las politicas y DEFAULT usan
+  `nullif(current_setting('app.business_id', true), '')::uuid`: tras un reset
+  la variable vale `''`, no NULL. `users.business_id` lleva el mismo DEFAULT.
+- El listener `after_begin` se registra sobre la clase `Session` de
+  SQLAlchemy, para cubrir tambien las sesiones del worker y de los tests.
 
 ### Migracion (una sola revision, sin perdida de datos)
 
@@ -184,6 +193,11 @@ autogenerate de Alembic no detecte deriva.
   `app/services/product_service.py`, `app/services/follow_up_service.py`,
   `app/services/sales/orchestrator.py`.
 - `agent_session()` y el worker tambien llenan `db.info["business_tz"]`.
+- `SaleCreate` (`app/schemas/sale.py`) deja de rellenar `occurredAt` en su
+  validador (no tiene sesion); el default `business_instant(db, date)` pasa a
+  la creacion de la venta en el servicio.
+- El prompt del agente no tiene sesion: el endpoint pone tambien
+  `business_tz` en `configurable` y `prompt_con_fecha` lo lee de ahi.
 - `BUSINESS_TIMEZONE` deja de leerse en runtime; solo lo usa la migracion.
 
 ### Scripts
