@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 
 
 class CustomerProductCycle(Base):
@@ -56,6 +57,8 @@ class CustomerProductCycle(Base):
         String(20)
     )  # "ewma" | "croston"
     projection_confidence: Mapped[Optional[str]] = mapped_column(String(20))
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

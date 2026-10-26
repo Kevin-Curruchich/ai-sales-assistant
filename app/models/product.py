@@ -4,11 +4,21 @@ from decimal import Decimal
 from enum import Enum as PyEnum
 from typing import Optional
 
-from sqlalchemy import DateTime, Numeric, String, Text, Uuid, func, text
+from sqlalchemy import (
+    DateTime,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 
 
 class EarningMode(str, PyEnum):
@@ -18,6 +28,10 @@ class EarningMode(str, PyEnum):
 
 class Product(Base):
     __tablename__ = "products"
+    # El sku es unico dentro de cada comercio, no global.
+    __table_args__ = (
+        UniqueConstraint("business_id", "sku", name="uq_products_business_sku"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -25,9 +39,7 @@ class Product(Base):
         default=uuid.uuid4,
         server_default=func.gen_random_uuid(),
     )
-    sku: Mapped[str] = mapped_column(
-        String(100), unique=True, nullable=False, index=True
-    )
+    sku: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text)
     earning_mode: Mapped[EarningMode] = mapped_column(
@@ -55,6 +67,8 @@ class Product(Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="active"
     )  # "active" | "inactive"
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

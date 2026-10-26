@@ -6,6 +6,7 @@ from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
@@ -40,6 +41,8 @@ class Sale(Base):
     occurred_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

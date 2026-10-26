@@ -17,6 +17,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 
 OPEN = "open"
 CLOSED = "closed"
@@ -92,6 +93,8 @@ class FollowUp(Base):
         String(10), nullable=False, default=SYNC_PENDING
     )
     sync_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

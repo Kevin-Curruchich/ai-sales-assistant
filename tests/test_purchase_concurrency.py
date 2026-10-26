@@ -23,7 +23,7 @@ from tests.fixtures_domain import _session_for
 BARRIER_TIMEOUT_S = 2
 
 
-def _confirm_concurrently(schema, monkeypatch, purchase_ids):
+def _confirm_concurrently(schema, monkeypatch, purchase_ids, business_info):
     barrier = threading.Barrier(len(purchase_ids))
     original_record = CashService.record
 
@@ -39,6 +39,7 @@ def _confirm_concurrently(schema, monkeypatch, purchase_ids):
 
     def worker(purchase_id):
         session, engine = _session_for(schema)
+        session.info.update(business_info)
         try:
             PurchaseService(session).confirm(purchase_id)
         except Exception as exc:  # noqa: BLE001 - el test reporta cualquier fallo
@@ -64,7 +65,7 @@ def test_confirming_the_same_purchase_twice_at_once_records_one_cash_exit(
     db_session.commit()
 
     errors = _confirm_concurrently(
-        migrated_schema, monkeypatch, [purchase_id, purchase_id]
+        migrated_schema, monkeypatch, [purchase_id, purchase_id], dict(db_session.info)
     )
 
     assert errors == []
@@ -100,7 +101,9 @@ def test_confirming_two_purchases_of_the_same_product_at_once_adds_both_to_stock
     )
     db_session.commit()
 
-    errors = _confirm_concurrently(migrated_schema, monkeypatch, [first.id, second.id])
+    errors = _confirm_concurrently(
+        migrated_schema, monkeypatch, [first.id, second.id], dict(db_session.info)
+    )
 
     assert errors == []
     db_session.expire_all()

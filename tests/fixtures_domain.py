@@ -13,9 +13,11 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
+from app.core.database import bind_business
+from app.models.business import Business
 from app.models.customer import Customer
 from app.models.product import Product
 from app.models.purchase import Purchase, PurchaseItem
@@ -24,14 +26,31 @@ from tests.conftest import TEST_DATABASE_URL
 
 MONEY = Decimal("0.01")
 
+# Para conexiones crudas (sin Session): fija el comercio que crea la migracion
+# solo para la transaccion en curso.
+FIRST_BUSINESS_SQL = text(
+    "SELECT set_config('app.business_id', (SELECT id::text FROM businesses), true)"
+)
 
-def _session_for(schema: str):
+
+def bind_first_business(session) -> None:
+    """Liga la sesion al unico comercio del schema, el que crea la migracion.
+
+    Para tests que arman su propia sesion sin pasar por `db_session`.
+    """
+    row = session.execute(text("SELECT id, timezone FROM businesses")).one()
+    bind_business(session, row.id, row.timezone)
+
+
+def _session_for(schema: str, role: str | None = None):
     engine = create_engine(TEST_DATABASE_URL)
 
     @event.listens_for(engine, "connect")
     def _set_search_path(dbapi_connection, _record):
         cursor = dbapi_connection.cursor()
         cursor.execute(f'SET search_path TO "{schema}"')
+        if role:
+            cursor.execute(f'SET ROLE "{role}"')
         cursor.close()
         dbapi_connection.commit()
 
@@ -51,7 +70,45 @@ def db_session(migrated_schema, monkeypatch):
     intacto.
     """
     session, engine = _session_for(migrated_schema)
-    monkeypatch.setattr("app.agent.session.SessionLocal", sessionmaker(bind=engine))
+    business = Business(name="Comercio de prueba")
+    session.add(business)
+    session.commit()
+    bind_business(session, business.id, business.timezone)
+    # Las sesiones del agente nacen ya ligadas al mismo comercio.
+    monkeypatch.setattr(
+        "app.agent.session.SessionLocal",
+        sessionmaker(bind=engine, info=dict(session.info)),
+    )
+    try:
+        yield session
+    finally:
+        session.close()
+        engine.dispose()
+
+
+@pytest.fixture
+def seeded_business(db_session):
+    """El comercio al que esta ligada `db_session`."""
+    return db_session.get(Business, db_session.info["business_id"])
+
+
+@pytest.fixture
+def other_business(db_session):
+    """Un segundo comercio, sin ligar a ninguna sesion."""
+    business = Business(name="Otro comercio", timezone="America/Mexico_City")
+    db_session.add(business)
+    db_session.commit()
+    return business
+
+
+@pytest.fixture
+def tenant_session(migrated_schema):
+    """Sesion sobre el mismo schema pero como `app_tenant`, sujeta a RLS.
+
+    `db_session` corre como superusuario y se salta RLS: con ella sola los
+    tests de aislamiento pasarian siempre.
+    """
+    session, engine = _session_for(migrated_schema, role="app_tenant")
     try:
         yield session
     finally:

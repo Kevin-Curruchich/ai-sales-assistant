@@ -7,6 +7,7 @@ from sqlalchemy import Date, DateTime, ForeignKey, Numeric, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 
 if TYPE_CHECKING:
     from app.models.purchase import PurchaseItem
@@ -31,6 +32,8 @@ class SaleItemLotAllocation(Base):
     quantity_allocated: Mapped[Decimal] = mapped_column(Numeric(10, 4), nullable=False)
     unit_cost_snapshot: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     lot_purchase_date: Mapped[date] = mapped_column(Date, nullable=False)
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

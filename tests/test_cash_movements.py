@@ -5,6 +5,7 @@ from sqlalchemy.exc import IntegrityError
 import app.models  # noqa: F401
 from app.core.database import Base
 from app.models import CashMovementType
+from tests.fixtures_domain import FIRST_BUSINESS_SQL
 
 
 def test_cash_movement_type_values():
@@ -69,6 +70,7 @@ def test_saldo_inicial_is_accepted_by_the_check_constraint(
 ):
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         conn.execute(
             text(
                 "INSERT INTO cash_movements (id, occurred_at, type, amount) "
@@ -102,6 +104,7 @@ def test_cash_movement_type_column_is_varchar_not_a_native_enum(
 def test_cash_movement_type_check_accepts_the_five_values(test_engine, migrated_schema):
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         for value in (
             "entrada",
             "salida",
@@ -122,6 +125,7 @@ def test_cash_movement_type_check_accepts_the_five_values(test_engine, migrated_
 def test_cash_movement_type_check_rejects_anything_else(test_engine, migrated_schema):
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         with pytest.raises(IntegrityError):
             conn.execute(
                 text(
@@ -147,6 +151,7 @@ def test_cash_movement_type_survived_the_varchar_conversion_as_not_nullable(
     fingir a la vez."""
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         with pytest.raises(IntegrityError):
             conn.execute(
                 text(

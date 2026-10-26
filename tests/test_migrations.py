@@ -9,6 +9,7 @@ import app.models  # noqa: F401
 from app.core.database import Base
 
 EXPECTED_TABLES = {
+    "businesses",
     "users",
     "customers",
     "products",
@@ -191,3 +192,60 @@ def test_migration_emits_no_hardcoded_schema():
             "que servir para db_dev, db_v2 y cualquier schema de test, y el schema "
             "lo fija el search_path de env.py."
         )
+
+
+def test_existing_rows_move_to_first_business(test_engine, alembic_config):
+    """Los datos previos a multi-tenant quedan en el unico comercio creado."""
+    schema = alembic_config.attributes["target_schema"]
+    command.upgrade(alembic_config, "5c2e8f1a9b3d")
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        conn.execute(text("INSERT INTO customers (name) VALUES ('Previo')"))
+        conn.execute(
+            text(
+                "INSERT INTO users (email, role, is_active) VALUES ('previo@example.com', 'admin', true)"
+            )
+        )
+
+    command.upgrade(alembic_config, "head")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        business_ids = conn.execute(text("SELECT id FROM businesses")).scalars().all()
+        customer_bid = conn.execute(
+            text("SELECT business_id FROM customers")
+        ).scalar_one()
+        user_bid = conn.execute(text("SELECT business_id FROM users")).scalar_one()
+    assert len(business_ids) == 1
+    assert customer_bid == user_bid == business_ids[0]
+
+
+RLS_TABLES = {
+    "customers",
+    "products",
+    "purchases",
+    "purchase_items",
+    "sales",
+    "sale_items",
+    "sale_item_lot_allocations",
+    "cash_movements",
+    "follow_ups",
+    "customer_product_cycles",
+    "agent_threads",
+}
+
+
+def test_rls_is_forced_on_every_business_table(test_engine, migrated_schema):
+    """Una tabla del comercio sin RLS dejaria ver datos de otros sin error."""
+    with test_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT c.relname FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "JOIN pg_policies p ON p.schemaname = n.nspname "
+                "  AND p.tablename = c.relname AND p.policyname = 'tenant_isolation' "
+                "WHERE n.nspname = :s AND c.relrowsecurity AND c.relforcerowsecurity"
+            ),
+            {"s": migrated_schema},
+        )
+        assert {r[0] for r in rows} == RLS_TABLES
