@@ -24,7 +24,7 @@ Exito:
 | Modelo de tenancy | Tablas compartidas + `business_id` + RLS de Postgres (no schema por comercio, no BD por comercio) |
 | Usuarios ↔ comercio | Un comercio tiene N usuarios; un usuario pertenece a un solo comercio con un rol |
 | Fuente de verdad del comercio | `users.business_id` en la BD. Firebase solo da identidad; sin claim de comercio |
-| Alta de vendedores | El `admin` crea la cuenta con contrasena temporal. Sin invitaciones por correo |
+| Alta de vendedores | El `admin` crea la cuenta sin contrasena; el vendedor la define con un enlace de Firebase. Sin tabla de invitaciones ni servicio de correo propio |
 | Zona horaria | Por comercio, leida de `businesses.timezone` en cada llamada |
 
 Fuera de alcance: facturacion, limites por plan, borrar un comercio,
@@ -130,9 +130,18 @@ autogenerate de Alembic no detecte deriva.
   `display_name`. Ya no acepta `role`. Crea comercio + usuario `admin` en una
   transaccion; si falla la BD despues de crear el usuario en Firebase, borra
   el usuario de Firebase.
-- `POST /auth/users` (solo `admin`): `email`, `password` temporal,
-  `display_name`, `role` en {`sales_rep`, `viewer`}. Crea el usuario en el
-  comercio del admin. Reutiliza la logica de alta actual.
+- `POST /auth/users` (solo `admin`): `email`, `display_name`, `role` en
+  {`sales_rep`, `viewer`}; sin `password`. Crea el usuario en Firebase sin
+  contrasena (`create_firebase_user` con `password` opcional) y su fila en el
+  comercio del admin, con el mismo rollback de Firebase que el signup.
+  Responde el usuario mas `password_setup_link`, generado con
+  `auth.generate_password_reset_link(email)` del Admin SDK.
+- `POST /auth/users/{id}/password-link` (solo `admin`, mismo comercio): genera
+  un enlace nuevo, para reenviar cuando el anterior caduco (1 h por defecto).
+- El correo lo envia el frontend con `sendPasswordResetEmail(auth, email)` del
+  SDK cliente, usando la plantilla de Firebase (traducida en la consola). El
+  admin tambien ve el enlace para copiarlo y mandarlo por otro canal. El
+  backend no envia correos.
 - `GET /auth/users`, `GET/PUT /auth/users/{id}`, `PATCH /auth/users/{id}/role`:
   filtran por el `business_id` del admin; un usuario de otro comercio responde
   **404**.
@@ -197,6 +206,10 @@ o, sin el, recorren todos los comercios fijando `app.business_id` y
   filas en A.
 - Usuarios: signup crea comercio + admin; admin no ve ni edita usuarios de
   otro comercio; usuario de Firebase sin fila responde 403.
+- Alta de vendedor: crea usuario de Firebase sin contrasena, devuelve
+  `password_setup_link` (Firebase mockeado), y si falla la BD se borra el
+  usuario de Firebase; `password-link` sobre un usuario de otro comercio
+  responde 404.
 - Zona horaria: dos comercios con zonas distintas obtienen `business_today`
   distinto a la misma hora UTC.
 - Worker: recorre solo comercios con calendario y una falla no frena al resto.
@@ -211,4 +224,8 @@ o, sin el, recorren todos los comercios fijando `app.business_id` y
 - **Consultas sin sesion SQLAlchemy** (conexiones crudas) no pasan por
   `after_begin`; fallan cerrado (0 filas), no filtran de mas.
 - **Frontend** (`revenew`): necesita pantalla de signup con nombre de comercio
-  y gestion de usuarios para el admin. Va en un cambio aparte.
+  y gestion de usuarios para el admin (alta, enlace copiable, boton
+  "reenviar", llamada a `sendPasswordResetEmail`). Va en un cambio aparte.
+- **El enlace de contrasena es una credencial**: quien lo tenga puede tomar la
+  cuenta mientras no caduque. Solo se devuelve al `admin` del mismo comercio y
+  nunca se escribe en logs.
