@@ -85,3 +85,30 @@ def test_known_user_binds_business(db_session, seeded_user, monkeypatch):
     )
     assert user.id == seeded_user.id
     assert db_session.info["business_id"] == seeded_user.business_id
+
+
+def test_inactive_user_is_forbidden(db_session, seeded_user, monkeypatch):
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from app.api.dependencies import get_current_user
+    from app.models.user import User
+
+    seller = User(
+        email="inactivo@example.com",
+        role="sales_rep",
+        is_active=False,
+        business_id=seeded_user.business_id,
+    )
+    db_session.add(seller)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.api.dependencies.verify_firebase_token",
+        lambda _t: {"uid": str(seller.id)},
+    )
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials="t"), db_session
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Tu cuenta esta desactivada"

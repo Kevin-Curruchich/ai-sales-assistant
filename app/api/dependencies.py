@@ -42,10 +42,15 @@ def get_current_user(
         decoded = verify_firebase_token(token)
         service = UserService(db)
         user = service.get_for_firebase(decoded)
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tu cuenta esta desactivada",
+            )
         bind_business(db, user.business_id, user.business.timezone)
         return user
     except HTTPException:
-        # el 403 de "sin comercio" no debe convertirse en 401
+        # los 403 de "sin comercio" y "desactivada" no deben convertirse en 401
         raise
     except Exception as e:
         raise HTTPException(
