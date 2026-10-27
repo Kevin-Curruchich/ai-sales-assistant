@@ -59,7 +59,7 @@ def verify_firebase_token(id_token: str) -> dict:
 def create_firebase_user(
     uid: str,
     email: str,
-    password: str,
+    password: str | None = None,
     display_name: str | None = None,
 ) -> firebase_auth.UserRecord:
     """Create a new user in Firebase Authentication with a specific UID.
@@ -99,4 +99,23 @@ def set_firebase_custom_claims(uid: str, claims: dict) -> None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to set custom claims: {str(e)}",
+        )
+
+
+def delete_firebase_user(uid: str) -> None:
+    """Borra un usuario de Firebase (compensacion si falla la escritura en BD)."""
+    firebase_auth.delete_user(uid)
+
+
+def generate_password_setup_link(email: str) -> str:
+    """Link de Firebase para que el usuario defina su contrasena.
+
+    El link equivale a una credencial: nunca se loguea.
+    """
+    try:
+        return firebase_auth.generate_password_reset_link(email)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate password link: {str(e)}",
         )
