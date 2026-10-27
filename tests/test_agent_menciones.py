@@ -21,6 +21,7 @@ from tests.test_agent_stream_endpoint import (  # noqa: F401 -- fixtures autouse
     _turno,
 )
 
+CONFIG = {"configurable": {"business_tz": "America/Guatemala"}}
 CLIENTE_ID = "9ab4f1c2-0000-4000-8000-000000000001"
 PRODUCTO_ID = "115e2b7a-0000-4000-8000-000000000002"
 VENTA_ID = "5a1e0000-0000-4000-8000-000000000003"
@@ -311,14 +312,14 @@ def test_the_references_do_not_leak_into_the_stored_message():
     historial le devuelve al panel."""
     guardado = _con_campos("venta", MENCIONES)
 
-    prompt_con_fecha({"messages": [guardado]})
+    prompt_con_fecha({"messages": [guardado]}, CONFIG)
 
     assert guardado.content == MENSAJE
 
 
 def test_prompt_con_fecha_sends_the_references_to_the_model():
     mensajes = prompt_con_fecha(
-        {"messages": [_con_campos("venta", MENCIONES), AIMessage("listo")]}
+        {"messages": [_con_campos("venta", MENCIONES), AIMessage("listo")]}, CONFIG
     )
 
     assert CLIENTE_ID in mensajes[1].content

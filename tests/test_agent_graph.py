@@ -25,6 +25,7 @@ from langgraph.types import Command
 from app.agent.graph import build_graph, checkpointer_schema
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
+from tests.fixtures_domain import agent_config
 
 
 class FakeToolCallingModel(BaseChatModel):
@@ -73,7 +74,9 @@ def test_the_graph_interrupts_before_writing(
         scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)]
     )
     graph = build_graph(model=model, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "t1", "user_id": str(seeded_user.id)}}
+    config = {
+        "configurable": {"thread_id": "t1", **agent_config(seeded_user)["configurable"]}
+    }
 
     result = graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
 
@@ -88,7 +91,9 @@ def test_resuming_after_the_interrupt_continues_from_inside_the_tool(
         scripted_tool_calls=[_sale_tool_call(seeded_customer, seeded_product_with_lot)]
     )
     graph = build_graph(model=model, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "t2", "user_id": str(seeded_user.id)}}
+    config = {
+        "configurable": {"thread_id": "t2", **agent_config(seeded_user)["configurable"]}
+    }
     graph.invoke({"messages": [("user", "vendi un carton a Aurita")]}, config)
 
     final = graph.invoke(Command(resume={"accion": "cancelar"}), config)
@@ -138,7 +143,12 @@ def test_a_completed_write_tool_does_not_replay_when_a_sibling_write_tool_is_sti
     el `CashMovement` que la caja escribio en la ronda 1 sigue siendo uno
     solo despues de la ronda 2.
     """
-    config = {"configurable": {"thread_id": "batch-1", "user_id": str(seeded_user.id)}}
+    config = {
+        "configurable": {
+            "thread_id": "batch-1",
+            **agent_config(seeded_user)["configurable"],
+        }
+    }
 
     model = FakeToolCallingModel(
         scripted_tool_calls=[

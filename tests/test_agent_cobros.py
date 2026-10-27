@@ -20,10 +20,11 @@ from app.core.datetime_utils import business_midnight, business_tz
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.services.sales import SaleService
+from tests.fixtures_domain import agent_config
 
 
 def _config(user):
-    return {"configurable": {"user_id": str(user.id)}}
+    return {"configurable": {**agent_config(user)["configurable"]}}
 
 
 def _create_sale(
@@ -60,9 +61,9 @@ def paid_sale(db_session, seeded_user, seeded_customer, seeded_product_with_lot)
 
 
 def test_consultar_ventas_lists_only_pending_sales_when_asked(
-    db_session, pending_sale, paid_sale
+    tool_config, db_session, pending_sale, paid_sale
 ):
-    result = consultar_ventas.invoke({"estado_pago": "pendiente"})
+    result = consultar_ventas.invoke({"estado_pago": "pendiente"}, config=tool_config)
 
     assert [v["id"] for v in result["ventas"]] == [str(pending_sale.id)]
     assert result["total"] == 1
@@ -74,7 +75,7 @@ def test_consultar_ventas_lists_only_pending_sales_when_asked(
 
 
 def test_consultar_ventas_sums_every_match_not_only_the_page(
-    db_session, seeded_user, seeded_customer, seeded_product_with_lot
+    tool_config, db_session, seeded_user, seeded_customer, seeded_product_with_lot
 ):
     """`monto_total` es lo que se debe en total, no lo que entro en la pagina:
     con `limite=1` el agente diria "te deben Q40" cuando son Q80."""
@@ -85,7 +86,9 @@ def test_consultar_ventas_sums_every_match_not_only_the_page(
         db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True
     )
 
-    result = consultar_ventas.invoke({"estado_pago": "pendiente", "limite": 1})
+    result = consultar_ventas.invoke(
+        {"estado_pago": "pendiente", "limite": 1}, config=tool_config
+    )
 
     assert len(result["ventas"]) == 1
     assert result["total"] == 2
@@ -94,23 +97,30 @@ def test_consultar_ventas_sums_every_match_not_only_the_page(
 
 
 def test_consultar_ventas_reports_how_many_days_a_sale_has_been_owed(
-    db_session, pending_sale
+    tool_config, db_session, pending_sale
 ):
     hoy = datetime.now(business_tz(db_session)).date()
 
-    venta = consultar_ventas.invoke({"estado_pago": "pendiente"})["ventas"][0]
+    venta = consultar_ventas.invoke({"estado_pago": "pendiente"}, config=tool_config)[
+        "ventas"
+    ][0]
 
     assert venta["dias_pendiente"] == (hoy - pending_sale.date).days
 
 
-def test_consultar_ventas_has_no_days_owed_for_a_paid_sale(db_session, paid_sale):
-    venta = consultar_ventas.invoke({"estado_pago": "pagada"})["ventas"][0]
+def test_consultar_ventas_has_no_days_owed_for_a_paid_sale(
+    tool_config, db_session, paid_sale
+):
+    venta = consultar_ventas.invoke({"estado_pago": "pagada"}, config=tool_config)[
+        "ventas"
+    ][0]
 
     assert venta["pendiente"] is False
     assert venta["dias_pendiente"] is None
 
 
 def test_consultar_ventas_filters_by_customer(
+    tool_config,
     db_session,
     seeded_user,
     seeded_customer,
@@ -123,13 +133,15 @@ def test_consultar_ventas_filters_by_customer(
         db_session, seeded_user, seeded_customer, seeded_product_with_lot, pending=True
     )
 
-    result = consultar_ventas.invoke({"cliente_id": str(seeded_customer.id)})
+    result = consultar_ventas.invoke(
+        {"cliente_id": str(seeded_customer.id)}, config=tool_config
+    )
 
     assert [v["id"] for v in result["ventas"]] == [str(mia.id)]
 
 
 def test_consultar_ventas_filters_by_date_range(
-    db_session, seeded_user, seeded_customer, seeded_product_with_lot
+    tool_config, db_session, seeded_user, seeded_customer, seeded_product_with_lot
 ):
     _create_sale(
         db_session,
@@ -148,20 +160,22 @@ def test_consultar_ventas_filters_by_date_range(
         day=date(2026, 9, 24),
     )
 
-    result = consultar_ventas.invoke({"desde": "2026-09-20", "hasta": "2026-09-24"})
+    result = consultar_ventas.invoke(
+        {"desde": "2026-09-20", "hasta": "2026-09-24"}, config=tool_config
+    )
 
     assert [v["id"] for v in result["ventas"]] == [str(dentro.id)]
 
 
-def test_consultar_ventas_rejects_an_unknown_payment_status(db_session):
+def test_consultar_ventas_rejects_an_unknown_payment_status(tool_config, db_session):
     """Un filtro mal escrito no puede caer en "todas": el agente contestaria
     "quien me debe" con ventas ya cobradas."""
     with pytest.raises(ValueError):
-        consultar_ventas.invoke({"estado_pago": "debe"})
+        consultar_ventas.invoke({"estado_pago": "debe"}, config=tool_config)
 
 
-def test_consultar_ventas_writes_nothing(db_session, pending_sale):
-    consultar_ventas.invoke({})
+def test_consultar_ventas_writes_nothing(tool_config, db_session, pending_sale):
+    consultar_ventas.invoke({}, config=tool_config)
     assert db_session.query(CashMovement).count() == 0
     db_session.refresh(pending_sale)
     assert pending_sale.is_payment_pending is True
@@ -420,7 +434,7 @@ def test_a_cobro_replayed_by_the_same_task_is_not_written_twice(
     commit): devuelve `ya_registrado` sin volver a pausar."""
     config = {
         "configurable": {
-            "user_id": str(seeded_user.id),
+            **agent_config(seeded_user)["configurable"],
             "thread_id": "hilo-cobro",
             "checkpoint_ns": f"tools:{pending_sale.id}",
         }

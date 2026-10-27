@@ -74,11 +74,8 @@ def db_session(migrated_schema, monkeypatch):
     session.add(business)
     session.commit()
     bind_business(session, business.id, business.timezone)
-    # Las sesiones del agente nacen ya ligadas al mismo comercio.
-    monkeypatch.setattr(
-        "app.agent.session.SessionLocal",
-        sessionmaker(bind=engine, info=dict(session.info)),
-    )
+    # Sin `info` heredado: `agent_session(config)` liga el comercio del config.
+    monkeypatch.setattr("app.agent.session.SessionLocal", sessionmaker(bind=engine))
     try:
         yield session
     finally:
@@ -151,6 +148,46 @@ def second_user(db_session):
     db_session.commit()
     db_session.refresh(user)
     return user
+
+
+@pytest.fixture
+def user_of_other_business(db_session, other_business):
+    """Un usuario de `other_business`: para probar que el agente no cruza comercios."""
+    user = User(
+        email="ajeno@example.com",
+        display_name="Vendedor ajeno",
+        role="admin",
+        business_id=other_business.id,
+    )
+    db_session.add(user)
+    db_session.commit()
+    db_session.refresh(user)
+    return user
+
+
+def business_configurable(business_id, timezone: str) -> dict:
+    """Las claves de comercio que `/agent/stream` pone en `configurable`."""
+    return {"business_id": str(business_id), "business_tz": timezone}
+
+
+def agent_config(user) -> dict:
+    """El `config` de una corrida del agente para `user`, como lo arma el endpoint."""
+    return {
+        "configurable": {
+            "user_id": str(user.id),
+            **business_configurable(user.business_id, user.business.timezone),
+        }
+    }
+
+
+@pytest.fixture
+def tool_config(db_session):
+    """`config` minimo para invocar una herramienta de lectura sin usuario."""
+    return {
+        "configurable": business_configurable(
+            db_session.info["business_id"], db_session.info["business_tz"]
+        )
+    }
 
 
 @pytest.fixture

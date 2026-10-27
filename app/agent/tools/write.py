@@ -54,7 +54,7 @@ recalcular ya no produce una firma valida, asi que el panel no puede fabricar
 uno.
 
 `db.expire_all()` antes de cada recalculo NO es lo que hace funcionar esta
-guardia bajo una reanudacion real -- `agent_session()` abre una sesion NUEVA
+guardia bajo una reanudacion real -- `agent_session(config)` abre una sesion NUEVA
 en cada reanudacion (ver mas abajo), asi que el identity map de SQLAlchemy
 arranca VACIO cuando el recalculo corre, y expirarlo ahi no cambia nada en
 ese caso. Lo que SI protege: un escritor genuinamente CONCURRENTE -- otra
@@ -431,7 +431,7 @@ def registrar_venta(
         "pago_pendiente": pago_pendiente,
     }
 
-    with agent_session() as db:
+    with agent_session(config) as db:
         # ANTES de interrumpir: si esta tarea ya escribio (ver
         # `app/agent/idempotency.py`), no tiene sentido volver a pausar a una
         # persona para que apruebe algo que ya esta en la base. Chequear
@@ -670,7 +670,7 @@ def registrar_compra(
         "notas": notas,
     }
 
-    with agent_session() as db:
+    with agent_session(config) as db:
         # Ver la nota identica en registrar_venta.
         ya = _ya_escrito(db, clave_escritura, "registrar_compra", "compra_id")
         if ya is not None:
@@ -852,7 +852,7 @@ def registrar_movimiento_caja(
         # esta no mantiene una sesion abierta a lo largo del loop (no tiene
         # nada que recalcular). Ver la nota de registrar_venta sobre por que
         # el chequeo va ANTES de interrumpir.
-        with agent_session() as db:
+        with agent_session(config) as db:
             ya = _ya_escrito(
                 db, clave_escritura, "registrar_movimiento_caja", "movimiento_id"
             )
@@ -895,7 +895,7 @@ def registrar_movimiento_caja(
         # este movimiento no deriva de inventario ni de lotes -- es un hecho
         # que la persona afirma ("el socio puso Q500"), no un calculo que
         # pueda desactualizarse entre el preview y la aprobacion.
-        with agent_session() as db:
+        with agent_session(config) as db:
             if clave_escritura is not None:
                 idempotency.claim(db, clave_escritura, "registrar_movimiento_caja")
 
@@ -1002,7 +1002,7 @@ def registrar_cobro(
     user_id_from_config(config)
     clave_escritura = idempotency.write_key(config)
 
-    with agent_session() as db:
+    with agent_session(config) as db:
         ya = _ya_escrito(db, clave_escritura, "registrar_cobro", "venta_id")
         if ya is not None:
             return ya

@@ -32,6 +32,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.prompt_runtime import prompt_con_fecha
 
+ZONA = "America/Guatemala"
+CONFIG = {"configurable": {"business_tz": ZONA}}
+
 
 def _texto_del_sistema(mensajes) -> str:
     """El contenido del SystemMessage que encabeza lo que recibe el modelo."""
@@ -40,9 +43,9 @@ def _texto_del_sistema(mensajes) -> str:
 
 
 def test_el_prompt_le_dice_al_modelo_que_dia_es_hoy(monkeypatch):
-    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda: date(2026, 10, 1))
+    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda _tz: date(2026, 10, 1))
 
-    mensajes = prompt_con_fecha({"messages": [HumanMessage("vendi un carton")]})
+    mensajes = prompt_con_fecha({"messages": [HumanMessage("vendi un carton")]}, CONFIG)
 
     assert "2026-10-01" in _texto_del_sistema(mensajes)
 
@@ -56,11 +59,15 @@ def test_la_fecha_se_resuelve_en_cada_turno_y_no_al_construir_el_grafo(monkeypat
     del rango de los lotes. Dos llamadas con relojes distintos tienen que dar
     fechas distintas.
     """
-    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda: date(2026, 10, 1))
-    primero = _texto_del_sistema(prompt_con_fecha({"messages": [HumanMessage("hola")]}))
+    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda _tz: date(2026, 10, 1))
+    primero = _texto_del_sistema(
+        prompt_con_fecha({"messages": [HumanMessage("hola")]}, CONFIG)
+    )
 
-    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda: date(2026, 10, 8))
-    segundo = _texto_del_sistema(prompt_con_fecha({"messages": [HumanMessage("hola")]}))
+    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda _tz: date(2026, 10, 8))
+    segundo = _texto_del_sistema(
+        prompt_con_fecha({"messages": [HumanMessage("hola")]}, CONFIG)
+    )
 
     assert "2026-10-01" in primero
     assert "2026-10-08" in segundo
@@ -82,19 +89,18 @@ def test_la_fecha_sale_de_la_zona_del_negocio_y_no_del_reloj_del_servidor():
     from zoneinfo import ZoneInfo
 
     from app.agent.prompt_runtime import _hoy
-    from app.core.config import settings
 
     with patch("app.agent.prompt_runtime.datetime") as reloj:
         reloj.now.return_value = datetime_real(2026, 10, 1, 20, 0)
-        _hoy()
+        _hoy(ZoneInfo(ZONA))
 
-    reloj.now.assert_called_once_with(ZoneInfo(settings.BUSINESS_TIMEZONE))
+    reloj.now.assert_called_once_with(ZoneInfo(ZONA))
 
 
 def test_el_prompt_del_sistema_sigue_entero():
     """La fecha se AGREGA, no reemplaza: las reglas de negocio (FIFO, margenes,
     vocabulario de caja) siguen siendo lo que hace util al agente."""
-    mensajes = prompt_con_fecha({"messages": [HumanMessage("hola")]})
+    mensajes = prompt_con_fecha({"messages": [HumanMessage("hola")]}, CONFIG)
     texto = _texto_del_sistema(mensajes)
 
     assert SYSTEM_PROMPT in texto
@@ -111,7 +117,7 @@ def test_la_conversacion_viaja_despues_del_sistema_y_sin_tocar():
         HumanMessage("si"),
     ]
 
-    mensajes = prompt_con_fecha({"messages": historia})
+    mensajes = prompt_con_fecha({"messages": historia}, CONFIG)
 
     assert mensajes[1:] == historia
 
@@ -121,7 +127,7 @@ def test_un_estado_sin_mensajes_no_revienta(estado):
     """El primer turno de un hilo recien creado, y el caso defensivo de un estado
     sin la clave: un `KeyError` aca seria un evento `error` generico y el panel
     no tendria forma de saber que paso."""
-    mensajes = prompt_con_fecha(estado)
+    mensajes = prompt_con_fecha(estado, CONFIG)
 
     assert len(mensajes) == 1
     assert "2026" in _texto_del_sistema(mensajes)
@@ -140,7 +146,7 @@ def test_el_grafo_real_le_entrega_la_fecha_al_modelo(monkeypatch):
     from app.agent.graph import build_graph
     from tests.test_agent_graph import FakeToolCallingModel
 
-    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda: date(2026, 10, 1))
+    monkeypatch.setattr("app.agent.prompt_runtime._hoy", lambda _tz: date(2026, 10, 1))
 
     recibidos = {}
 
@@ -152,7 +158,7 @@ def test_el_grafo_real_le_entrega_la_fecha_al_modelo(monkeypatch):
     grafo = build_graph(ModeloEspia(scripted_tool_calls=[]), MemorySaver())
     grafo.invoke(
         {"messages": [HumanMessage("vendi un carton")]},
-        {"configurable": {"thread_id": "t-fecha"}},
+        {"configurable": {"thread_id": "t-fecha", "business_tz": ZONA}},
     )
 
     texto = " ".join(

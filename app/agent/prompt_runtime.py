@@ -40,10 +40,10 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from langchain_core.messages import SystemMessage
+from langchain_core.runnables import RunnableConfig
 
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.referencias import con_referencias
-from app.core.config import settings
 
 _PLANTILLA_FECHA = """
 
@@ -61,27 +61,31 @@ compra de un lote hace que el calculo FIFO no lo vea, y la venta se bloquea con
 un mensaje que habla de falta de stock cuando en realidad hay."""
 
 
-def _hoy() -> date:
+def _hoy(tz: ZoneInfo) -> date:
     """El dia de hoy en la zona del negocio.
 
     Funcion propia y no una expresion suelta para que los tests puedan fijar el
     reloj sin parchear `datetime` en todo el modulo.
     """
-    # shortcut: zona global hasta que el prompt reciba business_tz por configurable (Task 6).
-    return datetime.now(ZoneInfo(settings.BUSINESS_TIMEZONE)).date()
+    return datetime.now(tz).date()
 
 
-def prompt_con_fecha(state) -> list:
+def prompt_con_fecha(state, config: RunnableConfig) -> list:
     """Lo que el modelo recibe en este turno: el prompt del sistema con la fecha
     de hoy, y despues la conversacion tal cual.
 
     `create_react_agent` pasa el estado completo del grafo y usa lo que esta
     funcion devuelva COMO LA LISTA ENTERA de mensajes, asi que la conversacion
     tiene que reenviarse: omitirla la borraria en cada turno.
+
+    `config` lo pasa `create_react_agent` (su `RunnableCallable` inyecta un
+    parametro llamado `config` con anotacion); `business_tz` lo pone
+    `/agent/stream` desde el comercio de `current_user`.
     """
+    tz = ZoneInfo(config["configurable"]["business_tz"])
     mensajes = (state or {}).get("messages") or []
     sistema = SystemMessage(
-        SYSTEM_PROMPT + _PLANTILLA_FECHA.format(hoy=_hoy().isoformat())
+        SYSTEM_PROMPT + _PLANTILLA_FECHA.format(hoy=_hoy(tz).isoformat())
     )
     # Las menciones y el comando del composer viajan en `additional_kwargs`,
     # que el modelo no ve: `con_referencias` los vuelve texto en una copia,

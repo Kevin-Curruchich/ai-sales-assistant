@@ -32,6 +32,7 @@ from app.agent.tools.write import (
 )
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
+from tests.fixtures_domain import agent_config
 from tests.test_agent_graph import FakeToolCallingModel
 
 
@@ -40,7 +41,7 @@ def _config(user, task_id, thread="hilo-1"):
     id de la tarea de Pregel que LangGraph pone en cada corrida."""
     return {
         "configurable": {
-            "user_id": str(user.id),
+            **agent_config(user)["configurable"],
             "thread_id": thread,
             "checkpoint_ns": f"tools:{task_id}",
         }
@@ -264,7 +265,7 @@ def test_direct_invocations_without_a_task_id_are_never_deduplicated(
     monkeypatch.setattr(
         "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
     )
-    config = {"configurable": {"user_id": str(seeded_user.id)}}
+    config = {"configurable": {**agent_config(seeded_user)["configurable"]}}
 
     registrar_movimiento_caja.invoke(_movimiento(), config=config)
     registrar_movimiento_caja.invoke(_movimiento(), config=config)

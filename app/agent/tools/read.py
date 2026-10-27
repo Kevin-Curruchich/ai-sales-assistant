@@ -13,6 +13,7 @@ from datetime import date as date_type
 from datetime import datetime
 from decimal import Decimal
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from app.agent.session import agent_session
@@ -30,7 +31,7 @@ from app.services.sales import SaleService
 
 
 @tool
-def buscar_cliente(nombre: str) -> dict:
+def buscar_cliente(nombre: str, config: RunnableConfig) -> dict:
     """Busca clientes por nombre, empresa o correo.
 
     Devuelve hasta 10 coincidencias.  Si hay mas de una, pregunta cual antes
@@ -39,7 +40,7 @@ def buscar_cliente(nombre: str) -> dict:
     hay mas sin listar (`hay_mas`); nunca lo digas como si "clientes" fuera
     todo lo que hay.
     """
-    with agent_session() as db:
+    with agent_session(config) as db:
         service = CustomerService(db)
         found = service.get_all(search=nombre, limit=10)
         total = service.count(search=nombre)
@@ -59,7 +60,7 @@ def buscar_cliente(nombre: str) -> dict:
 
 
 @tool
-def buscar_producto(nombre: str) -> dict:
+def buscar_producto(nombre: str, config: RunnableConfig) -> dict:
     """Busca productos por nombre o SKU.
 
     Devuelve hasta 10 coincidencias con su `id` (el UUID que piden
@@ -76,7 +77,7 @@ def buscar_producto(nombre: str) -> dict:
     puede haber stock sin lote con costo.  Para saber si una venta se puede
     registrar, usa `previsualizar_venta`.
     """
-    with agent_session() as db:
+    with agent_session(config) as db:
         service = ProductService(db)
         found = service.get_all(search=nombre, limit=10)
         total = service.count(search=nombre)
@@ -97,7 +98,9 @@ def buscar_producto(nombre: str) -> dict:
 
 
 @tool
-def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
+def previsualizar_venta(
+    cliente_id: str, items: list[dict], fecha: str, config: RunnableConfig
+) -> dict:
     """Calcula una venta sin registrarla.
 
     Devuelve, por item: de que lotes sale y cuanto de cada uno (`lotes`), el
@@ -108,7 +111,7 @@ def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
     Usala SIEMPRE antes de registrar_venta.  `items` es una lista de
     {"producto_id": str, "cantidad": str, "precio_unitario": str opcional}.
     """
-    with agent_session() as db:
+    with agent_session(config) as db:
         data = SaleCreate(
             customerId=cliente_id,
             date=date_type.fromisoformat(fecha),
@@ -147,7 +150,7 @@ def previsualizar_venta(cliente_id: str, items: list[dict], fecha: str) -> dict:
 
 @tool
 def consultar_seguimiento(
-    filtro: str = "all", limite: int = 10, offset: int = 0
+    config: RunnableConfig, filtro: str = "all", limite: int = 10, offset: int = 0
 ) -> dict:
     """Lista clientes con seguimiento de recompra pendiente.
 
@@ -155,7 +158,7 @@ def consultar_seguimiento(
     cliente devuelve los productos que se espera que necesite, cuantos dias
     faltan (negativo si ya se paso la fecha) y si el stock esta bajo.
     """
-    with agent_session() as db:
+    with agent_session(config) as db:
         seguimientos, total = SaleService(db).get_follow_ups(
             filter_type=filtro, limit=limite, offset=offset
         )
@@ -206,7 +209,10 @@ def _parse_boundary(db, value: str, *, inclusive_end: bool) -> datetime:
 
 @tool
 def consultar_caja(
-    desde: str | None = None, hasta: str | None = None, limite: int = 20
+    config: RunnableConfig,
+    desde: str | None = None,
+    hasta: str | None = None,
+    limite: int = 20,
 ) -> dict:
     """Consulta el estado de caja: saldo operativo, saldo del socio y el libro de movimientos.
 
@@ -219,7 +225,7 @@ def consultar_caja(
     medianoche UTC. `limite` corta cuantos de los mas recientes de ese rango
     se devuelven.
     """
-    with agent_session() as db:
+    with agent_session(config) as db:
         service = CashService(db)
         start = _parse_boundary(db, desde, inclusive_end=False) if desde else None
         end = _parse_boundary(db, hasta, inclusive_end=True) if hasta else None
@@ -255,6 +261,7 @@ _ESTADOS_PAGO = {"pendiente": True, "pagada": False}
 
 @tool
 def consultar_ventas(
+    config: RunnableConfig,
     cliente_id: str | None = None,
     producto_id: str | None = None,
     desde: str | None = None,
@@ -288,7 +295,7 @@ def consultar_ventas(
         "end_date": date_type.fromisoformat(hasta) if hasta else None,
         "is_payment_pending": _ESTADOS_PAGO.get(estado_pago) if estado_pago else None,
     }
-    with agent_session() as db:
+    with agent_session(config) as db:
         hoy = business_today(db)
         service = SaleService(db)
         ventas = service.get_all_enriched(**filtros, limit=limite, offset=offset)

@@ -2,21 +2,42 @@
 
 El agente corre dentro del mismo proceso FastAPI: no hay `Depends` de
 FastAPI que abra y cierre la sesion para una tool call de LangGraph, asi que
-cada herramienta la administra por su cuenta con `agent_session()`.
+cada herramienta la administra por su cuenta con `agent_session(config)`, que
+la liga al comercio que el endpoint puso en `configurable`.
 """
 
 import uuid
 from contextlib import contextmanager
 
 from app.agent.auth import AgentAuthError
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, bind_business
+
+#: Claves de comercio que `/agent/stream` pone en `configurable` a partir de
+#: `current_user`, igual que `user_id`: nunca del cuerpo del pedido.
+BUSINESS_CONFIGURABLE_KEYS = ("business_id", "business_tz")
 
 
 @contextmanager
-def agent_session():
-    """Una sesion de base por invocacion de herramienta."""
+def agent_session(config: dict):
+    """Una sesion de base por invocacion de herramienta, ligada (RLS y zona
+    horaria) al comercio de `config["configurable"]`."""
+    configurable = (config or {}).get("configurable") or {}
+    business_id, business_tz = (configurable.get(k) for k in BUSINESS_CONFIGURABLE_KEYS)
+    if not business_id or not business_tz:
+        raise AgentAuthError(
+            "config['configurable'] no trae 'business_id' y 'business_tz' -- el "
+            "endpoint no armo el comercio de `get_current_user` antes de invocar "
+            "al agente."
+        )
+    try:
+        business_uuid = uuid.UUID(str(business_id))
+    except ValueError as exc:
+        raise AgentAuthError(
+            f"config['configurable']['business_id'] no es un UUID valido: {business_id!r}"
+        ) from exc
     db = SessionLocal()
     try:
+        bind_business(db, business_uuid, business_tz)
         yield db
     finally:
         db.close()

@@ -402,6 +402,10 @@ async def stream_agent(
         "configurable": {
             "thread_id": thread_key,
             "user_id": str(current_user.id),
+            # El comercio y su zona: cada herramienta abre su sesion ligada a
+            # ellos (RLS) y el prompt fecha "hoy" en esa zona.
+            "business_id": str(current_user.business_id),
+            "business_tz": current_user.business.timezone,
         }
     }
 
