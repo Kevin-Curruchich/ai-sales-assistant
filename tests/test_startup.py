@@ -149,9 +149,11 @@ def test_startup_accepts_a_role_subject_to_rls(migrated_schema):
         engine.dispose()
 
 
-def test_lifespan_refuses_to_start_as_superuser():
+def test_lifespan_refuses_to_start_as_superuser(test_engine, monkeypatch):
     """No se degrada a `startup_issues`: sin RLS la API no arranca."""
     from fastapi.testclient import TestClient
+
+    monkeypatch.setattr("app.main.engine", test_engine)
 
     with pytest.raises(RuntimeError, match="BYPASSRLS"):
         with TestClient(main.app):

@@ -33,12 +33,13 @@ Requisitos que no son obvios:
   app_tenant`, y eso solo cubre las tablas que cree *el rol que corrió la
   migración*. Una tabla creada por otro rol nace sin GRANTs para `app_tenant`
   y la API recibe `permission denied` sobre ella.
-- **`revenew_api` tiene que ser dueño del schema `agent`** (o tener `CREATE`
-  sobre él, y ser dueño de sus tablas): el checkpointer de LangGraph
+- **`revenew_api` tiene que ser dueño del schema `agent` y de todas sus
+  tablas.** `CREATE` sobre el schema no alcanza: el checkpointer de LangGraph
   (`AsyncPostgresSaver.setup()`) y `agent.tool_writes`
-  (`app/agent/idempotency.py`) crean y alteran tablas ahí en tiempo de
-  ejecución. Sin esto el agente arranca degradado (`agent_graph_init_failed`
-  en `/health`).
+  (`app/agent/idempotency.py`) crean y *alteran* tablas ahí en tiempo de
+  ejecución, y alterar una tabla exige ser su dueño. Sin esto el agente
+  arranca degradado (`agent_graph_init_failed` en `/health`). No hace falta
+  `CREATE` sobre la base: la app solo crea el schema si no existe.
 
 **Precondición: nadie usando la app durante el paso 3.** El código viejo no
 fija `app.business_id`; contra el schema ya migrado sus inserts fallan por
@@ -142,8 +143,14 @@ arranca la API con `DATABASE_URL`.
   `postgres` (ver "Requisitos"); corré como `postgres`
   `GRANT SELECT, INSERT, UPDATE, DELETE ON <tabla> TO app_tenant`.
 
-Railway mantiene el deploy anterior sirviendo mientras el nuevo no queda
-sano; si la migración falla, `set -e` corta el arranque.
+**El deploy anterior NO es un respaldo seguro.** Si la migración corrió pero
+el deploy nuevo no queda sano (guard de RLS, permisos, `/health`), Railway
+sigue sirviendo el build anterior al multi-comercio, y ese build no fija
+`app.business_id`: **toda escritura falla** (`business_id` NOT NULL) hasta
+que un deploy nuevo quede sano. Las lecturas siguen andando. Es una caída de
+escrituras: corregí la variable o el permiso que indica el log y redeployá
+de inmediato. Si la migración misma falla, `set -e` corta el arranque y la
+transacción se revierte; ahí el build anterior sí sigue funcionando.
 
 ## 4. Verificar
 

@@ -406,3 +406,32 @@ def test_a_replayed_purchase_task_does_not_write_twice(
     assert db_session.query(Purchase).count() == 1
     db_session.refresh(producto_sin_stock)
     assert producto_sin_stock.stock == Decimal("5")
+
+
+def test_schema_owner_without_create_on_database_can_ensure_table(
+    test_engine, monkeypatch
+):
+    """En produccion el usuario de la API es dueño de `agent` pero no tiene
+    CREATE sobre la base: `CREATE SCHEMA IF NOT EXISTS` le falla aunque el
+    schema exista (Postgres chequea el permiso antes que la existencia)."""
+    from sqlalchemy.orm import Session
+
+    suffix = uuid.uuid4().hex[:8]
+    role, schema = f"api_test_{suffix}", f"agent_test_{suffix}"
+    with test_engine.begin() as conn:
+        conn.execute(text(f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS'))
+        conn.execute(text(f'CREATE SCHEMA "{schema}" AUTHORIZATION "{role}"'))
+    monkeypatch.setattr(idempotency, "AGENT_SCHEMA", schema)
+    monkeypatch.setattr(idempotency, "QUALIFIED", f'"{schema}"."tool_writes"')
+    monkeypatch.setattr(idempotency, "_ddl_done", False)
+    try:
+        with Session(test_engine) as db:
+            db.execute(text(f'SET ROLE "{role}"'))
+            idempotency.ensure_table(db)
+            assert idempotency.find(db, "sin-marca") is None
+            db.execute(text("RESET ROLE"))
+            db.commit()
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))

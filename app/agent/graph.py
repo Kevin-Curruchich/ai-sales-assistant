@@ -44,6 +44,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.prebuilt import create_react_agent
 
+from app.agent.idempotency import ensure_schema_sql
 from app.agent.prompt_runtime import prompt_con_fecha
 from app.agent.tools import ALL_TOOLS
 
@@ -160,7 +161,7 @@ async def build_async_checkpointer(conn_string: str, schema: str) -> AsyncPostgr
     try:
         await pool.open(wait=True)
         async with pool.connection() as conn:
-            await conn.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+            await conn.execute(ensure_schema_sql(schema))
         checkpointer = AsyncPostgresSaver(pool)
         await checkpointer.setup()
     except BaseException:

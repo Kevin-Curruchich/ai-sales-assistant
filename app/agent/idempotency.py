@@ -73,6 +73,22 @@ TABLE = "tool_writes"
 QUALIFIED = f'"{AGENT_SCHEMA}"."{TABLE}"'
 
 _ddl_done = False
+
+
+def ensure_schema_sql(schema: str) -> str:
+    """`CREATE SCHEMA` solo si falta.
+
+    `CREATE SCHEMA IF NOT EXISTS` exige CREATE sobre la base aunque el schema
+    exista, y el usuario de la API (dueño de `agent`) no lo tiene.
+    """
+    return (
+        "DO $$ BEGIN "
+        f"IF NOT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = '{schema}') THEN "
+        f'CREATE SCHEMA IF NOT EXISTS "{schema}"; '
+        "END IF; END $$"
+    )
+
+
 _ddl_lock = threading.Lock()
 
 
@@ -104,7 +120,7 @@ def ensure_table(db) -> None:
     negocio: no puede compartir transaccion con la escritura que va a
     proteger. En produccion el schema `agent` ya existe (lo crea
     `build_async_checkpointer` al construir el grafo, con las mismas
-    credenciales); el `CREATE SCHEMA IF NOT EXISTS` de aca es para que un
+    credenciales); el `ensure_schema_sql` de aca es para que un
     entorno que arranque distinto -- o un test -- no dependa de ese orden.
     """
     global _ddl_done
@@ -113,7 +129,7 @@ def ensure_table(db) -> None:
     with _ddl_lock:
         if _ddl_done:
             return
-        db.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{AGENT_SCHEMA}"'))
+        db.execute(text(ensure_schema_sql(AGENT_SCHEMA)))
         db.execute(
             text(
                 f"CREATE TABLE IF NOT EXISTS {QUALIFIED} ("
