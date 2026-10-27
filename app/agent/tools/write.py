@@ -134,6 +134,8 @@ from app.agent.signing import firmar, verificar
 from app.core.datetime_utils import business_instant, business_tz
 from app.models.cash_movement import CashMovementType
 from app.models.payment_method import PaymentMethod
+from app.models.purchase import Purchase
+from app.models.sale import Sale
 from app.repositories.product_repository import ProductRepository
 from app.schemas.purchase import PurchaseCreate, PurchaseItemCreate
 from app.schemas.sale import SaleCreate, SaleItemCreate, SalePreviewResponse
@@ -834,7 +836,8 @@ def registrar_movimiento_caja(
     Se detiene a pedir confirmacion antes de escribir. El resultado trae
     "estado": "registrado" | "cancelado" | "ya_registrado" (esta misma tarea
     ya lo escribio y el proceso se reanudo despues; no se escribio de
-    nuevo).
+    nuevo) | "no_encontrada" (la venta o compra indicada no existe en este
+    comercio; no se escribio nada).
     """
     # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
     # para asociar el movimiento a nadie, sino para comprobar que esta
@@ -896,6 +899,17 @@ def registrar_movimiento_caja(
         # que la persona afirma ("el socio puso Q500"), no un calculo que
         # pueda desactualizarse entre el preview y la aprobacion.
         with agent_session(config) as db:
+            # La FK no respeta RLS: sin esto se podia colgar el movimiento de
+            # una venta o compra de otro comercio. `db.get` si pasa por RLS.
+            for clave, modelo, nombre in (
+                ("venta_id", Sale, "venta"),
+                ("compra_id", Purchase, "compra"),
+            ):
+                if valores[clave] and db.get(modelo, uuid.UUID(valores[clave])) is None:
+                    return {
+                        "estado": "no_encontrada",
+                        "mensaje": f"No existe una {nombre} con id {valores[clave]}. No se escribio nada.",
+                    }
             if clave_escritura is not None:
                 idempotency.claim(db, clave_escritura, "registrar_movimiento_caja")
 

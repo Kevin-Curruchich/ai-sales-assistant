@@ -7,12 +7,17 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import HumanMessage
+from sqlalchemy import func, select
+from sqlalchemy.orm import sessionmaker
 
 from app.agent.auth import AgentAuthError
 from app.agent.prompt_runtime import prompt_con_fecha
 from app.agent.session import agent_session
 from app.agent.tools.write import registrar_movimiento_caja
+from app.core.database import bind_business
+from app.models import Customer, Sale
 from app.models.cash_movement import CashMovement
+from app.models.purchase import Purchase
 from tests.fixtures_domain import agent_config, business_configurable
 from tests.fixtures_http import _auth, _create_thread_as
 
@@ -108,3 +113,55 @@ def test_prompt_uses_business_timezone():
 
     assert "Hoy es 2026-10-01" in _sistema("America/Guatemala")
     assert "Hoy es 2026-10-02" in _sistema("Asia/Tokyo")
+
+
+@pytest.mark.parametrize("campo", ["venta_id", "compra_id"])
+def test_cash_tool_rejects_sale_or_purchase_of_other_business(
+    db_session,
+    tenant_session,
+    seeded_user,
+    seeded_business,
+    user_of_other_business,
+    other_business,
+    monkeypatch,
+    campo,
+):
+    bind_business(db_session, other_business.id, other_business.timezone)
+    customer = Customer(name="Cliente ajeno")
+    db_session.add(customer)
+    db_session.flush()
+    sale = Sale(
+        customer_id=customer.id,
+        user_id=user_of_other_business.id,
+        date=datetime(2026, 10, 1).date(),
+        total=10,
+    )
+    purchase = Purchase(
+        user_id=user_of_other_business.id, date=datetime(2026, 10, 1).date()
+    )
+    db_session.add_all([sale, purchase])
+    db_session.commit()
+    bind_business(db_session, seeded_business.id, seeded_business.timezone)
+    ajeno = {"venta_id": sale.id, "compra_id": purchase.id}[campo]
+    # Las herramientas sobre una sesion sujeta a RLS, como en produccion.
+    monkeypatch.setattr(
+        "app.agent.session.SessionLocal", sessionmaker(bind=tenant_session.get_bind())
+    )
+    monkeypatch.setattr(
+        "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
+    )
+    contar = select(func.count()).select_from(CashMovement)
+    antes = db_session.scalar(contar)
+
+    result = registrar_movimiento_caja.invoke(
+        {
+            "tipo": "aporte_socio",
+            "monto": "10.00",
+            "fecha": "2026-10-01",
+            campo: str(ajeno),
+        },
+        config=agent_config(seeded_user),
+    )
+
+    assert result["estado"] == "no_encontrada", result
+    assert db_session.scalar(contar) == antes
