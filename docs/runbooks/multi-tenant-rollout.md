@@ -169,6 +169,17 @@ transacción se revierte; ahí el build anterior sí sigue funcionando.
 
 ## 5. Rollback
 
+**Precondición: un solo comercio.** Como `postgres`, corré:
+
+```sql
+SELECT count(*) FROM db_v2.businesses;
+```
+
+Este rollback solo se permite si devuelve **1**. Con más de un comercio,
+volver a `postgres` apaga RLS y cada comercio queda a un bug de ver o
+escribir datos del otro: **no hagas rollback al superusuario, corregí hacia
+adelante** (arreglá la variable, el permiso o el código y redeployá).
+
 RLS no aplica a `postgres` (superusuario), y la app ya fija el comercio en
 cada request, así que con un solo comercio funciona igual como `postgres`.
 **Pero el guard de este cambio no la deja arrancar así**: volver solo las
@@ -183,3 +194,12 @@ No redeployes un deploy anterior al multi-comercio: su código no fija
 `app.business_id` y no puede escribir en el schema migrado. Deshacer la
 migración (`alembic downgrade`) solo si se abandona el multi-comercio
 entero, y siempre con `MIGRATIONS_DATABASE_URL` como `postgres`.
+
+## 6. Scripts de mantenimiento
+
+`scripts/backfill_projections.py` y `scripts/fix_historical_cost_basis.py`
+corren una pasada por comercio y confían en RLS para que cada pasada vea solo
+las filas de ese comercio. **Corrélos con las credenciales de la API**
+(`DATABASE_URL` = `revenew_api`, sujeto a RLS), nunca como `postgres`: como
+superusuario RLS no aplica y cada pasada vería (y recalcularía) las filas de
+todos los comercios.
