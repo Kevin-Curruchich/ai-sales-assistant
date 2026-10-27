@@ -28,12 +28,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import uuid
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from scripts._businesses import run_per_business
 
 # Los mismos nombres que usan alembic/env.py, copy_schema_data.py y
 # backfill_projections.py: un solo par para todo el repo.
@@ -145,6 +147,7 @@ def corregir(db: Session, dry_run: bool = False) -> list[dict]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="no escribe nada")
+    parser.add_argument("--business-id", type=uuid.UUID, help="solo este comercio")
     args = parser.parse_args()
 
     from app.core.config import settings
@@ -153,9 +156,15 @@ def main() -> None:
     print(f"  schema resuelto: {schema!r}")
     _guard_against_protected_schema(schema)
 
-    db = SessionLocal()
+    run_per_business(
+        SessionLocal, lambda db: _reportar(db, args.dry_run), args.business_id
+    )
+
+
+def _reportar(db: Session, dry_run: bool) -> None:
+    print(f"\n  comercio {db.info['business_id']}")
     try:
-        pendientes = corregir(db, dry_run=args.dry_run)
+        pendientes = corregir(db, dry_run=dry_run)
         if not pendientes:
             print("  nada que corregir: todos los costos coinciden con sus lotes")
             return
@@ -175,7 +184,7 @@ def main() -> None:
             )
             impacto += abs(p["ganancia_correcta"] - p["ganancia_guardada"])
         print(f"\n  impacto en ganancia reportada: Q{impacto}")
-        if args.dry_run:
+        if dry_run:
             print("\n  (dry-run: no se escribio nada)")
         else:
             print("\n  escrito.")

@@ -7,11 +7,13 @@ commit; eso solo enciende una senal. El hilo que la atiende duerme sin temporiza
 import logging
 import threading
 from datetime import timedelta
-from typing import Optional
+from typing import Callable, Optional
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from app.core.database import bind_business
+from app.models.business import Business
 from app.models.customer_product_cycle import CustomerProductCycle
 from app.models.follow_up import OPEN, SYNC_FAILED, SYNC_SYNCED, FollowUp
 from app.repositories.customer_product_cycle_repository import (
@@ -105,31 +107,55 @@ def next_wait_timeout(failed: int) -> Optional[float]:
     return RETRY_SECONDS if failed else None
 
 
-def sync_pass(session_factory, client) -> int:
-    """Una pasada completa. Un error inesperado (p. ej. la base caida) cuenta
-    como falla, para que se reintente en vez de dormir para siempre."""
+def sync_pass(session_factory, client_for: Callable[[str], object]) -> int:
+    """Una pasada completa, un comercio a la vez (solo los que tienen
+    calendario). Un error inesperado (p. ej. la base caida, o credenciales
+    que no cargan) cuenta como falla de ese comercio, para que se reintente
+    en vez de dormir para siempre, y no frena a los demas."""
     try:
         with session_factory() as db:
-            return sync_pending_follow_ups(db, client)
+            businesses = db.execute(
+                select(
+                    Business.id, Business.timezone, Business.google_calendar_id
+                ).where(Business.google_calendar_id.is_not(None))
+            ).all()
     except Exception:
-        logger.exception("Fallo la pasada de sincronizacion con Google Calendar")
+        logger.exception("Fallo al listar los comercios con Google Calendar")
         return 1
+    failed = 0
+    for business in businesses:
+        try:
+            with session_factory() as db:
+                bind_business(db, business.id, business.timezone)
+                failed += sync_pending_follow_ups(
+                    db, client_for(business.google_calendar_id)
+                )
+        except Exception:
+            logger.exception(
+                "Fallo la sincronizacion con Google Calendar del comercio %s",
+                business.id,
+            )
+            failed += 1
+    return failed
 
 
-def _run(session_factory, client) -> None:
+def _run(session_factory, client_for) -> None:
     while True:
         # Limpiar ANTES de la pasada: un pedido que llega durante ella deja la
         # senal encendida y el `wait` de abajo vuelve enseguida.
         _wake.clear()
-        failed = sync_pass(session_factory, client)
+        failed = sync_pass(session_factory, client_for)
         _wake.wait(timeout=next_wait_timeout(failed))
 
 
-def start_calendar_sync(session_factory, client) -> threading.Thread:
+def start_calendar_sync(session_factory, client_for) -> threading.Thread:
     """Arranca el hilo. Su primera pasada cubre la carga inicial y lo que
     haya quedado pendiente de un reinicio."""
     thread = threading.Thread(
-        target=_run, args=(session_factory, client), name="calendar-sync", daemon=True
+        target=_run,
+        args=(session_factory, client_for),
+        name="calendar-sync",
+        daemon=True,
     )
     thread.start()
     return thread

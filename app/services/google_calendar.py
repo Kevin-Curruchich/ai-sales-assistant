@@ -28,7 +28,7 @@ class GoogleCalendarClient:
         self.session = session
 
     @classmethod
-    def from_settings(cls) -> "GoogleCalendarClient":
+    def from_settings(cls, calendar_id: str) -> "GoogleCalendarClient":
         """La misma cuenta de servicio que usa Firebase."""
         if settings.FIREBASE_CREDENTIALS_PATH:
             creds = service_account.Credentials.from_service_account_file(
@@ -36,7 +36,7 @@ class GoogleCalendarClient:
             )
         else:
             creds, _project = google.auth.default(scopes=SCOPES)
-        return cls(settings.GOOGLE_CALENDAR_ID, AuthorizedSession(creds))
+        return cls(calendar_id, AuthorizedSession(creds))
 
     def _url(self, event_id: str | None = None) -> str:
         base = f"{CALENDAR_API}/calendars/{quote(self.calendar_id, safe='')}/events"

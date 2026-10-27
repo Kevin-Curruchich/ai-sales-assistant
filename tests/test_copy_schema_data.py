@@ -62,6 +62,10 @@ def _seed(schema: str) -> None:
     session.close()
 
 
+def test_copy_schema_copies_businesses_first():
+    assert TABLE_ORDER[0] == "businesses"
+
+
 def test_table_order_respects_foreign_keys():
     assert TABLE_ORDER.index("users") < TABLE_ORDER.index("sales")
     assert TABLE_ORDER.index("customers") < TABLE_ORDER.index("sales")

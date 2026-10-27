@@ -83,16 +83,11 @@ async def lifespan(app: FastAPI):
     # Mismo patron que Firebase: que el espejo de Google no arranque no debe
     # tumbar las ventas; los seguimientos se quedan `pending` hasta el proximo
     # arranque que si pueda.
-    if settings.GOOGLE_CALENDAR_ID:
-        try:
-            start_calendar_sync(SessionLocal, GoogleCalendarClient.from_settings())
-        except Exception:
-            logger.exception("Google Calendar sync failed to start")
-            startup_issues.append("calendar_sync_init_failed")
-    else:
-        logger.info(
-            "GOOGLE_CALENDAR_ID no definido: los seguimientos no se reflejan en Google Calendar"
-        )
+    try:
+        start_calendar_sync(SessionLocal, GoogleCalendarClient.from_settings)
+    except Exception:
+        logger.exception("Google Calendar sync failed to start")
+        startup_issues.append("calendar_sync_init_failed")
 
     # Mismo patron que Firebase arriba: que el agente no arranque no debe
     # tumbar las ventas. Un Postgres caido en el momento del arranque degrada

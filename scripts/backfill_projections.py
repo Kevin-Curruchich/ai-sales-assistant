@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import argparse
 import os
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import CustomerProductCycle, Sale, SaleItem
 from app.services.sales.projection import project
+from scripts._businesses import run_per_business
 
 # db_dev es el schema que .env apunta por defecto y contiene los datos reales
 # de produccion (156 ventas al momento de escribir esto). Los mismos nombres
@@ -76,6 +78,19 @@ def backfill_projections(session: Session, dry_run: bool = False) -> dict[str, i
     return counts
 
 
+def backfill_all(
+    session_factory, dry_run: bool = False, business_id: uuid.UUID | None = None
+) -> dict[str, int]:
+    """`backfill_projections` por comercio; suma los contadores."""
+    totals = {"updated": 0, "cleared": 0, "unchanged": 0}
+    for counts in run_per_business(
+        session_factory, lambda db: backfill_projections(db, dry_run), business_id
+    ):
+        for key, value in counts.items():
+            totals[key] += value
+    return totals
+
+
 def _guard_against_protected_schema(schema: str, *, dry_run: bool) -> None:
     if dry_run:
         return
@@ -97,16 +112,13 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--business-id", type=uuid.UUID, help="solo este comercio")
     args = parser.parse_args()
 
     print(f"  schema resuelto: {SCHEMA!r}")
     _guard_against_protected_schema(SCHEMA, dry_run=args.dry_run)
 
-    session = SessionLocal()
-    try:
-        counts = backfill_projections(session, dry_run=args.dry_run)
-    finally:
-        session.close()
+    counts = backfill_all(SessionLocal, args.dry_run, args.business_id)
 
     for key, value in counts.items():
         print(f"  {key:<12} {value:>4}")

@@ -10,6 +10,7 @@ from app.models import Customer, CustomerProductCycle, Product, Sale, SaleItem, 
 from app.services.sales.projection import project
 from scripts.backfill_projections import (
     _guard_against_protected_schema,
+    backfill_all,
     backfill_projections,
 )
 from tests.conftest import TEST_DATABASE_URL
@@ -207,3 +208,29 @@ def test_guard_allows_a_real_run_with_the_explicit_opt_in(monkeypatch):
 def test_guard_allows_a_real_run_against_any_other_schema(monkeypatch):
     monkeypatch.delenv("REVENEW_ALLOW_DB_DEV", raising=False)
     _guard_against_protected_schema("db_v2", dry_run=False)  # no debe levantar
+
+
+def test_backfill_runs_per_business(session, migrated_schema):
+    from sqlalchemy import text
+
+    from app.core.database import bind_business
+    from app.models.business import Business
+
+    first = session.info["business_id"]
+    other = Business(name="Otro")
+    session.add(other)
+    session.commit()
+    bind_business(session, other.id, other.timezone)
+    cycle_b = _seed_pair(session, [date(2026, 8, 1), date(2026, 8, 11)])
+    bind_business(session, first, "America/Guatemala")
+    cycle_a = _seed_pair(session, [date(2026, 8, 1), date(2026, 8, 11)])
+    ids = (cycle_a.id, cycle_b.id)
+
+    totals = backfill_all(sessionmaker(bind=session.get_bind()))
+
+    assert totals["updated"] == 2
+    session.expire_all()
+    rows = session.execute(
+        text("SELECT id, business_id FROM customer_product_cycles")
+    ).all()
+    assert dict(rows) == {ids[0]: first, ids[1]: other.id}
