@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.agent.graph import (
     build_async_checkpointer,
@@ -31,7 +32,7 @@ from app.models import (  # noqa: F401
     User,
 )
 from app.services.calendar_sync import start_calendar_sync
-from app.services.google_calendar import GoogleCalendarClient
+from app.services.google_calendar import GoogleCalendarClient, load_authorized_session
 
 logger = logging.getLogger("app.startup")
 startup_issues: list[str] = []
@@ -68,9 +69,32 @@ def missing_agent_env() -> list[str]:
     ]
 
 
+def assert_rls_enforced(engine) -> None:
+    """Revienta si el rol de la conexion se salta RLS.
+
+    Un superusuario o un rol con BYPASSRLS ve todos los comercios: con el
+    aislamiento apagado en silencio, mejor que la API no arranque.
+    """
+    with engine.connect() as conn:
+        bypasses = conn.execute(
+            text(
+                "select rolsuper or rolbypassrls from pg_roles "
+                "where rolname = current_user"
+            )
+        ).scalar()
+    if bypasses:
+        raise RuntimeError(
+            "La API no puede conectarse como superusuario ni con BYPASSRLS: "
+            "RLS quedaria desactivado"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
+    # A diferencia de lo de abajo, no se degrada a `startup_issues`: sin RLS
+    # un comercio veria los datos de otro.
+    assert_rls_enforced(engine)
     # El esquema lo gestiona Alembic desde entrypoint.sh, no el arranque.
     startup_issues.clear()
 
@@ -83,16 +107,15 @@ async def lifespan(app: FastAPI):
     # Mismo patron que Firebase: que el espejo de Google no arranque no debe
     # tumbar las ventas; los seguimientos se quedan `pending` hasta el proximo
     # arranque que si pueda.
-    if settings.GOOGLE_CALENDAR_ID:
-        try:
-            start_calendar_sync(SessionLocal, GoogleCalendarClient.from_settings())
-        except Exception:
-            logger.exception("Google Calendar sync failed to start")
-            startup_issues.append("calendar_sync_init_failed")
-    else:
-        logger.info(
-            "GOOGLE_CALENDAR_ID no definido: los seguimientos no se reflejan en Google Calendar"
+    try:
+        calendar_session = load_authorized_session()
+        start_calendar_sync(
+            SessionLocal,
+            lambda calendar_id: GoogleCalendarClient(calendar_id, calendar_session),
         )
+    except Exception:
+        logger.exception("Google Calendar sync failed to start")
+        startup_issues.append("calendar_sync_init_failed")
 
     # Mismo patron que Firebase arriba: que el agente no arranque no debe
     # tumbar las ventas. Un Postgres caido en el momento del arranque degrada

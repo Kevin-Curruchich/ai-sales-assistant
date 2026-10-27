@@ -133,7 +133,7 @@ class SaleRepository:
 
     def get_sales_this_month(self) -> float:
         """Return total sales amount for the current month."""
-        today = business_today()
+        today = business_today(self.db)
         first_day = today.replace(day=1)
         stmt = select(func.coalesce(func.sum(Sale.total), 0.0)).where(
             Sale.date >= first_day, Sale.date <= today

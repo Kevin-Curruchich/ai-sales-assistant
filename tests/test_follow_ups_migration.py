@@ -9,20 +9,31 @@ from decimal import Decimal
 
 import pytest
 from alembic import command
-from sqlalchemy import text
+from sqlalchemy import insert, text
 from sqlalchemy.exc import IntegrityError
 
 from app.core.datetime_utils import business_today
 from app.models import Customer, CustomerProductCycle, Product
-from tests.fixtures_domain import _session_for
+from tests.fixtures_domain import _session_for, bind_first_business
 
 
-def _cycle(customer, product, next_purchase):
-    return CustomerProductCycle(
-        customer_id=customer.id,
-        product_id=product.id,
+def _insert(session, model, **values):
+    """INSERT por Core: el modelo ya trae `business_id`, que a esta revision
+    todavia no existe, y el Core solo manda las columnas con default en Python."""
+    table = model.__table__
+    return session.execute(
+        insert(table).values(**values).returning(table.c.id)
+    ).scalar_one()
+
+
+def _cycle(session, customer_id, product_id, next_purchase):
+    _insert(
+        session,
+        CustomerProductCycle,
+        customer_id=customer_id,
+        product_id=product_id,
         estimated_next_purchase=next_purchase,
-        last_purchase_date=business_today() - timedelta(days=30),
+        last_purchase_date=business_today(session) - timedelta(days=30),
         last_quantity=Decimal("1"),
         total_purchases=2,
     )
@@ -32,21 +43,17 @@ def test_backfill_opens_one_follow_up_per_projected_cycle(alembic_config):
     command.upgrade(alembic_config, "07ee91fc2b95")
     schema = alembic_config.attributes["target_schema"]
     session, engine = _session_for(schema)
+    session.info["business_tz"] = "America/Guatemala"
     try:
-        customer = Customer(name="Aurita")
+        customer = _insert(session, Customer, name="Aurita")
         future, past, unprojected = (
-            Product(sku=f"SKU-{n}", name=f"Producto {n}") for n in ("F", "P", "U")
+            _insert(session, Product, sku=f"SKU-{n}", name=f"Producto {n}")
+            for n in ("F", "P", "U")
         )
-        session.add_all([customer, future, past, unprojected])
-        session.flush()
-        today = business_today()
-        session.add_all(
-            [
-                _cycle(customer, future, today + timedelta(days=10)),
-                _cycle(customer, past, today - timedelta(days=10)),
-                _cycle(customer, unprojected, None),
-            ]
-        )
+        today = business_today(session)
+        _cycle(session, customer, future, today + timedelta(days=10))
+        _cycle(session, customer, past, today - timedelta(days=10))
+        _cycle(session, customer, unprojected, None)
         session.commit()
 
         command.upgrade(alembic_config, "head")
@@ -55,10 +62,10 @@ def test_backfill_opens_one_follow_up_per_projected_cycle(alembic_config):
             text("SELECT product_id, due_date, status, sync_status FROM follow_ups")
         ).all()
         by_product = {r.product_id: r for r in rows}
-        assert set(by_product) == {future.id, past.id}
-        assert by_product[future.id].due_date == today + timedelta(days=10)
-        assert by_product[future.id].sync_status == "pending"
-        assert by_product[past.id].sync_status == "skipped"
+        assert set(by_product) == {future, past}
+        assert by_product[future].due_date == today + timedelta(days=10)
+        assert by_product[future].sync_status == "pending"
+        assert by_product[past].sync_status == "skipped"
         assert {r.status for r in rows} == {"open"}
     finally:
         session.close()
@@ -67,6 +74,7 @@ def test_backfill_opens_one_follow_up_per_projected_cycle(alembic_config):
 
 def test_only_one_open_follow_up_per_pair(migrated_schema):
     session, engine = _session_for(migrated_schema)
+    bind_first_business(session)
     try:
         customer = Customer(name="Aurita")
         product = Product(sku="SKU-X", name="Huevos")

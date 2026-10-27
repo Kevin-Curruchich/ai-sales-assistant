@@ -121,7 +121,7 @@ def test_update_to_pending_does_not_remove_an_aporte_socio_on_the_same_sale(
         user_id=seeded_user.id,
     )
     contribution = CashService(db_session).record(
-        occurred_at=business_midnight(date(2026, 9, 24)),
+        occurred_at=business_midnight(db_session, date(2026, 9, 24)),
         type=CashMovementType.APORTE_SOCIO,
         amount=Decimal("60.00"),
         sale_id=sale.id,

@@ -1,7 +1,7 @@
 """Harness de tests HTTP autenticados: un `client` (TestClient sobre
 app.main.app) con `get_db` y `get_current_user` apuntados a la sesion de
 prueba (mismo schema desechable que siembra `db_session`), mas `_auth` y
-`_create_thread_as`.
+`_create_thread_as`, y `tenant_client` (lo mismo pero sujeto a RLS).
 
 Este repo no tenia ni un test de endpoint autenticado -- `test_startup.py`
 solo golpea `/health`, que es publico. La Task 6 consume estos nombres; no
@@ -24,6 +24,7 @@ import app.main as main
 from app.agent.graph import build_async_checkpointer as _build_checkpointer_real
 from app.agent.graph import build_graph as _build_graph_real
 from app.api.dependencies import bearer_scheme, get_current_user, get_db
+from app.core.database import bind_business
 from app.models import User
 
 
@@ -89,6 +90,7 @@ def client(db_session, monkeypatch):
         user = db_session.get(User, user_id)
         if user is None:
             raise HTTPException(status_code=401, detail="usuario de prueba desconocido")
+        bind_business(db_session, user.business_id, user.business.timezone)
         return user
 
     async def _checkpointer_de_juguete(*_args, **_kwargs):
@@ -108,6 +110,9 @@ def client(db_session, monkeypatch):
         )
     if main.build_graph is _build_graph_real:
         monkeypatch.setattr("app.main.build_graph", _grafo_de_juguete)
+    # La base de tests se conecta como superusuario: el guard real no dejaria
+    # arrancar la app (ver `tests/test_startup.py`).
+    monkeypatch.setattr("app.main.assert_rls_enforced", lambda _engine: None)
 
     main.app.dependency_overrides[get_db] = _override_get_db
     main.app.dependency_overrides[get_current_user] = _override_get_current_user
@@ -133,3 +138,28 @@ def _create_thread_as(client: TestClient, user: User, title: str) -> dict:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+@pytest.fixture
+def tenant_client(client, db_session, tenant_session):
+    """`client` con `get_db` sobre `tenant_session` (sujeta a RLS): sin esto,
+    `db_session` es superusuario y un 404 o una lista vacia no probarian nada
+    del aislamiento."""
+
+    def _get_db():
+        yield tenant_session
+
+    def _get_current_user(
+        credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    ) -> User:
+        # El usuario se resuelve como superusuario (como lo hace la app antes
+        # de saber el comercio) y se liga la sesion RLS a su comercio.
+        user = db_session.get(User, uuid.UUID(credentials.credentials))
+        if user is None:
+            raise HTTPException(status_code=401)
+        bind_business(tenant_session, user.business_id, user.business.timezone)
+        return user
+
+    main.app.dependency_overrides[get_db] = _get_db
+    main.app.dependency_overrides[get_current_user] = _get_current_user
+    return client

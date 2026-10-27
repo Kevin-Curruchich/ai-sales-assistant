@@ -6,6 +6,7 @@ from sqlalchemy import DateTime, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 
 
 class User(Base):
@@ -25,10 +26,13 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(default=True)
 
     # Relationships
+    business: Mapped["Business"] = relationship("Business")
     sales: Mapped[list["Sale"]] = relationship("Sale", back_populates="user")
     purchases: Mapped[list["Purchase"]] = relationship(
         "Purchase", back_populates="user"
     )
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

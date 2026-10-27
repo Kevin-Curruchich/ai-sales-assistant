@@ -5,6 +5,8 @@ import pytest
 from alembic import command
 from sqlalchemy import text
 
+from tests.conftest import TEST_DATABASE_URL
+
 # Debe coincidir con MIGRATION_LOCK_KEY en alembic/env.py. No se importa ese
 # modulo directamente porque, al ser un script de Alembic, ejecuta
 # run_migrations_online() al nivel de modulo con la conexion por default de
@@ -114,3 +116,26 @@ def test_advisory_lock_wait_is_bounded_and_explains_itself(
     # El lock quedo liberado: una migracion posterior contra el mismo
     # schema debe funcionar sin volver a esperar.
     command.upgrade(alembic_config, "head")
+
+
+def test_migrations_url_overrides_settings(test_engine, alembic_config, monkeypatch):
+    """En produccion la API se conecta con un usuario sujeto a RLS, que no
+    puede crear roles ni tablas: las migraciones corren con su propia URL
+    (`MIGRATIONS_DATABASE_URL`, el usuario `postgres`), no con la de settings."""
+    from app.core.config import settings
+
+    del alembic_config.attributes["sqlalchemy_url"]
+    # Si env.py cayera a settings, esta URL no conecta y el upgrade revienta.
+    monkeypatch.setattr(settings, "DATABASE_URL", "postgresql://nadie@localhost:1/x")
+    monkeypatch.setenv("MIGRATIONS_DATABASE_URL", TEST_DATABASE_URL)
+
+    command.upgrade(alembic_config, "head")
+
+    schema = alembic_config.attributes["target_schema"]
+    with test_engine.connect() as conn:
+        assert (
+            conn.execute(
+                text(f'SELECT count(*) FROM "{schema}".alembic_version')
+            ).scalar()
+            == 1
+        )

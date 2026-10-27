@@ -45,7 +45,7 @@ class PurchaseService:
             return None, None
         if isinstance(value, str):
             value = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        return value, format_business_datetime(value)
+        return value, format_business_datetime(self.db, value)
 
     def _to_purchase_response(self, purchase: Purchase) -> PurchaseResponse:
         user = purchase.user
@@ -316,7 +316,8 @@ class PurchaseService:
         # ocurrio, solo no costo nada.
         if purchase.total > 0:
             self.cash_service.record(
-                occurred_at=purchase.occurred_at or business_instant(purchase.date),
+                occurred_at=purchase.occurred_at
+                or business_instant(self.db, purchase.date),
                 type=CashMovementType.SALIDA,
                 amount=purchase.total,
                 payment_method=purchase.payment_method,

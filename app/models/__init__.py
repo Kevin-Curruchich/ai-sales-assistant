@@ -1,4 +1,5 @@
 from app.models.agent_thread import AgentThread
+from app.models.business import Business
 from app.models.cash_movement import CashMovement, CashMovementType
 from app.models.customer import Customer
 from app.models.customer_product_cycle import CustomerProductCycle
@@ -11,6 +12,7 @@ from app.models.sale_item_lot_allocation import SaleItemLotAllocation
 from app.models.user import User
 
 __all__ = [
+    "Business",
     "User",
     "Customer",
     "Product",

@@ -54,7 +54,7 @@ recalcular ya no produce una firma valida, asi que el panel no puede fabricar
 uno.
 
 `db.expire_all()` antes de cada recalculo NO es lo que hace funcionar esta
-guardia bajo una reanudacion real -- `agent_session()` abre una sesion NUEVA
+guardia bajo una reanudacion real -- `agent_session(config)` abre una sesion NUEVA
 en cada reanudacion (ver mas abajo), asi que el identity map de SQLAlchemy
 arranca VACIO cuando el recalculo corre, y expirarlo ahi no cambia nada en
 ese caso. Lo que SI protege: un escritor genuinamente CONCURRENTE -- otra
@@ -134,6 +134,8 @@ from app.agent.signing import firmar, verificar
 from app.core.datetime_utils import business_instant, business_tz
 from app.models.cash_movement import CashMovementType
 from app.models.payment_method import PaymentMethod
+from app.models.purchase import Purchase
+from app.models.sale import Sale
 from app.repositories.product_repository import ProductRepository
 from app.schemas.purchase import PurchaseCreate, PurchaseItemCreate
 from app.schemas.sale import SaleCreate, SaleItemCreate, SalePreviewResponse
@@ -431,7 +433,7 @@ def registrar_venta(
         "pago_pendiente": pago_pendiente,
     }
 
-    with agent_session() as db:
+    with agent_session(config) as db:
         # ANTES de interrumpir: si esta tarea ya escribio (ver
         # `app/agent/idempotency.py`), no tiene sentido volver a pausar a una
         # persona para que apruebe algo que ya esta en la base. Chequear
@@ -670,7 +672,7 @@ def registrar_compra(
         "notas": notas,
     }
 
-    with agent_session() as db:
+    with agent_session(config) as db:
         # Ver la nota identica en registrar_venta.
         ya = _ya_escrito(db, clave_escritura, "registrar_compra", "compra_id")
         if ya is not None:
@@ -795,18 +797,18 @@ def registrar_compra(
 # ---------------------------------------------------------------------
 
 
-def _occurred_at(value: str) -> datetime:
+def _occurred_at(db, value: str) -> datetime:
     """Una fecha sin hora se resuelve con `business_instant`: la hora actual
     si es hoy, la medianoche de la zona del negocio si es un dia pasado --
     nunca UTC ni un reloj sin huso; una hora sin zona se asume tambien en la
     zona del negocio."""
     is_bare_date = "T" not in value and " " not in value
     if is_bare_date:
-        return business_instant(date_type.fromisoformat(value))
+        return business_instant(db, date_type.fromisoformat(value))
     parsed = datetime.fromisoformat(value)
     if parsed.tzinfo is not None:
         return parsed
-    return parsed.replace(tzinfo=business_tz())
+    return parsed.replace(tzinfo=business_tz(db))
 
 
 @tool
@@ -834,7 +836,8 @@ def registrar_movimiento_caja(
     Se detiene a pedir confirmacion antes de escribir. El resultado trae
     "estado": "registrado" | "cancelado" | "ya_registrado" (esta misma tarea
     ya lo escribio y el proceso se reanudo despues; no se escribio de
-    nuevo).
+    nuevo) | "no_encontrada" (la venta o compra indicada no existe en este
+    comercio; no se escribio nada).
     """
     # `CashMovement` no tiene columna `user_id` -- esta llamada no se usa
     # para asociar el movimiento a nadie, sino para comprobar que esta
@@ -852,7 +855,7 @@ def registrar_movimiento_caja(
         # esta no mantiene una sesion abierta a lo largo del loop (no tiene
         # nada que recalcular). Ver la nota de registrar_venta sobre por que
         # el chequeo va ANTES de interrumpir.
-        with agent_session() as db:
+        with agent_session(config) as db:
             ya = _ya_escrito(
                 db, clave_escritura, "registrar_movimiento_caja", "movimiento_id"
             )
@@ -895,13 +898,24 @@ def registrar_movimiento_caja(
         # este movimiento no deriva de inventario ni de lotes -- es un hecho
         # que la persona afirma ("el socio puso Q500"), no un calculo que
         # pueda desactualizarse entre el preview y la aprobacion.
-        with agent_session() as db:
+        with agent_session(config) as db:
+            # La FK no respeta RLS: sin esto se podia colgar el movimiento de
+            # una venta o compra de otro comercio. `db.get` si pasa por RLS.
+            for clave, modelo, nombre in (
+                ("venta_id", Sale, "venta"),
+                ("compra_id", Purchase, "compra"),
+            ):
+                if valores[clave] and db.get(modelo, uuid.UUID(valores[clave])) is None:
+                    return {
+                        "estado": "no_encontrada",
+                        "mensaje": f"No existe una {nombre} con id {valores[clave]}. No se escribio nada.",
+                    }
             if clave_escritura is not None:
                 idempotency.claim(db, clave_escritura, "registrar_movimiento_caja")
 
             service = CashService(db)
             movement = service.record(
-                occurred_at=_occurred_at(valores["fecha"]),
+                occurred_at=_occurred_at(db, valores["fecha"]),
                 type=CashMovementType(valores["tipo"]),
                 amount=Decimal(str(valores["monto"])),
                 payment_method=PaymentMethod(valores["medio_pago"])
@@ -1002,7 +1016,7 @@ def registrar_cobro(
     user_id_from_config(config)
     clave_escritura = idempotency.write_key(config)
 
-    with agent_session() as db:
+    with agent_session(config) as db:
         ya = _ya_escrito(db, clave_escritura, "registrar_cobro", "venta_id")
         if ya is not None:
             return ya

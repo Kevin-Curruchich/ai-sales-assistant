@@ -18,8 +18,12 @@ class UserRepository:
         stmt = select(User).where(User.email == email)
         return self.db.execute(stmt).scalar_one_or_none()
 
-    def get_all(self) -> list[User]:
-        stmt = select(User).order_by(User.created_at.desc())
+    def get_all(self, business_id: uuid.UUID) -> list[User]:
+        stmt = (
+            select(User)
+            .where(User.business_id == business_id)
+            .order_by(User.created_at.desc())
+        )
         return list(self.db.execute(stmt).scalars().all())
 
     def create(self, user: User) -> User:

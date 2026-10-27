@@ -18,6 +18,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.models.business import business_id_column
 from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
@@ -93,6 +94,8 @@ class CashMovement(Base):
         ForeignKey("purchases.id", ondelete="SET NULL"), nullable=True, index=True
     )
     note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

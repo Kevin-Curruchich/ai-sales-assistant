@@ -157,7 +157,7 @@ async def eventos_sse(graph, entrada, config) -> AsyncIterator[dict]:
         #
         # `logger.exception` deja el traceback completo en el log del
         # servidor -- las excepciones reales nacen en herramientas que pegan
-        # contra Postgres via `agent_session()`, y un `str(exc)` crudo de
+        # contra Postgres via `agent_session(config)`, y un `str(exc)` crudo de
         # psycopg/SQLAlchemy arrastra SQL y datos de conexion hasta el panel
         # ademas de perder el traceback entero. El mensaje que sale al panel
         # es fijo y en espanol, sin nombre de excepcion ni ningun otro

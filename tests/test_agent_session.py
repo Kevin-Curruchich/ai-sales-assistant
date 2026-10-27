@@ -14,6 +14,12 @@ from app.agent.session import (
 )
 
 UN_UUID = uuid.uuid4()
+CONFIG_CON_COMERCIO = {
+    "configurable": {
+        "business_id": str(uuid.uuid4()),
+        "business_tz": "America/Guatemala",
+    }
+}
 
 
 def test_agent_session_yields_a_session_and_closes_it_after():
@@ -21,7 +27,7 @@ def test_agent_session_yields_a_session_and_closes_it_after():
     no podia atrapar un `finally` roto, que es justo lo que este
     contextmanager existe para garantizar (el proceso del agente no tiene
     `Depends` que cierre la sesion por el)."""
-    with agent_session() as db:
+    with agent_session(CONFIG_CON_COMERCIO) as db:
         assert isinstance(db, Session)
         assert db.is_active
         captured = db
@@ -37,7 +43,7 @@ def test_agent_session_closes_the_session_even_when_the_body_raises():
     captured = {}
 
     with pytest.raises(RuntimeError):
-        with agent_session() as db:
+        with agent_session(CONFIG_CON_COMERCIO) as db:
             captured["db"] = db
             raise RuntimeError("la herramienta reviento")
 

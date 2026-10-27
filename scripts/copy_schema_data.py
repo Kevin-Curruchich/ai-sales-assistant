@@ -17,6 +17,7 @@ from sqlalchemy import Engine, create_engine, text
 
 # Orden seguro de claves foraneas: cada tabla va despues de aquellas a las que apunta.
 TABLE_ORDER = [
+    "businesses",
     "users",
     "customers",
     "products",

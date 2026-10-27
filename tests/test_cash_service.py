@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models import CashMovementType
 from app.services.cash_service import CashService
 from tests.conftest import TEST_DATABASE_URL
+from tests.fixtures_domain import bind_first_business
 
 
 def _session_for(schema: str):
@@ -20,7 +21,9 @@ def _session_for(schema: str):
         cursor.close()
         dbapi_connection.commit()
 
-    return sessionmaker(bind=engine)(), engine
+    session = sessionmaker(bind=engine)()
+    bind_first_business(session)
+    return session, engine
 
 
 @pytest.fixture

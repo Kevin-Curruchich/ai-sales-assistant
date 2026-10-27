@@ -78,21 +78,25 @@ class CustomerService:
         customer_dict["created_at"] = customer.created_at  # datetime, sin truncar
         customer_dict["updated_at"] = customer.updated_at
         customer_dict["created_at_formatted"] = format_business_datetime(
-            customer.created_at
+            self.db, customer.created_at
         )
         customer_dict["updated_at_formatted"] = format_business_datetime(
-            customer.updated_at
+            self.db, customer.updated_at
         )
         return customer_dict
 
     def format_sale_dates(self, sale):
         sale_dict = sale.__dict__.copy()
-        sale_dict["created_at"] = to_business_tz(sale.created_at).strftime("%Y-%m-%d")
-        sale_dict["updated_at"] = to_business_tz(sale.updated_at).strftime("%Y-%m-%d")
+        sale_dict["created_at"] = to_business_tz(self.db, sale.created_at).strftime(
+            "%Y-%m-%d"
+        )
+        sale_dict["updated_at"] = to_business_tz(self.db, sale.updated_at).strftime(
+            "%Y-%m-%d"
+        )
         sale_dict["date"] = sale.date.strftime("%Y-%m-%d")
         # sale.date es un date puro y no un datetime: format_business_date lo pasa
         # tal cual, sin conversion de zona.
-        sale_dict["date_formatted"] = format_business_date(sale.date)
+        sale_dict["date_formatted"] = format_business_date(self.db, sale.date)
 
         # Format sale items with product details
         items = []
@@ -173,6 +177,9 @@ class CustomerService:
             customer_data["last_purchases"] = last_purchases
             customer_data["next_purchases"] = next_purchases if next_purchases else []
             return customer_data
+        except HTTPException:
+            # El 404 de get_by_id (cliente inexistente o de otro comercio) no es un 500.
+            raise
         except Exception as e:
             logger.error(f"Error fetching customer {customer_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal Server Error")

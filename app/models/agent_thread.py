@@ -5,6 +5,7 @@ from sqlalchemy import DateTime, ForeignKey, String, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
+from app.models.business import business_id_column
 
 
 class AgentThread(Base):
@@ -21,6 +22,8 @@ class AgentThread(Base):
         Uuid, ForeignKey("users.id"), nullable=False, index=True
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
+    business_id: Mapped[uuid.UUID] = business_id_column()
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -9,6 +9,7 @@ import app.models  # noqa: F401
 from app.core.database import Base
 
 EXPECTED_TABLES = {
+    "businesses",
     "users",
     "customers",
     "products",
@@ -191,3 +192,86 @@ def test_migration_emits_no_hardcoded_schema():
             "que servir para db_dev, db_v2 y cualquier schema de test, y el schema "
             "lo fija el search_path de env.py."
         )
+
+
+def test_existing_rows_move_to_first_business(test_engine, alembic_config):
+    """Los datos previos a multi-tenant quedan en el unico comercio creado."""
+    schema = alembic_config.attributes["target_schema"]
+    command.upgrade(alembic_config, "5c2e8f1a9b3d")
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        conn.execute(text("INSERT INTO customers (name) VALUES ('Previo')"))
+        conn.execute(
+            text(
+                "INSERT INTO users (email, role, is_active) VALUES ('previo@example.com', 'admin', true)"
+            )
+        )
+
+    command.upgrade(alembic_config, "head")
+
+    with test_engine.begin() as conn:
+        conn.execute(text(f'SET LOCAL search_path TO "{schema}"'))
+        business_ids = conn.execute(text("SELECT id FROM businesses")).scalars().all()
+        customer_bid = conn.execute(
+            text("SELECT business_id FROM customers")
+        ).scalar_one()
+        user_bid = conn.execute(text("SELECT business_id FROM users")).scalar_one()
+    assert len(business_ids) == 1
+    assert customer_bid == user_bid == business_ids[0]
+
+
+# Las unicas tablas sin RLS: se leen antes de conocer el comercio (o son de
+# Alembic). Cualquier tabla nueva cae en RLS por defecto o este test falla.
+TABLES_WITHOUT_RLS = {"users", "businesses", "alembic_version"}
+
+
+def test_rls_is_forced_on_every_business_table(test_engine, migrated_schema):
+    """Una tabla del comercio sin RLS dejaria ver datos de otros sin error."""
+    with test_engine.connect() as conn:
+        all_tables = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT c.relname FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = :s AND c.relkind IN ('r', 'p')"
+                ),
+                {"s": migrated_schema},
+            )
+        }
+        protected = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT c.relname FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "JOIN pg_policies p ON p.schemaname = n.nspname "
+                    "  AND p.tablename = c.relname "
+                    "  AND p.policyname = 'tenant_isolation' "
+                    "WHERE n.nspname = :s AND c.relrowsecurity "
+                    "  AND c.relforcerowsecurity"
+                ),
+                {"s": migrated_schema},
+            )
+        }
+    assert TABLES_WITHOUT_RLS <= all_tables
+    assert protected == all_tables - TABLES_WITHOUT_RLS
+
+
+def test_app_tenant_cannot_touch_alembic_version(test_engine, migrated_schema):
+    """La API no tiene por que leer ni mover la version de la base."""
+    with test_engine.connect() as conn:
+        privileges = (
+            conn.execute(
+                text(
+                    "SELECT p FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', "
+                    "'DELETE', 'TRUNCATE']) AS p "
+                    "WHERE has_table_privilege('app_tenant', "
+                    "  format('%I.alembic_version', CAST(:s AS text)), p)"
+                ),
+                {"s": migrated_schema},
+            )
+            .scalars()
+            .all()
+        )
+    assert privileges == []

@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, EmailStr
 
@@ -25,17 +25,26 @@ class UserResponse(BaseModel):
 class UserUpdateRole(BaseModel):
     """Only admins can change roles."""
 
-    role: str  # "admin" | "manager" | "viewer"
+    role: Literal["admin", "sales_rep", "viewer"]
 
 
 class UserUpdate(BaseModel):
     display_name: Optional[str] = None
     is_active: Optional[bool] = None
-    role: Optional[str] = None
+    role: Optional[Literal["admin", "sales_rep", "viewer"]] = None
 
 
-class UserSignUp(BaseModel):
+class SellerCreate(BaseModel):
+    """El admin da de alta a un vendedor sin contrasena."""
+
     email: EmailStr
-    password: str
     display_name: Optional[str] = None
-    role: str = "viewer"  # "admin" | "sales_rep" | "viewer"
+    role: Literal["sales_rep", "viewer"]
+
+
+class SellerCreatedResponse(UserResponse):
+    password_setup_link: str
+
+
+class PasswordLinkResponse(BaseModel):
+    password_setup_link: str

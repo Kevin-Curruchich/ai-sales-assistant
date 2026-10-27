@@ -153,7 +153,7 @@ def test_a_second_paid_transition_after_a_correction_uses_the_new_payment_date(
     upcoming_dates = iter([first_payment_date, second_payment_date])
 
     monkeypatch.setattr(
-        orchestrator_module, "business_today", lambda: next(upcoming_dates)
+        orchestrator_module, "business_today", lambda db: next(upcoming_dates)
     )
 
     service.update_payment_status_enriched(
@@ -168,7 +168,9 @@ def test_a_second_paid_transition_after_a_correction_uses_the_new_payment_date(
 
     movements = db_session.query(CashMovement).filter_by(sale_id=sale.id).all()
     assert len(movements) == 1
-    assert movements[0].occurred_at == business_midnight(second_payment_date)
+    assert movements[0].occurred_at == business_midnight(
+        db_session, second_payment_date
+    )
 
     reloaded = service.get_by_id(sale.id)
     assert reloaded.payment_date == second_payment_date
@@ -186,7 +188,7 @@ def test_marking_a_sale_paid_dates_it_on_the_business_day_not_the_server_day(
         user_id=seeded_user.id,
     )
     monkeypatch.setattr(
-        orchestrator_module, "business_today", lambda: date(2026, 10, 1)
+        orchestrator_module, "business_today", lambda db: date(2026, 10, 1)
     )
 
     service.update_payment_status_enriched(
@@ -195,7 +197,7 @@ def test_marking_a_sale_paid_dates_it_on_the_business_day_not_the_server_day(
 
     assert service.get_by_id(sale.id).payment_date == date(2026, 10, 1)
     movement = db_session.query(CashMovement).filter_by(sale_id=sale.id).one()
-    assert movement.occurred_at == business_midnight(date(2026, 10, 1))
+    assert movement.occurred_at == business_midnight(db_session, date(2026, 10, 1))
 
 
 def test_the_enriched_response_exposes_the_payment_date_and_method(
@@ -265,7 +267,7 @@ def test_marking_a_paid_sale_as_pending_does_not_remove_an_aporte_socio_on_the_s
     )
 
     contribution = CashService(db_session).record(
-        occurred_at=business_midnight(date(2026, 9, 24)),
+        occurred_at=business_midnight(db_session, date(2026, 9, 24)),
         type=CashMovementType.APORTE_SOCIO,
         amount=Decimal("60.00"),
         sale_id=sale.id,

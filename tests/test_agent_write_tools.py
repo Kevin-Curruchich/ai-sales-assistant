@@ -43,12 +43,13 @@ from app.repositories.product_repository import ProductRepository
 from app.repositories.purchase_repository import PurchaseRepository
 from app.services.cash_service import CashService
 from app.services.purchase_service import PurchaseService
+from tests.fixtures_domain import agent_config
 
 
 def _config(user):
     """Lo que el endpoint arma en el `configurable` de la corrida a partir
     de `get_current_user`: el `user_id` que firma la operacion."""
-    return {"configurable": {"user_id": str(user.id)}}
+    return {"configurable": {**agent_config(user)["configurable"]}}
 
 
 def _approve(payload):
@@ -434,7 +435,10 @@ def test_a_real_checkpointer_resume_still_catches_a_stale_approval(
     app = graph.compile(checkpointer=InMemorySaver())
 
     thread = {
-        "configurable": {"thread_id": str(uuid.uuid4()), "user_id": str(seeded_user.id)}
+        "configurable": {
+            "thread_id": str(uuid.uuid4()),
+            **agent_config(seeded_user)["configurable"],
+        }
     }
     initial_state = {
         "cliente_id": str(seeded_customer.id),
@@ -468,21 +472,21 @@ def test_a_real_checkpointer_resume_still_catches_a_stale_approval(
 # ---------------------------------------------------------------------
 
 
-def test_occurred_at_bare_date_anchors_to_business_midnight():
-    assert _occurred_at("2026-09-24") == datetime(
-        2026, 9, 24, 0, 0, tzinfo=business_tz()
+def test_occurred_at_bare_date_anchors_to_business_midnight(db_session):
+    assert _occurred_at(db_session, "2026-09-24") == datetime(
+        2026, 9, 24, 0, 0, tzinfo=business_tz(db_session)
     )
 
 
-def test_occurred_at_with_explicit_timezone_is_used_as_is():
-    assert _occurred_at("2026-09-24T23:30:00+00:00") == datetime(
+def test_occurred_at_with_explicit_timezone_is_used_as_is(db_session):
+    assert _occurred_at(db_session, "2026-09-24T23:30:00+00:00") == datetime(
         2026, 9, 24, 23, 30, tzinfo=timezone.utc
     )
 
 
-def test_occurred_at_with_time_but_no_timezone_assumes_business_timezone():
-    assert _occurred_at("2026-09-24T15:00:00") == datetime(
-        2026, 9, 24, 15, 0, tzinfo=business_tz()
+def test_occurred_at_with_time_but_no_timezone_assumes_business_timezone(db_session):
+    assert _occurred_at(db_session, "2026-09-24T15:00:00") == datetime(
+        2026, 9, 24, 15, 0, tzinfo=business_tz(db_session)
     )
 
 
@@ -1029,7 +1033,7 @@ def _config_con_tarea(user):
     Mismo motivo que `_config` en `tests/test_agent_idempotency.py`."""
     return {
         "configurable": {
-            "user_id": str(user.id),
+            **agent_config(user)["configurable"],
             "thread_id": f"hilo-{uuid.uuid4()}",
             "checkpoint_ns": f"tools:{uuid.uuid4()}",
         }

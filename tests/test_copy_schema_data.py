@@ -14,6 +14,7 @@ from scripts.copy_schema_data import (
     copy_schema_data,
 )
 from tests.conftest import TEST_DATABASE_URL
+from tests.fixtures_domain import FIRST_BUSINESS_SQL, bind_first_business
 
 
 def _session_for(schema: str):
@@ -26,7 +27,9 @@ def _session_for(schema: str):
         cursor.close()
         dbapi_connection.commit()
 
-    return sessionmaker(bind=engine)()
+    session = sessionmaker(bind=engine)()
+    bind_first_business(session)
+    return session
 
 
 def _seed(schema: str) -> None:
@@ -57,6 +60,10 @@ def _seed(schema: str) -> None:
     )
     session.commit()
     session.close()
+
+
+def test_copy_schema_copies_businesses_first():
+    assert TABLE_ORDER[0] == "businesses"
 
 
 def test_table_order_respects_foreign_keys():
@@ -187,6 +194,7 @@ def test_cash_movements_is_exempt_only_while_it_is_empty(
     # Con una fila: la copia aborta nombrando la tabla.
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{source}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         conn.execute(
             text(
                 "INSERT INTO cash_movements (occurred_at, type, amount) "

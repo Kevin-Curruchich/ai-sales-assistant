@@ -188,7 +188,7 @@ def test_postpone_closes_and_reopens_on_the_chosen_date(
     sync_requests,
 ):
     [current] = _open(db_session, seeded_customer, seeded_product_with_lot)
-    new_date = business_today() + timedelta(days=5)
+    new_date = business_today(db_session) + timedelta(days=5)
     before_calls = len(sync_requests)
 
     new = FollowUpService(db_session).postpone(current.id, new_date, seeded_user.id)
@@ -211,7 +211,9 @@ def test_postpone_rejects_a_date_that_is_not_in_the_future(
 
     with pytest.raises(HTTPException) as exc:
         FollowUpService(db_session).postpone(
-            current.id, business_today() + timedelta(days=days), seeded_user.id
+            current.id,
+            business_today(db_session) + timedelta(days=days),
+            seeded_user.id,
         )
     assert exc.value.status_code == 422
 
@@ -228,7 +230,7 @@ def test_postpone_or_dismiss_a_closed_follow_up_is_a_conflict(
     assert exc.value.status_code == 409
     with pytest.raises(HTTPException) as exc:
         service.postpone(
-            current.id, business_today() + timedelta(days=3), seeded_user.id
+            current.id, business_today(db_session) + timedelta(days=3), seeded_user.id
         )
     assert exc.value.status_code == 409
 

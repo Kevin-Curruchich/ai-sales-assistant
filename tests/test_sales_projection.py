@@ -143,6 +143,7 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
     from app.models import Customer, CustomerProductCycle, Product
     from app.services.sales import SaleService
     from tests.conftest import TEST_DATABASE_URL
+    from tests.fixtures_domain import bind_first_business
 
     engine = create_engine(TEST_DATABASE_URL)
 
@@ -154,6 +155,7 @@ def test_a_customer_without_a_projection_still_appears_in_follow_ups(
         dbapi_connection.commit()
 
     session = sessionmaker(bind=engine)()
+    bind_first_business(session)
     try:
         customer = Customer(name="Cliente de una sola compra")
         product = Product(sku=f"SKU-{_uuid.uuid4().hex[:6]}", name="Cilindro de gas")
@@ -209,6 +211,7 @@ def test_a_fractional_ewma_interval_flows_through_follow_ups_without_raising(
     from app.models import Customer, CustomerProductCycle, Product
     from app.services.sales import SaleService
     from tests.conftest import TEST_DATABASE_URL
+    from tests.fixtures_domain import bind_first_business
 
     engine = create_engine(TEST_DATABASE_URL)
 
@@ -220,6 +223,7 @@ def test_a_fractional_ewma_interval_flows_through_follow_ups_without_raising(
         dbapi_connection.commit()
 
     session = sessionmaker(bind=engine)()
+    bind_first_business(session)
     try:
         customer = Customer(name="Cecy con gas")
         product = Product(sku=f"SKU-{_uuid.uuid4().hex[:6]}", name="Cilindro de gas")

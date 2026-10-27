@@ -300,13 +300,13 @@ class SaleService:
             total=self._money(sale.total),
             is_payment_pending=sale.is_payment_pending,
             payment_date=sale.payment_date,
-            payment_date_formatted=format_business_date(sale.payment_date),
+            payment_date_formatted=format_business_date(self.db, sale.payment_date),
             payment_method=sale.payment_method,
             items=items,
             created_at=created_at,
             updated_at=updated_at,
-            created_at_formatted=format_business_datetime(created_at),
-            updated_at_formatted=format_business_datetime(updated_at),
+            created_at_formatted=format_business_datetime(self.db, created_at),
+            updated_at_formatted=format_business_datetime(self.db, updated_at),
             user_name=user.display_name if user else "",
             user_email=user.email if user else "",
             customer_name=customer.name if customer else "",
@@ -660,6 +660,8 @@ class SaleService:
             # tambien escribe este stock (ver ProductRepository.add_to_stock).
             self.product_repo.add_to_stock(product.id, -item_data.quantity)
 
+        # El instante por defecto depende de la zona del comercio, no del schema.
+        occurred_at = data.occurredAt or business_instant(self.db, data.date)
         sale = Sale(
             customer_id=data.customerId,
             user_id=user_id,
@@ -668,7 +670,7 @@ class SaleService:
             is_payment_pending=data.isPaymentPending,
             payment_method=data.medioPago,
             payment_date=data.fechaPago,
-            occurred_at=data.occurredAt,
+            occurred_at=occurred_at,
             items=sale_items,
         )
         sale = self.sale_repo.create(sale)
@@ -691,7 +693,7 @@ class SaleService:
             # commit=False: la entrada de caja y la venta son una sola
             # transaccion. Si una falla, ninguna queda escrita.
             self.cash_service.record(
-                occurred_at=data.occurredAt,
+                occurred_at=occurred_at,
                 type=CashMovementType.ENTRADA,
                 amount=total,
                 payment_method=data.medioPago,
@@ -808,7 +810,7 @@ class SaleService:
             # "Ahora" es hoy en Guatemala: con `date.today()` un cobro
             # marcado despues de las 18:00 quedaba fechado manana.
             if sale.payment_date is None:
-                sale.payment_date = business_today()
+                sale.payment_date = business_today(self.db)
             self._record_sale_cash_entry(sale)
         elif not was_pending and is_payment_pending:
             # Pagada -> pendiente: se esta corrigiendo que el cobro no era
@@ -850,7 +852,7 @@ class SaleService:
         if sale.total <= 0:
             return
         self.cash_service.record(
-            occurred_at=business_instant(sale.payment_date),
+            occurred_at=business_instant(self.db, sale.payment_date),
             type=CashMovementType.ENTRADA,
             amount=sale.total,
             payment_method=sale.payment_method,
@@ -987,7 +989,7 @@ class SaleService:
     def get_follow_ups(
         self, filter_type: str = "all", limit: int = 10, offset: int = 0
     ) -> tuple[list[FollowUpResponse], int]:
-        today = business_today()
+        today = business_today(self.db)
         cycles = self.cycle_repo.get_all_for_follow_ups()
         cycle_by_pair = {(c.customer_id, c.product_id): c for c in cycles}
 
@@ -1076,7 +1078,7 @@ class SaleService:
         return follow_ups[offset : offset + limit], total
 
     def get_follow_up_metrics(self) -> FollowUpMetrics:
-        today = business_today()
+        today = business_today(self.db)
         # Los tiles se definen por days_until de seguimientos abiertos; los
         # clientes `needs_estimate` no tienen seguimiento, asi que no cuentan.
         open_follow_ups = self.follow_up_repo.get_open_with_relations()
@@ -1109,7 +1111,7 @@ class SaleService:
     # ------------------------------------------------------------------
 
     def get_calendar_events(self, start_date: date, end_date: date) -> CalendarResponse:
-        today = business_today()
+        today = business_today(self.db)
         all_events: list[CalendarEvent] = []
         for fu in self.follow_up_repo.get_open_with_relations():
             if fu.due_date < start_date or fu.due_date > end_date:

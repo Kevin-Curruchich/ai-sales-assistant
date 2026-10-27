@@ -32,6 +32,7 @@ from app.agent.tools.write import (
 )
 from app.models.cash_movement import CashMovement
 from app.models.sale import Sale
+from tests.fixtures_domain import agent_config
 from tests.test_agent_graph import FakeToolCallingModel
 
 
@@ -40,7 +41,7 @@ def _config(user, task_id, thread="hilo-1"):
     id de la tarea de Pregel que LangGraph pone en cada corrida."""
     return {
         "configurable": {
-            "user_id": str(user.id),
+            **agent_config(user)["configurable"],
             "thread_id": thread,
             "checkpoint_ns": f"tools:{task_id}",
         }
@@ -264,7 +265,7 @@ def test_direct_invocations_without_a_task_id_are_never_deduplicated(
     monkeypatch.setattr(
         "app.agent.tools.write.interrupt", lambda _p: {"accion": "aprobar"}
     )
-    config = {"configurable": {"user_id": str(seeded_user.id)}}
+    config = {"configurable": {**agent_config(seeded_user)["configurable"]}}
 
     registrar_movimiento_caja.invoke(_movimiento(), config=config)
     registrar_movimiento_caja.invoke(_movimiento(), config=config)
@@ -405,3 +406,32 @@ def test_a_replayed_purchase_task_does_not_write_twice(
     assert db_session.query(Purchase).count() == 1
     db_session.refresh(producto_sin_stock)
     assert producto_sin_stock.stock == Decimal("5")
+
+
+def test_schema_owner_without_create_on_database_can_ensure_table(
+    test_engine, monkeypatch
+):
+    """En produccion el usuario de la API es dueño de `agent` pero no tiene
+    CREATE sobre la base: `CREATE SCHEMA IF NOT EXISTS` le falla aunque el
+    schema exista (Postgres chequea el permiso antes que la existencia)."""
+    from sqlalchemy.orm import Session
+
+    suffix = uuid.uuid4().hex[:8]
+    role, schema = f"api_test_{suffix}", f"agent_test_{suffix}"
+    with test_engine.begin() as conn:
+        conn.execute(text(f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS'))
+        conn.execute(text(f'CREATE SCHEMA "{schema}" AUTHORIZATION "{role}"'))
+    monkeypatch.setattr(idempotency, "AGENT_SCHEMA", schema)
+    monkeypatch.setattr(idempotency, "QUALIFIED", f'"{schema}"."tool_writes"')
+    monkeypatch.setattr(idempotency, "_ddl_done", False)
+    try:
+        with Session(test_engine) as db:
+            db.execute(text(f'SET ROLE "{role}"'))
+            idempotency.ensure_table(db)
+            assert idempotency.find(db, "sin-marca") is None
+            db.execute(text("RESET ROLE"))
+            db.commit()
+    finally:
+        with test_engine.begin() as conn:
+            conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+            conn.execute(text(f'DROP ROLE IF EXISTS "{role}"'))

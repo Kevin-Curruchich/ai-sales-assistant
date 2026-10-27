@@ -3,6 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from app.models.payment_method import PaymentMethod
+from tests.fixtures_domain import FIRST_BUSINESS_SQL
 
 
 def test_payment_method_values():
@@ -30,6 +31,7 @@ def test_check_accepts_the_two_values_and_null(test_engine, migrated_schema):
     """NULL debe pasar: hoy las 194 filas de produccion lo tienen en NULL."""
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         for value in ("'efectivo'", "'transferencia'", "NULL"):
             conn.execute(
                 text(
@@ -44,6 +46,7 @@ def test_check_accepts_the_two_values_and_null(test_engine, migrated_schema):
 def test_check_rejects_anything_else(test_engine, migrated_schema):
     with test_engine.begin() as conn:
         conn.execute(text(f'SET search_path TO "{migrated_schema}"'))
+        conn.execute(FIRST_BUSINESS_SQL)
         with pytest.raises(IntegrityError):
             conn.execute(
                 text(

@@ -10,6 +10,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
     func,
     text,
@@ -17,11 +18,20 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.business import business_id_column
 from app.models.payment_method import PAYMENT_METHOD_COLUMN, PaymentMethod
 
 
 class Purchase(Base):
     __tablename__ = "purchases"
+    # El numero de referencia es unico dentro de cada comercio, no global.
+    __table_args__ = (
+        UniqueConstraint(
+            "business_id",
+            "reference_number",
+            name="uq_purchases_business_reference_number",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid,
@@ -34,7 +44,7 @@ class Purchase(Base):
     )
     supplier_name: Mapped[Optional[str]] = mapped_column(String(255))
     reference_number: Mapped[Optional[str]] = mapped_column(
-        String(100), unique=True, nullable=True, index=True
+        String(100), nullable=True, index=True
     )
     date: Mapped[date] = mapped_column(Date, nullable=False)
     notes: Mapped[Optional[str]] = mapped_column(Text)
@@ -50,6 +60,8 @@ class Purchase(Base):
     occurred_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -93,6 +105,8 @@ class PurchaseItem(Base):
     )
     unit_cost: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
     subtotal: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+
+    business_id: Mapped[uuid.UUID] = business_id_column()
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
