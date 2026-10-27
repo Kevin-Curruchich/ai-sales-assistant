@@ -66,3 +66,25 @@ def test_sync_pass_failure_in_one_business_continues(
 
     assert calendar_sync.sync_pass(factory, client_for) >= 1
     assert seen == ["cal-b"]
+
+
+def test_businesses_in_one_pass_share_the_same_session(
+    db_session, seeded_business, other_business
+):
+    from app.services.google_calendar import GoogleCalendarClient
+
+    factory = _factory(db_session)
+    seeded_business.google_calendar_id = "cal-a"
+    other_business.google_calendar_id = "cal-b"
+    db_session.commit()
+    shared = object()
+    clients = []
+
+    def client_for(calendar_id):
+        clients.append(GoogleCalendarClient(calendar_id, shared))
+        return clients[-1]
+
+    calendar_sync.sync_pass(factory, client_for)
+
+    assert {c.calendar_id for c in clients} == {"cal-a", "cal-b"}
+    assert all(c.session is shared for c in clients)

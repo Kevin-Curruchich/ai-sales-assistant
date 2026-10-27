@@ -96,3 +96,18 @@ def test_an_empty_agent_env_var_counts_as_missing(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
 
     assert "ANTHROPIC_API_KEY" in main.missing_agent_env()
+
+
+def test_missing_calendar_credentials_degrade_health_and_skip_the_worker(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    def _sin_credenciales():
+        raise RuntimeError("sin credenciales")
+
+    started = []
+    monkeypatch.setattr("app.main.load_authorized_session", _sin_credenciales)
+    monkeypatch.setattr("app.main.start_calendar_sync", lambda *a: started.append(a))
+
+    with TestClient(main.app):
+        assert "calendar_sync_init_failed" in main.startup_issues
+    assert started == []

@@ -31,7 +31,7 @@ from app.models import (  # noqa: F401
     User,
 )
 from app.services.calendar_sync import start_calendar_sync
-from app.services.google_calendar import GoogleCalendarClient
+from app.services.google_calendar import GoogleCalendarClient, load_authorized_session
 
 logger = logging.getLogger("app.startup")
 startup_issues: list[str] = []
@@ -84,7 +84,11 @@ async def lifespan(app: FastAPI):
     # tumbar las ventas; los seguimientos se quedan `pending` hasta el proximo
     # arranque que si pueda.
     try:
-        start_calendar_sync(SessionLocal, GoogleCalendarClient.from_settings)
+        calendar_session = load_authorized_session()
+        start_calendar_sync(
+            SessionLocal,
+            lambda calendar_id: GoogleCalendarClient(calendar_id, calendar_session),
+        )
     except Exception:
         logger.exception("Google Calendar sync failed to start")
         startup_issues.append("calendar_sync_init_failed")
