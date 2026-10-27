@@ -116,3 +116,69 @@ def test_rls_hides_thread_of_other_business(
     ids = data_in_both_businesses
     assert repo.get(ids.ids_a["/api/v1/agent/threads"]) is not None
     assert repo.get(ids.ids_b["/api/v1/agent/threads"]) is None
+
+
+MODELS = {
+    "/api/v1/customers": Customer,
+    "/api/v1/products": Product,
+    "/api/v1/sales": Sale,
+    "/api/v1/purchases": Purchase,
+    "/api/v1/follow-ups": FollowUp,
+    "/api/v1/agent/threads": AgentThread,
+}
+
+# Toda mutacion por id que existe en app/api/v1/endpoints/ sobre datos con RLS.
+# (Las de /auth/users estan en test_auth_tenancy.py: `users` no tiene RLS.
+# Caja no tiene mutaciones por id.)
+MUTATIONS = [
+    ("PUT", "/api/v1/customers", "", {"name": "pirata"}),
+    ("PUT", "/api/v1/products", "", {"name": "pirata"}),
+    ("DELETE", "/api/v1/products", "", None),
+    ("PUT", "/api/v1/sales", "", {"isPaymentPending": True}),
+    ("PATCH", "/api/v1/sales", "/payment-status", {"isPaymentPending": True}),
+    ("PUT", "/api/v1/purchases", "", {"supplierName": "pirata"}),
+    ("POST", "/api/v1/purchases", "/confirm", None),
+    ("POST", "/api/v1/purchases", "/cancel", None),
+    ("DELETE", "/api/v1/purchases", "", None),
+    ("POST", "/api/v1/follow-ups", "/postpone", {"date": "2099-01-01"}),
+    ("POST", "/api/v1/follow-ups", "/dismiss", None),
+    ("PATCH", "/api/v1/agent/threads", "", {"title": "pirata"}),
+    ("DELETE", "/api/v1/agent/threads", "", None),
+]
+
+
+def _snapshot(db_session, model, row_id) -> dict | None:
+    db_session.expire_all()
+    row = db_session.get(model, row_id)
+    if row is None:
+        return None
+    return {c.key: getattr(row, c.key) for c in model.__mapper__.column_attrs}
+
+
+@pytest.mark.parametrize(
+    "method,path,suffix,body",
+    MUTATIONS,
+    ids=[f"{m} {p}/{{id}}{s}" for m, p, s, _ in MUTATIONS],
+)
+def test_mutation_of_other_business_is_404_and_leaves_row_intact(
+    tenant_client,
+    tenant_session,
+    db_session,
+    method,
+    path,
+    suffix,
+    body,
+    data_in_both_businesses,
+    seeded_user,
+):
+    tenant_session.expunge_all()
+    row_id = data_in_both_businesses.ids_b[path]
+    before = _snapshot(db_session, MODELS[path], row_id)
+    assert before is not None
+
+    resp = tenant_client.request(
+        method, f"{path}/{row_id}{suffix}", json=body, headers=_auth(seeded_user)
+    )
+
+    assert resp.status_code == 404, resp.text
+    assert _snapshot(db_session, MODELS[path], row_id) == before

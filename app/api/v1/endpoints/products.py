@@ -121,6 +121,9 @@ def update_product(
 ):
     try:
         return service.format_product_dates(service.update(product_id, data))
+    except HTTPException:
+        # El 404 (producto inexistente o de otro comercio) no es un 400.
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -132,6 +135,9 @@ def update_product(
 def delete_product(product_id: uuid.UUID, service: ProductServiceDep):
     try:
         service.delete(product_id)
+    except HTTPException:
+        # El 404 (producto inexistente o de otro comercio) no es un 400.
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
