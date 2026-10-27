@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.agent.graph import (
     build_async_checkpointer,
@@ -68,9 +69,32 @@ def missing_agent_env() -> list[str]:
     ]
 
 
+def assert_rls_enforced(engine) -> None:
+    """Revienta si el rol de la conexion se salta RLS.
+
+    Un superusuario o un rol con BYPASSRLS ve todos los comercios: con el
+    aislamiento apagado en silencio, mejor que la API no arranque.
+    """
+    with engine.connect() as conn:
+        bypasses = conn.execute(
+            text(
+                "select rolsuper or rolbypassrls from pg_roles "
+                "where rolname = current_user"
+            )
+        ).scalar()
+    if bypasses:
+        raise RuntimeError(
+            "La API no puede conectarse como superusuario ni con BYPASSRLS: "
+            "RLS quedaria desactivado"
+        )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application startup and shutdown events."""
+    # A diferencia de lo de abajo, no se degrada a `startup_issues`: sin RLS
+    # un comercio veria los datos de otro.
+    assert_rls_enforced(engine)
     # El esquema lo gestiona Alembic desde entrypoint.sh, no el arranque.
     startup_issues.clear()
 

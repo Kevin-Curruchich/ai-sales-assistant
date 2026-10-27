@@ -42,7 +42,14 @@ ALLOW_PROTECTED_SCHEMA_ENV_VAR = "REVENEW_ALLOW_DB_DEV"
 
 
 def _url() -> str:
-    return config.attributes.get("sqlalchemy_url") or settings.SQLALCHEMY_DATABASE_URI
+    # En produccion la API se conecta con un usuario sujeto a RLS que no puede
+    # crear roles ni tablas: las migraciones usan su propia URL (`postgres`).
+    migrations_url = os.environ.get("MIGRATIONS_DATABASE_URL", "").strip()
+    return (
+        config.attributes.get("sqlalchemy_url")
+        or migrations_url.replace("postgres://", "postgresql://", 1)
+        or settings.SQLALCHEMY_DATABASE_URI
+    )
 
 
 def _schema() -> str:

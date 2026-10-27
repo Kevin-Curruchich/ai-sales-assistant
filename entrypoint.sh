@@ -18,6 +18,10 @@ fi
 # boot will fail loudly here (and set -e aborts it) instead of running
 # migrations against real data. That is expected: the container simply won't
 # start until POSTGRES_SCHEMA points at the migrated schema.
+#
+# Migrations connect with MIGRATIONS_DATABASE_URL (the `postgres` owner) when it
+# is set; alembic/env.py reads it. The API itself keeps DATABASE_URL, which in
+# production is a role subject to RLS. See docs/runbooks/multi-tenant-rollout.md.
 alembic upgrade head
 
 exec hypercorn app.main:app --bind "0.0.0.0:${PORT:-8000}"

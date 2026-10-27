@@ -6,19 +6,13 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-from fastapi import Depends, HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
 from langchain_core.messages import HumanMessage
 
-import app.main as main
 from app.agent.auth import AgentAuthError
 from app.agent.prompt_runtime import prompt_con_fecha
 from app.agent.session import agent_session
 from app.agent.tools.write import registrar_movimiento_caja
-from app.api.dependencies import bearer_scheme, get_current_user, get_db
-from app.core.database import bind_business
 from app.models.cash_movement import CashMovement
-from app.models.user import User
 from tests.fixtures_domain import agent_config, business_configurable
 from tests.fixtures_http import _auth, _create_thread_as
 
@@ -35,30 +29,6 @@ def test_agent_session_requires_business(configurable):
     with pytest.raises(AgentAuthError):
         with agent_session({"configurable": configurable}):
             pass
-
-
-@pytest.fixture
-def tenant_client(client, db_session, tenant_session):
-    """`client` con `get_db` sobre `tenant_session` (sujeta a RLS): sin esto,
-    `db_session` es superusuario y el 404 no probaria nada del aislamiento."""
-
-    def _get_db():
-        yield tenant_session
-
-    def _get_current_user(
-        credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
-    ) -> User:
-        # El usuario se resuelve como superusuario (como lo hace la app antes
-        # de saber el comercio) y se liga la sesion RLS a su comercio.
-        user = db_session.get(User, uuid.UUID(credentials.credentials))
-        if user is None:
-            raise HTTPException(status_code=401)
-        bind_business(tenant_session, user.business_id, user.business.timezone)
-        return user
-
-    main.app.dependency_overrides[get_db] = _get_db
-    main.app.dependency_overrides[get_current_user] = _get_current_user
-    return client
 
 
 def test_thread_of_other_business_is_404(

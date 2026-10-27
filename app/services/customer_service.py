@@ -177,6 +177,9 @@ class CustomerService:
             customer_data["last_purchases"] = last_purchases
             customer_data["next_purchases"] = next_purchases if next_purchases else []
             return customer_data
+        except HTTPException:
+            # El 404 de get_by_id (cliente inexistente o de otro comercio) no es un 500.
+            raise
         except Exception as e:
             logger.error(f"Error fetching customer {customer_id}: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail="Internal Server Error")
