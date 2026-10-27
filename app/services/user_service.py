@@ -75,7 +75,7 @@ class UserService:
         usuario va explicito. El rol siempre es admin.
         """
         self._check_email_free(data.email)
-        business = Business(name=data.business_name)
+        business = Business(name=data.business_name, timezone=data.timezone)
         self.db.add(business)
         self.db.flush()
         user = User(

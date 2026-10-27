@@ -174,3 +174,24 @@ def test_sales_rep_cannot_create_users(client, fake_firebase, db_session, seeded
         headers=_auth(rep),
     )
     assert r.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "extra,expected",
+    [
+        ({"timezone": "America/Mexico_City"}, "America/Mexico_City"),
+        ({}, "America/Guatemala"),
+    ],
+)
+def test_signup_stores_business_timezone(
+    client, fake_firebase, db_session, extra, expected
+):
+    r = client.post("/api/v1/auth/signup", json={**SIGNUP, **extra})
+    assert r.status_code == 201, r.text
+    assert db_session.get(User, uuid.UUID(r.json()["id"])).business.timezone == expected
+
+
+def test_signup_rejects_unknown_timezone(client, fake_firebase):
+    r = client.post("/api/v1/auth/signup", json={**SIGNUP, "timezone": "Marte/Olimpo"})
+    assert r.status_code == 422
+    assert fake_firebase["created"] == []
