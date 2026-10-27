@@ -13,27 +13,19 @@ class UserService:
     def __init__(self, db: Session):
         self.repo = UserRepository(db)
 
-    def get_or_create_from_firebase(self, decoded_token: dict) -> User:
-        """Find the local user by Firebase UID (= User.id), or create one on first login.
+    def get_for_firebase(self, decoded_token: dict) -> User:
+        """Busca el usuario local por UID de Firebase (= User.id).
 
-        This is called automatically on every authenticated request so the
-        database always has a record for the calling user.
+        Ya no se crea al vuelo: un usuario sin fila no pertenece a ningun
+        comercio, asi que se rechaza con 403.
         """
-        try:
-            user = self.repo.get_by_id(decoded_token["uid"])
-            if not user:
-                user = User(
-                    id=decoded_token["uid"],
-                    email=decoded_token.get("email"),
-                    display_name=decoded_token.get("name"),
-                )
-                self.repo.create(user)
-            return user
-        except Exception as e:
+        user = self.repo.get_by_id(decoded_token["uid"])
+        if not user:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"An error occurred while processing the user: {str(e)}",
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Tu cuenta no pertenece a ningun comercio",
             )
+        return user
 
     def signup(self, data: UserSignUp) -> User:
         """Create a Firebase user with custom claims and a local DB record.

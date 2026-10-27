@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal
+from app.core.database import SessionLocal, bind_business
 from app.core.security import verify_firebase_token
 from app.models.user import User
 from app.services.cash_service import CashService
@@ -35,16 +35,18 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> User:
-    """Validate Firebase token and return the local User row.
-
-    On first call for a given Firebase user, a local DB record is created
-    with the default role 'viewer'.
-    """
+    """Validate Firebase token, return the local User row and bind its business
+    (and timezone) to the DB session so RLS scopes every query."""
     try:
         token = credentials.credentials
         decoded = verify_firebase_token(token)
         service = UserService(db)
-        return service.get_or_create_from_firebase(decoded)
+        user = service.get_for_firebase(decoded)
+        bind_business(db, user.business_id, user.business.timezone)
+        return user
+    except HTTPException:
+        # el 403 de "sin comercio" no debe convertirse en 401
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

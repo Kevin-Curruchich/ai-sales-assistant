@@ -48,3 +48,40 @@ def test_route_rejects_requests_without_a_token(client, method, path):
     resp = client.request(method, url, json={})
 
     assert resp.status_code in (401, 403), f"{method} {path} -> {resp.status_code}"
+
+
+def test_unknown_firebase_user_is_forbidden(db_session, monkeypatch):
+    from fastapi import HTTPException
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from app.api.dependencies import get_current_user
+    from app.models.user import User
+
+    monkeypatch.setattr(
+        "app.api.dependencies.verify_firebase_token",
+        lambda _t: {"uid": str(uuid.uuid4()), "email": "x@x.com"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        get_current_user(
+            HTTPAuthorizationCredentials(scheme="Bearer", credentials="t"), db_session
+        )
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "Tu cuenta no pertenece a ningun comercio"
+    assert db_session.query(User).count() == 0
+
+
+def test_known_user_binds_business(db_session, seeded_user, monkeypatch):
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    from app.api.dependencies import get_current_user
+
+    monkeypatch.setattr(
+        "app.api.dependencies.verify_firebase_token",
+        lambda _t: {"uid": str(seeded_user.id)},
+    )
+    db_session.info.clear()
+    user = get_current_user(
+        HTTPAuthorizationCredentials(scheme="Bearer", credentials="t"), db_session
+    )
+    assert user.id == seeded_user.id
+    assert db_session.info["business_id"] == seeded_user.business_id

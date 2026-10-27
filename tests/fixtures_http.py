@@ -24,6 +24,7 @@ import app.main as main
 from app.agent.graph import build_async_checkpointer as _build_checkpointer_real
 from app.agent.graph import build_graph as _build_graph_real
 from app.api.dependencies import bearer_scheme, get_current_user, get_db
+from app.core.database import bind_business
 from app.models import User
 
 
@@ -89,6 +90,7 @@ def client(db_session, monkeypatch):
         user = db_session.get(User, user_id)
         if user is None:
             raise HTTPException(status_code=401, detail="usuario de prueba desconocido")
+        bind_business(db_session, user.business_id, user.business.timezone)
         return user
 
     async def _checkpointer_de_juguete(*_args, **_kwargs):
