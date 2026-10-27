@@ -134,6 +134,9 @@ def upgrade() -> None:
             EXECUTE format(
                 'ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE ON SEQUENCES TO app_tenant',
                 current_schema());
+            -- La API no lee ni mueve la version: eso es solo de las migraciones.
+            EXECUTE format(
+                'REVOKE ALL ON %I.alembic_version FROM app_tenant', current_schema());
         END
         $$
         """

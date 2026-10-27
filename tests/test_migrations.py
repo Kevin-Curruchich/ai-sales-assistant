@@ -220,32 +220,58 @@ def test_existing_rows_move_to_first_business(test_engine, alembic_config):
     assert customer_bid == user_bid == business_ids[0]
 
 
-RLS_TABLES = {
-    "customers",
-    "products",
-    "purchases",
-    "purchase_items",
-    "sales",
-    "sale_items",
-    "sale_item_lot_allocations",
-    "cash_movements",
-    "follow_ups",
-    "customer_product_cycles",
-    "agent_threads",
-}
+# Las unicas tablas sin RLS: se leen antes de conocer el comercio (o son de
+# Alembic). Cualquier tabla nueva cae en RLS por defecto o este test falla.
+TABLES_WITHOUT_RLS = {"users", "businesses", "alembic_version"}
 
 
 def test_rls_is_forced_on_every_business_table(test_engine, migrated_schema):
     """Una tabla del comercio sin RLS dejaria ver datos de otros sin error."""
     with test_engine.connect() as conn:
-        rows = conn.execute(
-            text(
-                "SELECT c.relname FROM pg_class c "
-                "JOIN pg_namespace n ON n.oid = c.relnamespace "
-                "JOIN pg_policies p ON p.schemaname = n.nspname "
-                "  AND p.tablename = c.relname AND p.policyname = 'tenant_isolation' "
-                "WHERE n.nspname = :s AND c.relrowsecurity AND c.relforcerowsecurity"
-            ),
-            {"s": migrated_schema},
+        all_tables = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT c.relname FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = :s AND c.relkind IN ('r', 'p')"
+                ),
+                {"s": migrated_schema},
+            )
+        }
+        protected = {
+            r[0]
+            for r in conn.execute(
+                text(
+                    "SELECT c.relname FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "JOIN pg_policies p ON p.schemaname = n.nspname "
+                    "  AND p.tablename = c.relname "
+                    "  AND p.policyname = 'tenant_isolation' "
+                    "WHERE n.nspname = :s AND c.relrowsecurity "
+                    "  AND c.relforcerowsecurity"
+                ),
+                {"s": migrated_schema},
+            )
+        }
+    assert TABLES_WITHOUT_RLS <= all_tables
+    assert protected == all_tables - TABLES_WITHOUT_RLS
+
+
+def test_app_tenant_cannot_touch_alembic_version(test_engine, migrated_schema):
+    """La API no tiene por que leer ni mover la version de la base."""
+    with test_engine.connect() as conn:
+        privileges = (
+            conn.execute(
+                text(
+                    "SELECT p FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', "
+                    "'DELETE', 'TRUNCATE']) AS p "
+                    "WHERE has_table_privilege('app_tenant', "
+                    "  format('%I.alembic_version', CAST(:s AS text)), p)"
+                ),
+                {"s": migrated_schema},
+            )
+            .scalars()
+            .all()
         )
-        assert {r[0] for r in rows} == RLS_TABLES
+    assert privileges == []
