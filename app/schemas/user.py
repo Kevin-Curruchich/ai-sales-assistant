@@ -42,6 +42,10 @@ class SellerCreate(BaseModel):
     role: Literal["sales_rep", "viewer"]
 
 
+class MeResponse(UserResponse):
+    business_name: str
+
+
 class SellerCreatedResponse(UserResponse):
     password_setup_link: str
 

@@ -7,6 +7,7 @@ from app.api.dependencies import get_current_user, get_db, require_role
 from app.models.user import User
 from app.schemas.business import BusinessSignUp
 from app.schemas.user import (
+    MeResponse,
     PasswordLinkResponse,
     SellerCreate,
     SellerCreatedResponse,
@@ -30,10 +31,13 @@ def signup(
     return UserService(db).signup_business(data)
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=MeResponse)
 def get_me(current_user: User = Depends(get_current_user)):
-    """Returns the authenticated user's profile (auto-creates on first call)."""
-    return current_user
+    """Perfil del usuario autenticado, con el nombre de su comercio."""
+    return MeResponse(
+        **UserResponse.model_validate(current_user).model_dump(),
+        business_name=current_user.business.name,
+    )
 
 
 @router.get("/users", response_model=list[UserResponse])

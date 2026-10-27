@@ -195,3 +195,9 @@ def test_signup_rejects_unknown_timezone(client, fake_firebase):
     r = client.post("/api/v1/auth/signup", json={**SIGNUP, "timezone": "Marte/Olimpo"})
     assert r.status_code == 422
     assert fake_firebase["created"] == []
+
+
+def test_me_includes_business_name(client, seeded_user):
+    r = client.get("/api/v1/auth/me", headers=_auth(seeded_user))
+    assert r.status_code == 200
+    assert r.json()["business_name"] == seeded_user.business.name

@@ -31,9 +31,9 @@ Register a new **business** and its first user, who becomes its `admin`. **No au
 
 ### `GET /auth/me`
 
-Returns the authenticated user's profile.
+Returns the authenticated user's profile and the name of their business.
 
-- **Response:** `User`
+- **Response:** `User` plus `"business_name": "string"`
 
 ### `GET /auth/users`  — Admin only
 
