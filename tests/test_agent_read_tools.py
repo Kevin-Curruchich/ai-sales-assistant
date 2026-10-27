@@ -21,8 +21,8 @@ from app.models.follow_up import FollowUp
 from app.models.sale import Sale
 
 # Los movimientos de caja se siembran con la misma zona con la que produccion
-# los escribe (business_midnight()/SaleCreate.occurredAt son siempre
-# tz-aware, nunca naive) -- si la siembra fuera naive junto con un boundary
+# los escribe (business_midnight() y el instante que fija el orquestador
+# son siempre tz-aware, nunca naive) -- si la siembra fuera naive junto con un boundary
 # tambien naive, ambos comparten el mismo supuesto equivocado y el desfase de
 # husario queda invisible para el test.
 GT = ZoneInfo("America/Guatemala")

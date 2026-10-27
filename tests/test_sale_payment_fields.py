@@ -1,9 +1,10 @@
 """Las columnas de pago existen desde la pieza 1 y nada las escribia."""
 
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
+from app.core.datetime_utils import business_instant
 from app.models.payment_method import PaymentMethod
 from app.schemas.sale import SaleCreate, SaleItemCreate
 from app.services.sales import SaleService
@@ -60,3 +61,35 @@ def test_a_created_sale_stores_its_payment_method(
     assert sale.payment_method == PaymentMethod.TRANSFERENCIA
     assert sale.payment_date == date(2026, 9, 24)
     assert sale.occurred_at is not None
+
+
+def test_service_create_defaults_occurred_at_to_the_business_instant(
+    db_session, seeded_user, seeded_customer, seeded_product_with_lot
+):
+    data = SaleCreate(
+        customerId=seeded_customer.id,
+        date=date(2026, 9, 24),
+        items=[
+            SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"))
+        ],
+    )
+    sale = SaleService(db_session).create(data, user_id=seeded_user.id)
+    db_session.refresh(sale)
+    assert sale.occurred_at == business_instant(db_session, date(2026, 9, 24))
+
+
+def test_service_create_keeps_an_explicit_occurred_at(
+    db_session, seeded_user, seeded_customer, seeded_product_with_lot
+):
+    explicit = datetime(2026, 9, 24, 15, 30, tzinfo=timezone.utc)
+    data = SaleCreate(
+        customerId=seeded_customer.id,
+        date=date(2026, 9, 24),
+        items=[
+            SaleItemCreate(productId=seeded_product_with_lot.id, quantity=Decimal("1"))
+        ],
+        occurredAt=explicit,
+    )
+    sale = SaleService(db_session).create(data, user_id=seeded_user.id)
+    db_session.refresh(sale)
+    assert sale.occurred_at == explicit

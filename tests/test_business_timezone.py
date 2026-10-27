@@ -1,11 +1,10 @@
-import uuid
 from datetime import date, datetime, timezone
 
 import pytest
+from sqlalchemy.orm import Session
 
 import app.core.datetime_utils as datetime_utils_module
 from app.core.config import settings
-from app.core.database import SessionLocal
 from app.core.datetime_utils import (
     MissingBusinessContext,
     business_instant,
@@ -16,7 +15,6 @@ from app.core.datetime_utils import (
     format_business_datetime,
     to_business_tz,
 )
-from app.schemas.sale import SaleCreate
 
 
 def test_business_timezone_is_configured():
@@ -95,12 +93,7 @@ def test_today_follows_business_timezone(db_session, monkeypatch):
 
 def test_missing_timezone_raises():
     with pytest.raises(MissingBusinessContext):
-        business_tz(SessionLocal())
-
-
-def test_sale_create_leaves_occurred_at_unset():
-    data = SaleCreate(customerId=uuid.uuid4(), date=date(2026, 10, 1), items=[])
-    assert data.occurredAt is None
+        business_tz(Session())
 
 
 def test_a_midday_timestamp_is_unaffected(db_session):
