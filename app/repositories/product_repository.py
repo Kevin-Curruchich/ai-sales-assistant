@@ -6,6 +6,9 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.product import Product
+from app.models.purchase import Purchase, PurchaseItem
+from app.models.sale import Sale
+from app.models.sale_item import SaleItem
 
 
 class ProductRepository:
@@ -98,3 +101,38 @@ class ProductRepository:
     def delete(self, product: Product) -> None:
         self.db.delete(product)
         self.db.commit()
+
+    def inventory_value_by_product(self) -> dict[uuid.UUID, Decimal]:
+        """Lo que queda en lotes confirmados, a su costo de compra."""
+        from sqlalchemy import func
+
+        stmt = (
+            select(
+                PurchaseItem.product_id,
+                func.sum(PurchaseItem.remaining_quantity * PurchaseItem.unit_cost),
+            )
+            .join(Purchase, Purchase.id == PurchaseItem.purchase_id)
+            .where(Purchase.status == "confirmed")
+            .where(PurchaseItem.remaining_quantity > 0)
+            .group_by(PurchaseItem.product_id)
+        )
+        return dict(self.db.execute(stmt).all())
+
+    def receivable_by_product(self) -> dict[uuid.UUID, Decimal]:
+        """Subtotal de los items en ventas que siguen sin cobrar."""
+        from sqlalchemy import func
+
+        stmt = (
+            select(SaleItem.product_id, func.sum(SaleItem.subtotal))
+            .join(Sale, Sale.id == SaleItem.sale_id)
+            .where(Sale.is_payment_pending.is_(True))
+            .group_by(SaleItem.product_id)
+        )
+        return dict(self.db.execute(stmt).all())
+
+    def get_by_ids(self, ids: set[uuid.UUID]) -> list[Product]:
+        if not ids:
+            return []
+        return list(
+            self.db.execute(select(Product).where(Product.id.in_(ids))).scalars().all()
+        )
