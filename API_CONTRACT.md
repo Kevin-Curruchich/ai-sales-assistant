@@ -1,7 +1,9 @@
 # Revenew API Contract
 
 > **Base URL:** `/api/v1`  
-> **Auth:** All endpoints (except `POST /auth/signup`) require a Firebase ID token in the `Authorization: Bearer <token>` header. The backend verifies the token, auto-creates a local user on first call, and enforces role-based access where noted.
+> **Auth:** All endpoints (except `POST /auth/signup`) require a Firebase ID token in the `Authorization: Bearer <token>` header. The backend verifies the token, loads the local user and enforces role-based access where noted. Users are **not** auto-created: a Firebase account with no local user gets `403 {"detail": "Tu cuenta no pertenece a ningun comercio"}`, and a deactivated user (`is_active: false`) gets `403 {"detail": "Tu cuenta esta desactivada"}`.
+
+> **Multi-tenant:** every user belongs to exactly one business, and every endpoint only sees that business's data. The business comes from the token's user, never from the request. A resource of another business behaves as if it did not exist (**404**).
 
 > **Note:** All `id`, `{user_id}`, `{customer_id}`, `{product_id}`, and `{sale_id}` values are **UUID v4** strings (e.g. `"a3f1b2c4-5d6e-7f8a-9b0c-1d2e3f4a5b6c"`). All path parameters and foreign key references use UUIDs.
 
@@ -11,50 +13,78 @@
 
 ### `POST /auth/signup`
 
-Register a new user. Creates a Firebase Authentication account with custom claims and a local DB record. **No auth required.** A UUID is generated locally and used as the `uid` in Firebase, ensuring a single shared identifier.
+Register a new **business** and its first user, who becomes its `admin`. **No auth required.** Creates the Firebase account and the local business + user in one step; if the database write fails, the Firebase account is deleted. There is no `role` field: a `role` sent by the client is ignored.
+
+- **Request Body:**
+  ```json
+  {
+    "business_name": "string",
+    "email": "string",
+    "password": "string",
+    "display_name": "string | null",
+    "timezone": "string (IANA zone, e.g. \"America/Guatemala\"; optional, default \"America/Guatemala\")"
+  }
+  ```
+- **Response (201):** `User` (with `role: "admin"`)
+- **Errors:** `409` email already registered (in any business); `422` invalid body or unknown timezone.
+- After a 201 the front signs in with Firebase (`signInWithEmailAndPassword`) as usual.
+
+### `GET /auth/me`
+
+Returns the authenticated user's profile and the name of their business.
+
+- **Response:** `User` plus `"business_name": "string"`
+
+### `GET /auth/users`  — Admin only
+
+List the users of the admin's business.
+
+- **Response:** `User[]`
+
+### `POST /auth/users`  — Admin only
+
+Add a seller to the admin's business. The account is created **without a password**; the response carries a Firebase link where the seller sets it.
 
 - **Request Body:**
   ```json
   {
     "email": "string",
-    "password": "string",
     "display_name": "string | null",
-    "role": "admin | sales_rep | viewer"
+    "role": "sales_rep | viewer"
   }
   ```
-- **Response (201):** `User`
+- **Response (201):** `User` plus `"password_setup_link": "string"`
+- **Errors:** `409` email already registered; `422` invalid body (including `role: "admin"`).
+- **Sending the link:** the backend sends no email. The front calls the Firebase client SDK `sendPasswordResetEmail(auth, email)` so Firebase emails the seller with its own template, and also shows `password_setup_link` so the admin can copy it and send it another way (e.g. WhatsApp). The link is a credential: show it only to that admin, never log it. It expires (1 hour by default).
 
-### `GET /auth/me`
+### `POST /auth/users/{user_id}/password-link`  — Admin only
 
-Returns the authenticated user's profile (auto-created on first call).
+Generate a new password link for a user of the admin's business (e.g. the previous one expired). Same sending rules as above.
 
-- **Response:** `User`
-
-### `GET /auth/users`  — Admin only
-
-List all users.
-
-- **Response:** `User[]`
+- **Response:** `{ "password_setup_link": "string" }`
+- **Errors:** `404` user not found in this business.
 
 ### `GET /auth/users/{user_id}`  — Admin only
 
-Get a user by ID.
+Get a user of the admin's business by ID.
 
 - **Response:** `User`
+- **Errors:** `404` user not found in this business.
 
 ### `PUT /auth/users/{user_id}`  — Admin only
 
-Update a user's profile.
+Update a user of the admin's business. Setting `is_active: false` locks the user out (`403` on every request).
 
 - **Request Body:**
   ```json
   {
     "display_name": "string | null",
     "is_active": "boolean | null",
-    "role": "string | null"
+    "role": "admin | sales_rep | viewer | null"
   }
   ```
 - **Response:** `User`
+- **Errors:** `404` user not found in this business; `422` invalid role.
 
 ### `PATCH /auth/users/{user_id}/role`  — Admin only
 
@@ -129,10 +159,12 @@ Aggregated metrics for the main dashboard.
 
 - **Request Body:** Same as POST (all fields optional)
 - **Response:** `Product`
+- **Errors:** `404` product not found; `409` duplicate SKU; `422` invalid body.
 
 ### `DELETE /products/{product_id}`
 
 - **Response:** `204 No Content`
+- **Errors:** `404` product not found.
 
 ---
 
