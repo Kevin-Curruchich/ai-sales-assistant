@@ -1,12 +1,23 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.cash_movement import CashMovementType
 from app.models.payment_method import PaymentMethod
+
+
+class CashMovementCreate(BaseModel):
+    """Movimiento manual. Sin venta ni compra: esas registran el suyo."""
+
+    type: CashMovementType
+    amount: Decimal = Field(gt=0)
+    # Dia del negocio; la hora la pone `business_instant`.
+    date: date
+    payment_method: Optional[PaymentMethod] = None
+    note: Optional[str] = None
 
 
 class CashMovementResponse(BaseModel):
