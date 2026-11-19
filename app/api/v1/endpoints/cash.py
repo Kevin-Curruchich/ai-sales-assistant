@@ -1,12 +1,17 @@
 from datetime import date
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 
 from app.api.dependencies import CashServiceDep, get_current_user
-from app.core.datetime_utils import business_end_of_day, business_midnight
+from app.core.datetime_utils import (
+    business_end_of_day,
+    business_instant,
+    business_midnight,
+)
 from app.models.cash_movement import CASH_OUTFLOW_TYPES
 from app.schemas.cash import (
+    CashMovementCreate,
     CashMovementResponse,
     CashSummaryResponse,
     PaginatedCashMovementResponse,
@@ -24,6 +29,35 @@ def get_cash_summary(service: CashServiceDep):
     return CashSummaryResponse(
         balance=service.running_balance(),
         owner_balance=service.owner_balance(),
+    )
+
+
+@router.post(
+    "/movements",
+    response_model=CashMovementResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_cash_movement(body: CashMovementCreate, service: CashServiceDep):
+    """Registra un movimiento manual: hoy con la hora actual, un dia pasado a la
+    medianoche del negocio (igual que `registrar_movimiento_caja`)."""
+    m = service.record(
+        occurred_at=business_instant(service.db, body.date),
+        type=body.type,
+        amount=body.amount,
+        payment_method=body.payment_method,
+        note=body.note,
+        commit=True,
+    )
+    return CashMovementResponse(
+        id=m.id,
+        occurred_at=m.occurred_at,
+        type=m.type,
+        amount=m.amount,
+        is_outflow=m.type in CASH_OUTFLOW_TYPES,
+        payment_method=m.payment_method,
+        note=m.note,
+        running_balance=service.running_balance(as_of=m.occurred_at),
+        created_at=m.created_at,
     )
 
 

@@ -339,6 +339,24 @@ Counts for metric cards.
   ```
   `amount` siempre es positivo (`is_outflow` indica si resta). `running_balance` es el saldo despues del movimiento, calculado sobre todo el libro aunque se filtre por fechas o se pagine.
 
+### `POST /cash/movements`
+
+Registra un movimiento manual. Cualquier usuario autenticado del comercio. Las ventas y compras registran el suyo solas, así que no lleva `sale_id`/`purchase_id`.
+
+- **Request Body:**
+  ```json
+  {
+    "type": "entrada | salida | aporte_socio | retiro_socio | saldo_inicial",
+    "amount": "150.50",
+    "date": "2026-11-07",
+    "payment_method": "efectivo | transferencia | null",
+    "note": "string | null"
+  }
+  ```
+  `date` es el día del negocio: hoy se guarda con la hora actual, un día pasado a la medianoche de la zona del negocio.
+- **Response:** `201` con un `CashMovement` (la forma de `GET /cash/movements`).
+- **Errores:** `422` si `amount <= 0`, el `type` o el `payment_method` no son válidos, o la fecha no es válida.
+
 ---
 
 ## Response Models Reference

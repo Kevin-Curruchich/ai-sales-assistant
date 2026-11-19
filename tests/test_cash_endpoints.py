@@ -2,9 +2,12 @@
 movimiento trae el saldo que dejo, aun cuando la pagina o el rango de fechas
 no empiezan en el primer movimiento."""
 
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from decimal import Decimal
 
+import pytest
+
+from app.core.datetime_utils import business_midnight, business_today, business_tz
 from app.models import CashMovementType
 from app.services.cash_service import CashService
 from tests.fixtures_http import _auth
@@ -117,3 +120,62 @@ def test_summary_returns_operating_and_owner_balances(client, db_session, seeded
 
 def test_requires_authentication(client):
     assert client.get("/api/v1/cash/movements").status_code in (401, 403)
+
+
+def test_records_a_manual_movement_today_with_the_current_hour(
+    client, db_session, seeded_user
+):
+    resp = client.post(
+        "/api/v1/cash/movements",
+        json={
+            "type": "aporte_socio",
+            "amount": "150.50",
+            "date": business_today(db_session).isoformat(),
+            "payment_method": "efectivo",
+            "note": "capital inicial",
+        },
+        headers=_auth(seeded_user),
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["type"] == "aporte_socio"
+    assert Decimal(body["amount"]) == Decimal("150.50")
+    assert body["is_outflow"] is False
+    assert body["note"] == "capital inicial"
+    assert Decimal(body["running_balance"]) == Decimal("150.50")
+    # Hoy guarda la hora real, no la medianoche.
+    occurred = datetime.fromisoformat(body["occurred_at"])
+    assert occurred.astimezone(business_tz(db_session)).time() != time(0, 0)
+
+
+def test_a_past_day_is_anchored_at_business_midnight(client, db_session, seeded_user):
+    day = business_today(db_session) - timedelta(days=3)
+    resp = client.post(
+        "/api/v1/cash/movements",
+        json={"type": "salida", "amount": "20", "date": day.isoformat()},
+        headers=_auth(seeded_user),
+    )
+    assert resp.status_code == 201
+    occurred = datetime.fromisoformat(resp.json()["occurred_at"])
+    assert occurred == business_midnight(db_session, day)
+    assert resp.json()["is_outflow"] is True
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"type": "entrada", "amount": "0", "date": "2026-11-01"},
+        {"type": "entrada", "amount": "-5", "date": "2026-11-01"},
+        {"type": "venta", "amount": "5", "date": "2026-11-01"},
+        {"type": "entrada", "amount": "5", "date": "2026-13-01"},
+        {
+            "type": "entrada",
+            "amount": "5",
+            "date": "2026-11-01",
+            "payment_method": "cheque",
+        },
+    ],
+)
+def test_invalid_manual_movement_is_422(client, seeded_user, body):
+    resp = client.post("/api/v1/cash/movements", json=body, headers=_auth(seeded_user))
+    assert resp.status_code == 422
